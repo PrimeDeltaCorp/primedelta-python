@@ -1,4 +1,4 @@
 requests==2.33.0
-siwe==2.4.1
-web3==6.19.0
+siwe==4.4.0
+web3==7.15.0
 sseclient==0.0.27

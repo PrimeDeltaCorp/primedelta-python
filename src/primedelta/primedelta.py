@@ -8,7 +8,7 @@ from eth_abi import decode as abi_decode
 from web3 import Web3
 from web3.contract.contract import ContractFunction
 from web3.exceptions import ContractLogicError
-from web3.middleware import geth_poa_middleware
+from web3.middleware import ExtraDataToPOAMiddleware
 
 from primedelta.contracts import Contracts
 from primedelta.dex.handlers import (
@@ -177,7 +177,7 @@ class PrimeDelta:
         # Besu IBFT / Clique chains pack signer info into a 241-byte extraData
         # field; web3.py's default response formatter rejects anything > 32B.
         # Injecting the PoA middleware is a no-op on non-PoA chains.
-        self._web3.middleware_onion.inject(geth_poa_middleware, layer=0)
+        self._web3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         self._primedelta_client = PrimeDeltaClient()
         # Contracts come from the SDK's bundled `networks/<name>.json` — not
         # from the backend. Pin addresses by editing that file.
@@ -214,16 +214,14 @@ class PrimeDelta:
         nonce = self._primedelta_client.get_nonce()
         issued_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         message = SiweMessage(
-            {
-                "domain": SIWE_DOMAIN,
-                "address": self._account.address,
-                "statement": SIWE_MESSAGE,
-                "uri": SIWE_URI,
-                "version": "1",
-                "chain_id": self._get_contracts().chain_id,
-                "nonce": nonce,
-                "issued_at": issued_at,
-            }
+            domain=SIWE_DOMAIN,
+            address=self._account.address,
+            statement=SIWE_MESSAGE,
+            uri=SIWE_URI,
+            version="1",
+            chain_id=self._get_contracts().chain_id,
+            nonce=nonce,
+            issued_at=issued_at,
         ).prepare_message()
         signature = self._account.sign_message(
             encode_defunct(text=message),
