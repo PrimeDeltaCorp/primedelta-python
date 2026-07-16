@@ -428,7 +428,9 @@ class TestAMMHandlerLiquidity:
         contract.functions.token0.return_value.call.return_value = token0
         contract.functions.token1.return_value.call.return_value = token1
         contract.functions.fee.return_value.call.return_value = fee
-        contract.encodeABI.side_effect = lambda fn_name, args: f"0x{fn_name}".encode()
+        contract.encode_abi.side_effect = (
+            lambda abi_element_identifier, args: f"0x{abi_element_identifier}".encode()
+        )
 
         handler = _AMMPoolHandler(
             web3=web3,

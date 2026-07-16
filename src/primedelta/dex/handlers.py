@@ -509,8 +509,8 @@ class _AMMPoolHandler:
         amount_stablecoin_min_units = int(params.amount_stablecoin_min * _STABLECOIN_DECIMALS)
 
         max_uint128 = (1 << 128) - 1
-        decrease_call = npm.encodeABI(
-            fn_name="decreaseLiquidity",
+        decrease_call = npm.encode_abi(
+            abi_element_identifier="decreaseLiquidity",
             args=[
                 (
                     params.position_id,
@@ -521,8 +521,8 @@ class _AMMPoolHandler:
                 )
             ],
         )
-        collect_call = npm.encodeABI(
-            fn_name="collect",
+        collect_call = npm.encode_abi(
+            abi_element_identifier="collect",
             args=[
                 (
                     params.position_id,
