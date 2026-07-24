@@ -6,6 +6,7 @@ from primedelta.primedelta_client import PrimeDeltaClient
 from primedelta.types import Price
 
 
+@patch("primedelta.primedelta_client.PYTH_HERMES_BASE_URL", "https://hermes.example.test")
 class TestGetPythFeedIds:
     def test_returns_feed_ids_for_valid_symbols(self):
         # get_pyth_feed_ids issues one HTTP call per symbol — drive each call
@@ -290,3 +291,12 @@ class TestPythPricesStreamDirect:
             prices = list(primedelta.pyth_prices_stream(symbols=["GOOGL"]))
 
         mock_pyth.assert_called_once_with(["GOOGL"])
+
+
+class TestPythParked:
+    def test_get_pyth_feed_ids_raises_when_endpoint_unset(self):
+        import pytest
+
+        with patch("primedelta.primedelta_client.PYTH_HERMES_BASE_URL", ""):
+            with pytest.raises(RuntimeError, match="parked"):
+                PrimeDeltaClient.get_pyth_feed_ids(["AAPL"])

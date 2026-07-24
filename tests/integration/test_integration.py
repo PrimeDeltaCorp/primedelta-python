@@ -8,6 +8,7 @@ These tests require a real environment setup:
 
 Run with: uv run pytest tests/integration/ -v
 """
+import os
 from decimal import Decimal
 
 import pytest
@@ -267,8 +268,16 @@ class TestStockLifecycle:
         )
 
 
+PYTH_PARKED = pytest.mark.skipif(
+    not os.environ.get("PYTH_HERMES_BASE_URL"),
+    reason="Pyth stream parked (free Hermes shuts down 2026-07-31); "
+    "set PYTH_HERMES_BASE_URL to an authenticated endpoint to run",
+)
+
+
 @pytest.mark.integration
 class TestPriceStreamingIntegration:
+    @PYTH_PARKED
     def test_pyth_prices_stream_when_not_logged_in(self, primedelta):
         """Pyth stream works without login."""
         from decimal import Decimal
@@ -284,6 +293,7 @@ class TestPriceStreamingIntegration:
         assert isinstance(price.last_price, Decimal)
         assert price.last_price > 0
 
+    @PYTH_PARKED
     def test_prices_stream_uses_pyth_when_not_logged_in(self, primedelta):
         """prices_stream() auto-switches to Pyth when not logged in."""
         from decimal import Decimal

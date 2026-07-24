@@ -22,8 +22,11 @@ SIWE_DOMAIN: str = os.getenv(
 )
 
 # Pyth Hermes API for public price feeds
+# Default empty: the free hermes.pyth.network endpoint shuts down 2026-07-31.
+# Set PYTH_HERMES_BASE_URL to an authenticated Hermes endpoint to re-enable
+# the public Pyth stream (implementation is kept, integration is parked).
 PYTH_HERMES_BASE_URL: str = os.getenv(
-    "PYTH_HERMES_BASE_URL", "https://hermes.pyth.network"
+    "PYTH_HERMES_BASE_URL", ""
 )
 
 BLOCKCHAIN_FALSE_VALUE = 2
