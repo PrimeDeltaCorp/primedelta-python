@@ -39,7 +39,7 @@ tx = primedelta.swap_exact_input(
 - [Buying and selling stocks (orders)](./examples/mint-platform/buying_and_selling_stocks.py)
 - [Portfolio](./examples/mint-platform/portfolio.py)
 - [Real-time price stream (logged in)](./examples/mint-platform/price_stream/prices_stream_logged.py)
-- [Real-time price stream (public Pyth)](./examples/mint-platform/price_stream/prices_stream_not_logged.py)
+- [Real-time price stream (public Pyth — parked since the 2026-07-31 free-Hermes shutdown; set PYTH_HERMES_BASE_URL to an authenticated endpoint to re-enable)](./examples/mint-platform/price_stream/prices_stream_not_logged.py)
 
 ## DEX examples
 

@@ -358,6 +358,13 @@ class PrimeDeltaClient:
 
         Returns a mapping of symbol -> pyth_feed_id for regular market hours feeds.
         """
+        if not PYTH_HERMES_BASE_URL:
+            raise RuntimeError(
+                "The public Pyth price stream is parked: the free Hermes "
+                "endpoint shut down on 2026-07-31. Set PYTH_HERMES_BASE_URL "
+                "to an authenticated endpoint to re-enable it, or log in "
+                "with a verified account to use the signed price stream."
+            )
         feed_ids = {}
         for symbol in symbols:
             response = requests.get(
