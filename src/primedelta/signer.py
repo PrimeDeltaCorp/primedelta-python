@@ -77,7 +77,7 @@ _SPKI_PREFIX = bytes.fromhex("3056301006072a8648ce3d020106052b8104000a034200")
 
 
 def _pubkey_from_spki_der(der: bytes) -> bytes:
-    if len(der) < 65 or der[-65] != 0x04:
+    if not der.startswith(_SPKI_PREFIX) or len(der) != len(_SPKI_PREFIX) + 65:
         raise ValueError("unexpected KMS public key DER encoding")
     return der[-64:]
 
@@ -167,7 +167,11 @@ class KmsSigner:
             serializable_unsigned_transaction_from_dict,
         )
 
-        unsigned = serializable_unsigned_transaction_from_dict(transaction)
+        sender = transaction.get("from")
+        if sender is not None and sender.lower() != self._address.lower():
+            raise ValueError("transaction 'from' does not match the signer address")
+        payload = {key: value for key, value in transaction.items() if key != "from"}
+        unsigned = serializable_unsigned_transaction_from_dict(payload)
         recovery_id, r, s = self._sign_digest(unsigned.hash())
         chain_id = transaction.get("chainId")
         v = recovery_id + (35 + 2 * chain_id if chain_id is not None else 27)

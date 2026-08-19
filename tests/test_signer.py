@@ -179,6 +179,7 @@ class TestKmsSigner:
             "raw", raw
         )
         tx = {
+            "from": ADDR,
             "to": ADDR,
             "value": 1,
             "gas": 21000,
@@ -192,6 +193,28 @@ class TestKmsSigner:
         assert bytes(captured["raw"]) == bytes(
             Account.sign_transaction(tx, KEY).raw_transaction
         )
+
+    def test_submit_transaction_rejects_mismatched_from(self):
+        tx = {
+            "from": "0x" + "9" * 40,
+            "to": ADDR,
+            "value": 1,
+            "gas": 21000,
+            "gasPrice": 10**9,
+            "nonce": 0,
+            "chainId": 2028,
+            "data": b"",
+        }
+        with pytest.raises(ValueError):
+            self._signer().submit_transaction(MagicMock(), tx)
+
+    def test_rejects_malformed_public_key_der(self):
+        class _BadKms(_FakeKms):
+            def get_public_key(self, KeyId):
+                return {"PublicKey": b"\x00" * 40}
+
+        with pytest.raises(ValueError):
+            KmsSigner("dummy-arn", kms_client=_BadKms(KEY))
 
     def test_normalizes_high_s_from_kms(self):
         message = "high-s case"
