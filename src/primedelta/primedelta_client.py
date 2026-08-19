@@ -274,7 +274,7 @@ class PrimeDeltaClient:
         self, amount: int, symbol: str
     ) -> DepositStocksSignature:
         response = self._post(
-            "/deposit-stablecoin-signature/", {"amount": amount, "symbol": symbol}
+            "/deposit-stablecoin-signature/", {"amount": str(amount), "symbol": symbol}
         )
         return DepositStocksSignature(
             signature=response["signature"],
