@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from siwe import SiweMessage
 from eth_abi import decode as abi_decode
@@ -769,9 +769,7 @@ class PrimeDelta:
         if account_status != AccountStatus.DID_MINTED:
             raise AccountNotVerified()
 
-    def _build_and_send_transaction(
-        self, contract_function: ContractFunction, value: int = 0
-    ) -> str:
+    def _send_with_nonce_retry(self, send_once: Callable[[], str]) -> str:
         # Besu's "pending" nonce occasionally lags behind the actual account
         # state after a fresh receipt. When the chain rejects "nonce too low"
         # it tells us the expected nonce in the error — parse it and retry.
@@ -782,7 +780,7 @@ class PrimeDelta:
         last_error: Optional[TransactionFailed] = None
         for attempt in range(5):
             try:
-                return self._build_and_send_transaction_once(contract_function, value)
+                return send_once()
             except TransactionFailed as e:
                 if "nonce too low" not in (e.reason or "").lower():
                     raise
@@ -798,6 +796,13 @@ class PrimeDelta:
                 time.sleep(1.0 + attempt)  # back off: 1s, 2s, 3s, 4s, 5s
         assert last_error is not None
         raise last_error
+
+    def _build_and_send_transaction(
+        self, contract_function: ContractFunction, value: int = 0
+    ) -> str:
+        return self._send_with_nonce_retry(
+            lambda: self._build_and_send_transaction_once(contract_function, value)
+        )
 
     def _build_and_send_transaction_once(
         self, contract_function: ContractFunction, value: int = 0
@@ -878,6 +883,29 @@ class PrimeDelta:
                 data=calldata,
                 trace=trace,
             )
+        return tx_hash.hex()
+
+    def _build_and_send_value_transaction(self, to: str, value: int) -> str:
+        return self._send_with_nonce_retry(
+            lambda: self._build_and_send_value_transaction_once(to, value)
+        )
+
+    def _build_and_send_value_transaction_once(self, to: str, value: int) -> str:
+        to = self._web3.to_checksum_address(to)
+        transaction = {
+            "from": self._signer.address,
+            "to": to,
+            "value": value,
+            "chainId": self._get_contracts().chain_id,
+        }
+        if not self._signer.fills_gas_and_nonce:
+            transaction["gasPrice"] = self._web3.eth.gas_price
+            transaction["nonce"] = self._reserve_nonce()
+            transaction["gas"] = 21_000
+        tx_hash = self._signer.submit_transaction(self._web3, transaction)
+        receipt = self._web3.eth.wait_for_transaction_receipt(tx_hash)
+        if receipt["status"] == 0:
+            raise TransactionFailed("transfer", "reverted", tx_hash=tx_hash.hex(), to=to)
         return tx_hash.hex()
 
     def _reserve_nonce(self) -> int:
@@ -966,3 +994,52 @@ class PrimeDelta:
 
     def spot_price(self, symbol: str) -> Decimal:
         return self._quote_handler.spot_price(symbol)
+
+    def allowance(self, token_symbol: str, spender: str) -> Decimal:
+        address, decimals = self._token_ref(token_symbol)
+        raw = (
+            self._erc20(address)
+            .functions.allowance(
+                self._signer.address, self._web3.to_checksum_address(spender)
+            )
+            .call()
+        )
+        return Decimal(raw) / Decimal(10**decimals)
+
+    def approve(self, token_symbol: str, spender: str, amount: Decimal) -> str:
+        address, decimals = self._token_ref(token_symbol)
+        return self._build_and_send_transaction(
+            self._erc20(address).functions.approve(
+                self._web3.to_checksum_address(spender),
+                int(amount * Decimal(10**decimals)),
+            )
+        )
+
+    def revoke_approval(self, token_symbol: str, spender: str) -> str:
+        address, _ = self._token_ref(token_symbol)
+        return self._build_and_send_transaction(
+            self._erc20(address).functions.approve(
+                self._web3.to_checksum_address(spender), 0
+            )
+        )
+
+    def send_del(self, to: str, amount: Decimal) -> str:
+        return self._build_and_send_value_transaction(
+            to, int(amount * Decimal(10**18))
+        )
+
+    def _token_ref(self, token_symbol: str) -> tuple[str, int]:
+        from primedelta.dex.handlers import _resolve_stock_token
+
+        contracts = self._get_contracts()
+        if token_symbol == "dUSD":
+            return contracts.core.stablecoin.address, 6
+        return _resolve_stock_token(self._web3, contracts, token_symbol), 18
+
+    def _erc20(self, address: str):
+        from primedelta.dex.handlers import _require_pool_abi
+
+        return self._web3.eth.contract(
+            address=self._web3.to_checksum_address(address),
+            abi=_require_pool_abi(self._get_contracts(), "erc20"),
+        )
