@@ -175,6 +175,8 @@ class PrimeDelta:
     ) -> None:
         if web3_provider_url is None:
             raise ValueError("web3_provider_url is required")
+        if signer is not None and private_key is not None:
+            raise ValueError("Provide either private_key or signer, not both")
         if signer is None:
             if private_key is None:
                 raise ValueError("Provide either private_key or signer")

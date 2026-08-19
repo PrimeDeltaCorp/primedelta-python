@@ -18,11 +18,14 @@ class Signer(Protocol):
     fills_gas_and_nonce: bool
 
     @property
-    def address(self) -> str: ...
+    def address(self) -> str:
+        raise NotImplementedError
 
-    def sign_message(self, message: str) -> str: ...
+    def sign_message(self, message: str) -> str:
+        raise NotImplementedError
 
-    def submit_transaction(self, web3: Any, transaction: dict) -> Any: ...
+    def submit_transaction(self, web3: Any, transaction: dict) -> Any:
+        raise NotImplementedError
 
 
 class LocalAccountSigner:

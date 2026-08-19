@@ -71,6 +71,10 @@ class TestPrimeDeltaSignerWiring:
             with pytest.raises(ValueError):
                 PrimeDelta(private_key=KEY)
 
+    def test_rejects_both_key_and_signer(self):
+        with pytest.raises(ValueError):
+            self._pd(private_key=KEY, signer=MagicMock())
+
     def test_login_signs_through_signer(self):
         signer = MagicMock()
         signer.address = ADDR
