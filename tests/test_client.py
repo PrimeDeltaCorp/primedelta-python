@@ -433,8 +433,10 @@ class TestAccountFeatures:
 
 class TestTransportLayer:
     def test_handle_204_returns_empty_dict_without_parsing(self):
+        # Seed a body so the empty-content fallback can't mask a missing 204
+        # guard: a 204 must return {} even when content is present.
         client, _ = _client_with_session()
-        assert client._handle(_Resp(204)) == {}
+        assert client._handle(_Resp(204, {"x": 1})) == {}
 
     def test_handle_200_empty_body_returns_empty_dict(self):
         client, _ = _client_with_session()
