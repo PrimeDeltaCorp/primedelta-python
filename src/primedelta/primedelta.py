@@ -1043,3 +1043,25 @@ class PrimeDelta:
             address=self._web3.to_checksum_address(address),
             abi=_require_pool_abi(self._get_contracts(), "erc20"),
         )
+
+    def did_token_id(self) -> Optional[int]:
+        token_id = self._did_contract().functions.getId(self._signer.address).call()
+        return token_id if token_id != 0 else None
+
+    def is_pro(self) -> bool:
+        token_id = self.did_token_id()
+        if token_id is None:
+            return False
+        return self._did_contract().functions.isPro(token_id).call()
+
+    def is_valid(self) -> bool:
+        token_id = self.did_token_id()
+        if token_id is None:
+            return False
+        return self._did_contract().functions.isValid(token_id).call()
+
+    def _did_contract(self):
+        did = self._get_contracts().core.digital_identity
+        return self._web3.eth.contract(
+            address=self._web3.to_checksum_address(did.address), abi=did.abi
+        )

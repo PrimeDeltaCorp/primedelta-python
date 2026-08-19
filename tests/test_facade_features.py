@@ -143,3 +143,42 @@ class TestAllowancesAndSend:
             assert pd._build_and_send_value_transaction("0xTO", 5) == "0xOK"
         assert calls["n"] == 2
         assert pd._next_nonce == 6
+
+
+class TestDidReads:
+    def _pd(self, token_id, is_pro=True, is_valid=True):
+        pd = _pd()
+        pd._signer = MagicMock()
+        pd._signer.address = "0xME"
+        did = MagicMock()
+        pd._did_contract = MagicMock(return_value=did)
+        did.functions.getId.return_value.call.return_value = token_id
+        did.functions.isPro.return_value.call.return_value = is_pro
+        did.functions.isValid.return_value.call.return_value = is_valid
+        return pd, did
+
+    def test_did_token_id(self):
+        pd, _ = self._pd(47)
+        assert pd.did_token_id() == 47
+
+    def test_did_token_id_none_when_zero(self):
+        pd, _ = self._pd(0)
+        assert pd.did_token_id() is None
+
+    def test_is_pro_reads_token(self):
+        pd, did = self._pd(47, is_pro=True)
+        assert pd.is_pro() is True
+        did.functions.isPro.assert_called_once_with(47)
+
+    def test_is_pro_false_without_did(self):
+        pd, did = self._pd(0)
+        assert pd.is_pro() is False
+        did.functions.isPro.assert_not_called()
+
+    def test_is_valid_reads_token_and_false_without_did(self):
+        pd, did = self._pd(47, is_valid=True)
+        assert pd.is_valid() is True
+        did.functions.isValid.assert_called_once_with(47)
+        pd_no, did_no = self._pd(0)
+        assert pd_no.is_valid() is False
+        did_no.functions.isValid.assert_not_called()
