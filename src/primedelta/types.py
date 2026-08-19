@@ -99,7 +99,7 @@ class Position:
     average_purchase_price: Decimal
     last_market_price: Decimal
     profit_loss: Decimal
-    profit_loss_percentage: Decimal
+    profit_loss_percentage: Optional[Decimal]
     is_offboarded: bool
     multiplier_numerator: int
     multiplier_denominator: int

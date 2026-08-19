@@ -829,7 +829,7 @@ class PrimeDelta:
 
         signed_transaction = self._account.sign_transaction(transaction)
         tx_hash = self._web3.eth.send_raw_transaction(
-            signed_transaction.rawTransaction
+            signed_transaction.raw_transaction
         )
         # Wait for the receipt so chained calls (e.g. approve → swap) see the
         # state change. Without this the next tx's gas estimation runs against
