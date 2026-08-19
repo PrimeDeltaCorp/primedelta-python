@@ -71,6 +71,39 @@ data = vault.secrets.kv.v2.read_secret_version(path="primedelta/key")["data"]["d
 signer = LocalAccountSigner.from_key(data["private_key"])
 ```
 
+## Browser wallet (MetaMask, …)
+
+`BrowserSigner` signs through a browser extension wallet — no private key touches
+the SDK. Each operation opens a single-use page on `127.0.0.1` that discovers the
+wallet (EIP-6963) and runs `eth_requestAccounts` / `personal_sign` /
+`eth_sendTransaction`; the wallet fills gas and nonce and broadcasts.
+
+```python
+from primedelta import PrimeDelta, BrowserSigner
+
+pd = PrimeDelta(signer=BrowserSigner(), web3_provider_url=RPC)
+pd.login()  # opens the browser to connect the wallet, then to sign
+```
+
+Pass `chain` (a `wallet_addEthereumChain` params dict) to switch the wallet to
+the right network first — it is added if unknown:
+
+```python
+signer = BrowserSigner(chain={
+    "chainId": "0x7ec",
+    "chainName": "PrimeDelta Dev",
+    "rpcUrls": ["https://besu-dev.primedelta.io"],
+    "nativeCurrency": {"name": "DEL", "symbol": "DEL", "decimals": 18},
+})
+```
+
+Interactive and desktop-only: every signature/transaction opens a browser tab you
+approve in the wallet. The bridge binds loopback only, gates each round-trip with
+a one-time state token, serves a single result then shuts down, and times out
+(`timeout=`, default 180s). WalletConnect is not used (no maintained Python v2
+library); this bridge covers the same "plug in my wallet" intent. For automation,
+use `MockBrowserSigner` (signs locally with a dev key on the same wallet path).
+
 ## Keys that never leave the HSM
 
 `KmsSigner` keeps an AWS KMS-managed secp256k1 key inside the HSM and only sends
