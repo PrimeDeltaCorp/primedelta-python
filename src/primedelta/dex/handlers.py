@@ -104,6 +104,34 @@ class QuoterNotConfigured(Exception):
     pass
 
 
+def _lookup_amm_pool_address(web3, contracts: "Contracts", stock_token_addr: str) -> str:
+    npm_ref = contracts.core.position_manager
+    if npm_ref is None:
+        raise PositionManagerNotConfigured()
+    npm = web3.eth.contract(
+        address=web3.to_checksum_address(npm_ref.address), abi=npm_ref.abi
+    )
+    factory_addr = _call_view(
+        "NonfungiblePositionManager.factory",
+        lambda: npm.functions.factory().call(),
+    )
+    factory = web3.eth.contract(
+        address=web3.to_checksum_address(factory_addr),
+        abi=_require_pool_abi(contracts, "univ3_factory"),
+    )
+    pool_addr = _call_view(
+        "UniswapV3Factory.getPool",
+        lambda: factory.functions.getPool(
+            web3.to_checksum_address(stock_token_addr),
+            web3.to_checksum_address(contracts.core.stablecoin.address),
+            _AMM_FEE_TIER,
+        ).call(),
+    )
+    if int(pool_addr, 16) == 0:
+        raise PoolNotFound(f"no AMM pool registered for {stock_token_addr}")
+    return pool_addr
+
+
 class _RouterSwapHandler:
     def __init__(
         self,
@@ -582,26 +610,7 @@ class _AMMPoolHandler:
         # The router's `stockToAMMPool` getter isn't always exposed in deployed
         # bytecode (older versions). Going through the NPM's V3 factory works
         # uniformly: NPM.factory().getPool(stock, stablecoin, DEFAULT_FEE_TIER).
-        npm = self._contract(npm_ref)
-        v3_factory_addr = _call_view(
-            "NonfungiblePositionManager.factory",
-            lambda: npm.functions.factory().call(),
-        )
-        v3_factory = self._web3.eth.contract(
-            address=self._web3.to_checksum_address(v3_factory_addr),
-            abi=_require_pool_abi(contracts, "univ3_factory"),
-        )
-        pool_addr = _call_view(
-            "UniswapV3Factory.getPool",
-            lambda: v3_factory.functions.getPool(
-                self._web3.to_checksum_address(stock_token_addr),
-                self._web3.to_checksum_address(contracts.core.stablecoin.address),
-                _AMM_FEE_TIER,
-            ).call(),
-        )
-        if int(pool_addr, 16) == 0:
-            raise PoolNotFound(f"no AMM pool registered for {stock_token_addr}")
-        return pool_addr
+        return _lookup_amm_pool_address(self._web3, contracts, stock_token_addr)
 
     def _read_pool_tokens(
         self, contracts: Contracts, pool_address: str
@@ -711,28 +720,7 @@ class _QuoteHandler:
         return (Decimal(1) / raw) * scale
 
     def _amm_pool(self, contracts: Contracts, stock_token_addr: str) -> str:
-        npm_ref = contracts.core.position_manager
-        if npm_ref is None:
-            raise PositionManagerNotConfigured()
-        npm = self._contract(npm_ref.address, npm_ref.abi)
-        factory_addr = _call_view(
-            "NonfungiblePositionManager.factory",
-            lambda: npm.functions.factory().call(),
-        )
-        factory = self._contract(
-            factory_addr, _require_pool_abi(contracts, "univ3_factory")
-        )
-        pool_addr = _call_view(
-            "UniswapV3Factory.getPool",
-            lambda: factory.functions.getPool(
-                self._web3.to_checksum_address(stock_token_addr),
-                self._web3.to_checksum_address(contracts.core.stablecoin.address),
-                _AMM_FEE_TIER,
-            ).call(),
-        )
-        if int(pool_addr, 16) == 0:
-            raise PoolNotFound(f"no AMM pool for {stock_token_addr}")
-        return pool_addr
+        return _lookup_amm_pool_address(self._web3, contracts, stock_token_addr)
 
     def _pool_abi(self, contracts: Contracts) -> list:
         return _require_pool_abi(contracts, "univ3_pool")
