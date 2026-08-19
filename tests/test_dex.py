@@ -1138,3 +1138,30 @@ class TestClaimWithdrawals:
         struct, _ = factory.functions.burnStocks.call_args.args
         assert struct["nonce"] == int("0xabc", 16)
         assert struct["amount"] == 3000000000000000000
+
+    def test_deposit_stablecoin_uses_burnStablecoin_signed_voucher(self):
+        from primedelta.types import DepositStocksSignature
+
+        pd, factory = self._pd()
+        pd._primedelta_client.get_account_status.return_value = AccountStatus.DID_MINTED
+        pd._primedelta_client.get_deposit_stablecoin_signature.return_value = (
+            DepositStocksSignature(
+                signature="ab" * 65, nonce="0xcd", amount="1000000"
+            )
+        )
+
+        assert pd.deposit_stablecoin(1) == "0xTX"
+        struct, sig = factory.functions.burnStablecoin.call_args.args
+        assert struct == {
+            "symbol": "dUSD",
+            "amount": 1000000,
+            "account": _USER_ADDRESS,
+            "nonce": int("0xcd", 16),
+        }
+        assert sig == bytes.fromhex("ab" * 65)
+
+    def test_deposit_stablecoin_requires_did(self):
+        pd, _ = self._pd()
+        pd._primedelta_client.get_account_status.return_value = AccountStatus.VERIFIED
+        with pytest.raises(AccountNotVerified):
+            pd.deposit_stablecoin(1)

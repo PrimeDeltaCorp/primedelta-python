@@ -270,6 +270,18 @@ class PrimeDeltaClient:
             amount=response["amount"],
         )
 
+    def get_deposit_stablecoin_signature(
+        self, amount: int, symbol: str
+    ) -> DepositStocksSignature:
+        response = self._post(
+            "/deposit-stablecoin-signature/", {"amount": str(amount), "symbol": symbol}
+        )
+        return DepositStocksSignature(
+            signature=response["signature"],
+            nonce=response["nonce"],
+            amount=response["amount"],
+        )
+
     def request_stablecoin_withdrawal(self, amount: Decimal) -> int:
         response = self._post(
             "/initialize-stablecoin-withdraw/",

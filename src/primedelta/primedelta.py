@@ -308,21 +308,28 @@ class PrimeDelta:
         webbrowser.open(url)
         return url
 
-    def deposit_stablecoin(self, amount: Decimal) -> str:
+    def deposit_stablecoin(self, amount: int) -> str:
         account_status = self._primedelta_client.get_account_status()
-        if account_status not in [AccountStatus.VERIFIED, AccountStatus.DID_MINTED]:
+        if account_status != AccountStatus.DID_MINTED:
             raise AccountNotVerified()
 
-        contracts = self._get_contracts()
-        stablecoin_contract_address = self._web3.to_checksum_address(
-            contracts.core.stablecoin.address
+        signature = self._primedelta_client.get_deposit_stablecoin_signature(
+            amount=amount, symbol="dUSD"
         )
-        stablecoin_contract = self._web3.eth.contract(
-            address=stablecoin_contract_address, abi=contracts.core.stablecoin.abi
+
+        factory = self._get_contracts().core.factory
+        factory_contract = self._web3.eth.contract(
+            address=self._web3.to_checksum_address(factory.address), abi=factory.abi
         )
         return self._build_and_send_transaction(
-            stablecoin_contract.functions.transfer(
-                contracts.core.vault.address, int(amount * Decimal(10**6))
+            factory_contract.functions.burnStablecoin(
+                {
+                    "symbol": "dUSD",
+                    "amount": int(signature.amount),
+                    "account": self._signer.address,
+                    "nonce": int(signature.nonce, 16),
+                },
+                bytes.fromhex(signature.signature.removeprefix("0x")),
             )
         )
 
