@@ -726,6 +726,34 @@ class PrimeDelta:
         self._require_logged_in_and_did_minted()
         return self._amm_handler.collect_fees(position_id)
 
+    def increase_liquidity(
+        self,
+        position_id: int,
+        amount_stock: Decimal,
+        amount_stablecoin: Decimal,
+        amount_stock_min: Decimal = Decimal(0),
+        amount_stablecoin_min: Decimal = Decimal(0),
+    ) -> str:
+        self._require_logged_in_and_did_minted()
+        return self._amm_handler.increase_liquidity(
+            position_id,
+            amount_stock,
+            amount_stablecoin,
+            amount_stock_min,
+            amount_stablecoin_min,
+        )
+
+    def burn_position(self, position_id: int) -> str:
+        self._require_logged_in_and_did_minted()
+        return self._amm_handler.burn_position(position_id)
+
+    def preview_fees(self, position_id: int) -> tuple[Decimal, Decimal]:
+        """Preview an AMM (V3) position's currently collectable amounts as
+        (stock, stablecoin) in human units, via a static `collect` simulation.
+        Read-only (no login) but only for positions owned by this wallet — the
+        NPM gates collect on ownership, so a third party's position_id reverts."""
+        return self._amm_handler.preview_fees(position_id)
+
     def lp_positions(self) -> list[int]:
         """Return all AMM (V3) position NFT token IDs owned by the wallet."""
         npm = self._npm_contract()
