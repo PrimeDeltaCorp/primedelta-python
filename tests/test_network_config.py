@@ -55,10 +55,22 @@ class TestBuildConfig:
         assert cfg["core"]["wdel"] == "0xWDEL"
         assert cfg["core"]["quoter"] == "0xQuoter"
 
-    def test_testnet_prefers_canonical_pm_over_phase3(self):
-        cfg = gen.build_config(_TESTNET_SHAPE)
-        # The canonical PM is in router_stack; the v3 phase-3 one is unused.
-        assert cfg["core"]["position_manager"] == "0xCanonicalPM"
+    def test_position_manager_candidate_order_prefers_router_stack(self):
+        # Both candidate LOCATIONS present (router_stack.DclexPositionManager and
+        # the fallback v3Main.DclexPositionManager) so the candidate ORDER — not
+        # a missing key — decides. Reversing the candidate list flips this.
+        shape = {
+            "chain_id": 7357,
+            "core": _TESTNET_SHAPE["core"],
+            "router_stack": {
+                "DclexRouter": "0xRouter",
+                "FIOracle": "0xOracle",
+                "DclexPositionManager": "0xCanonical",
+            },
+            "v3Main": {"DclexPositionManager": "0xStale"},
+        }
+        cfg = gen.build_config(shape)
+        assert cfg["core"]["position_manager"] == "0xCanonical"
 
     def test_missing_required_raises(self):
         broken = {"chain_id": 1, "core": {"dUSD": "0x", "Vault": "0x", "Factory": "0x"}}
