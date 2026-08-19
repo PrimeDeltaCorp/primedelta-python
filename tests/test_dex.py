@@ -572,6 +572,106 @@ class TestAMMHandlerLiquidity:
         with pytest.raises(PositionManagerNotConfigured):
             handler.collect_fees(1)
 
+    def _position(self, token0, token1, liquidity=0):
+        return (0, "0xop", token0, token1, 3000, -100, 100, liquidity) + (0,) * 4
+
+    def test_increase_liquidity_orders_and_approves_when_token0_stablecoin(self):
+        handler, web3, contract, send_tx = self._setup()
+        contract.functions.positions.return_value.call.return_value = self._position(
+            _STABLECOIN_ADDRESS, _AAPL_TOKEN
+        )
+        handler.increase_liquidity(
+            42,
+            amount_stock=Decimal("2"),
+            amount_stablecoin=Decimal("400"),
+            amount_stock_min=Decimal("1.9"),
+            amount_stablecoin_min=Decimal("390"),
+        )
+        args = contract.functions.increaseLiquidity.call_args.args[0]
+        assert args["tokenId"] == 42
+        assert args["amount0Desired"] == 400 * 10**6
+        assert args["amount1Desired"] == 2 * 10**18
+        assert args["amount0Min"] == 390 * 10**6
+        assert args["amount1Min"] == int(Decimal("1.9") * 10**18)
+        # Both desired amounts approved to the NPM before the deposit.
+        spenders = {c.args[0] for c in contract.functions.approve.call_args_list}
+        amounts = {c.args[1] for c in contract.functions.approve.call_args_list}
+        assert spenders == {_NPM_ADDRESS}
+        assert amounts == {400 * 10**6, 2 * 10**18}
+
+    def test_increase_liquidity_orders_when_token0_stock(self):
+        handler, web3, contract, send_tx = self._setup()
+        contract.functions.positions.return_value.call.return_value = self._position(
+            _AAPL_TOKEN, _STABLECOIN_ADDRESS
+        )
+        handler.increase_liquidity(
+            42, amount_stock=Decimal("2"), amount_stablecoin=Decimal("400")
+        )
+        args = contract.functions.increaseLiquidity.call_args.args[0]
+        assert args["amount0Desired"] == 2 * 10**18
+        assert args["amount1Desired"] == 400 * 10**6
+
+    def test_burn_position_multicalls_decrease_collect_burn(self):
+        handler, web3, contract, send_tx = self._setup()
+        contract.functions.positions.return_value.call.return_value = self._position(
+            _STABLECOIN_ADDRESS, _AAPL_TOKEN, liquidity=10**18
+        )
+        handler.burn_position(42)
+        calls = contract.functions.multicall.call_args.args[0]
+        assert len(calls) == 3
+        assert b"decreaseLiquidity" in calls[0]
+        assert b"collect" in calls[1]
+        assert b"burn" in calls[2]
+        decrease = next(
+            c
+            for c in contract.encode_abi.call_args_list
+            if c.kwargs["abi_element_identifier"] == "decreaseLiquidity"
+        )
+        assert decrease.kwargs["args"][0][1] == 10**18  # full liquidity
+
+    def test_burn_position_skips_decrease_when_no_liquidity(self):
+        handler, web3, contract, send_tx = self._setup()
+        contract.functions.positions.return_value.call.return_value = self._position(
+            _STABLECOIN_ADDRESS, _AAPL_TOKEN, liquidity=0
+        )
+        handler.burn_position(42)
+        calls = contract.functions.multicall.call_args.args[0]
+        assert len(calls) == 2
+        assert b"collect" in calls[0]
+        assert b"burn" in calls[1]
+
+    def test_preview_fees_maps_static_collect_when_token0_stablecoin(self):
+        handler, web3, contract, send_tx = self._setup()
+        contract.functions.positions.return_value.call.return_value = self._position(
+            _STABLECOIN_ADDRESS, _AAPL_TOKEN
+        )
+        contract.functions.collect.return_value.call.return_value = (
+            5_000_000,
+            3 * 10**18,
+        )
+        stock, stablecoin = handler.preview_fees(42)
+        assert stock == Decimal("3")
+        assert stablecoin == Decimal("5")
+        # Read-only: a static .call(), no broadcast.
+        send_tx.assert_not_called()
+        # Static call must carry `from` = owner or NPM.collect reverts "Not approved".
+        contract.functions.collect.return_value.call.assert_called_once_with(
+            {"from": _USER_ADDRESS}
+        )
+
+    def test_preview_fees_maps_static_collect_when_token0_stock(self):
+        handler, web3, contract, send_tx = self._setup()
+        contract.functions.positions.return_value.call.return_value = self._position(
+            _AAPL_TOKEN, _STABLECOIN_ADDRESS
+        )
+        contract.functions.collect.return_value.call.return_value = (
+            3 * 10**18,
+            5_000_000,
+        )
+        stock, stablecoin = handler.preview_fees(42)
+        assert stock == Decimal("3")
+        assert stablecoin == Decimal("5")
+
 
 class TestQuoteHandler:
     def _handler(self, *, token0, with_quoter=True):

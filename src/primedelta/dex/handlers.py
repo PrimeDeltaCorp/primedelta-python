@@ -591,6 +591,121 @@ class _AMMPoolHandler:
             )
         )
 
+    def increase_liquidity(
+        self,
+        position_id: int,
+        amount_stock: Decimal,
+        amount_stablecoin: Decimal,
+        amount_stock_min: Decimal = Decimal(0),
+        amount_stablecoin_min: Decimal = Decimal(0),
+    ) -> str:
+        contracts = self._contracts_provider()
+        npm_ref = self._require_npm(contracts)
+        npm = self._contract(npm_ref)
+
+        position = _call_view(
+            "NonfungiblePositionManager.positions",
+            lambda: npm.functions.positions(position_id).call(),
+        )
+        token0, token1 = position[2], position[3]
+        stablecoin = contracts.core.stablecoin.address
+        stock_token_addr = token1 if token0.lower() == stablecoin.lower() else token0
+
+        amounts = self._map_amounts(
+            stock_token_addr, token0, stock=amount_stock, stablecoin=amount_stablecoin
+        )
+        amounts_min = self._map_amounts(
+            stock_token_addr,
+            token0,
+            stock=amount_stock_min,
+            stablecoin=amount_stablecoin_min,
+        )
+        self._approve_at(token0, npm_ref.address, amounts[0])
+        self._approve_at(token1, npm_ref.address, amounts[1])
+
+        deadline = self._now() + 600
+        return self._send_tx(
+            npm.functions.increaseLiquidity(
+                {
+                    "tokenId": position_id,
+                    "amount0Desired": amounts[0],
+                    "amount1Desired": amounts[1],
+                    "amount0Min": amounts_min[0],
+                    "amount1Min": amounts_min[1],
+                    "deadline": deadline,
+                }
+            )
+        )
+
+    def burn_position(self, position_id: int) -> str:
+        contracts = self._contracts_provider()
+        npm_ref = self._require_npm(contracts)
+        npm = self._contract(npm_ref)
+        deadline = self._now() + 600
+
+        position = _call_view(
+            "NonfungiblePositionManager.positions",
+            lambda: npm.functions.positions(position_id).call(),
+        )
+        liquidity = position[7]
+        max_uint128 = (1 << 128) - 1
+
+        calls = []
+        if liquidity > 0:
+            calls.append(
+                npm.encode_abi(
+                    abi_element_identifier="decreaseLiquidity",
+                    args=[(position_id, liquidity, 0, 0, deadline)],
+                )
+            )
+        calls.append(
+            npm.encode_abi(
+                abi_element_identifier="collect",
+                args=[(position_id, self._account.address, max_uint128, max_uint128)],
+            )
+        )
+        calls.append(npm.encode_abi(abi_element_identifier="burn", args=[position_id]))
+        return self._send_tx(npm.functions.multicall(calls))
+
+    def preview_fees(self, position_id: int) -> tuple[Decimal, Decimal]:
+        # Statically simulate collect(max, max) — an eth_call against the live
+        # NPM returns what the position could collect right now (accrued fees
+        # already booked to tokensOwed) without moving state. Returned as
+        # (stock, stablecoin) in human units.
+        contracts = self._contracts_provider()
+        npm_ref = self._require_npm(contracts)
+        npm = self._contract(npm_ref)
+        max_uint128 = (1 << 128) - 1
+
+        position = _call_view(
+            "NonfungiblePositionManager.positions",
+            lambda: npm.functions.positions(position_id).call(),
+        )
+        token0 = position[2]
+        amount0, amount1 = _call_view(
+            "NonfungiblePositionManager.collect(static)",
+            # `from` must be the position owner: NPM.collect gates on
+            # isAuthorizedForToken, and a static call defaults msg.sender to
+            # the zero address, which fails that check ("Not approved").
+            lambda: npm.functions.collect(
+                {
+                    "tokenId": position_id,
+                    "recipient": self._account.address,
+                    "amount0Max": max_uint128,
+                    "amount1Max": max_uint128,
+                }
+            ).call({"from": self._account.address}),
+        )
+        stablecoin = contracts.core.stablecoin.address
+        if token0.lower() == stablecoin.lower():
+            stablecoin_units, stock_units = amount0, amount1
+        else:
+            stock_units, stablecoin_units = amount0, amount1
+        return (
+            Decimal(stock_units) / _STOCK_DECIMALS,
+            Decimal(stablecoin_units) / _STABLECOIN_DECIMALS,
+        )
+
     def _require_npm(self, contracts: Contracts) -> ContractRef:
         if contracts.core.position_manager is None:
             raise PositionManagerNotConfigured()
