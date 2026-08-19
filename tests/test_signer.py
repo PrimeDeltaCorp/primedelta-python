@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,6 +10,7 @@ from primedelta.signer import LocalAccountSigner, Signer
 
 KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
 ADDR = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+ANVIL_MNEMONIC = "test test test test test test test test test test test junk"
 
 
 class TestLocalAccountSigner:
@@ -44,6 +46,26 @@ class TestLocalAccountSigner:
         assert signer.submit_transaction(web3, tx) == b"\xaa"
         sent = web3.eth.send_raw_transaction.call_args.args[0]
         assert isinstance(sent, (bytes, bytearray)) and len(sent) > 0
+
+    def test_from_keystore_round_trip(self, tmp_path):
+        path = tmp_path / "keystore.json"
+        path.write_text(json.dumps(Account.encrypt(KEY, "pw123")))
+        assert LocalAccountSigner.from_keystore(path, "pw123").address == ADDR
+
+    def test_from_keystore_wrong_password_raises(self, tmp_path):
+        path = tmp_path / "keystore.json"
+        path.write_text(json.dumps(Account.encrypt(KEY, "pw123")))
+        with pytest.raises(ValueError):
+            LocalAccountSigner.from_keystore(path, "wrong")
+
+    def test_from_mnemonic_derives_expected_index(self):
+        assert LocalAccountSigner.from_mnemonic(ANVIL_MNEMONIC, index=1).address == ADDR
+
+    def test_from_mnemonic_index_selects_account(self):
+        a0 = LocalAccountSigner.from_mnemonic(ANVIL_MNEMONIC, index=0)
+        a1 = LocalAccountSigner.from_mnemonic(ANVIL_MNEMONIC, index=1)
+        assert a0.address != a1.address
+        assert a1.address == ADDR
 
 
 class TestPrimeDeltaSignerWiring:
