@@ -25,6 +25,7 @@ from primedelta.types import (
     TransactionType,
     Transfer,
     TransferHistoryStatus,
+    WithdrawalSignature,
 )
 
 _STABLECOIN_SYMBOL = "dUSD"
@@ -261,6 +262,7 @@ class PrimeDeltaClient:
         return DepositStocksSignature(
             signature=response["signature"],
             nonce=response["nonce"],
+            amount=response["amount"],
         )
 
     def request_stablecoin_withdrawal(self, amount: Decimal) -> int:
@@ -277,9 +279,13 @@ class PrimeDeltaClient:
         )
         return response["withdrawalId"]
 
-    def get_withdraw_signature(self, withdrawal_id: int) -> str:
+    def get_withdraw_signature(self, withdrawal_id: int) -> WithdrawalSignature:
         response = self._post(f"/withdraw-signature/{withdrawal_id}/", {})
-        return response["signature"]
+        return WithdrawalSignature(
+            signature=response["signature"],
+            nonce=response["nonce"],
+            amount=response["amount"],
+        )
 
     def portfolio(self) -> Portfolio:
         response = self._get("/portfolio/")

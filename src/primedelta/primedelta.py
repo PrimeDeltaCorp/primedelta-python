@@ -327,21 +327,20 @@ class PrimeDelta:
             withdrawal_id=withdrawal_id,
         )
 
-        contracts = self._get_contracts()
-        vault_contract_address = self._web3.to_checksum_address(contracts.core.vault.address)
-        vault_contract = self._web3.eth.contract(
-            address=vault_contract_address, abi=contracts.core.vault.abi
+        factory = self._get_contracts().core.factory
+        factory_contract_address = self._web3.to_checksum_address(factory.address)
+        factory_contract = self._web3.eth.contract(
+            address=factory_contract_address, abi=factory.abi
         )
         return self._build_and_send_transaction(
-            vault_contract.functions.withdraw(
+            factory_contract.functions.mintStablecoin(
                 {
-                    "token": contracts.core.stablecoin.address,
-                    "account": contracts.core.vault.address,
-                    "to": self._account.address,
-                    "amount": int(withdrawal.amount * Decimal(10**6)),
-                    "nonce": withdrawal_id,
+                    "symbol": withdrawal.asset_type,
+                    "amount": int(signature.amount),
+                    "account": self._account.address,
+                    "nonce": int(signature.nonce, 16),
                 },
-                bytes.fromhex(signature),
+                bytes.fromhex(signature.signature.removeprefix("0x")),
             )
         )
 
@@ -364,9 +363,9 @@ class PrimeDelta:
             factory_contract.functions.burnStocks(
                 {
                     "symbol": stock_symbol,
-                    "amount": int(amount * Decimal(10**18)),
+                    "amount": int(signature.amount),
                     "account": self._account.address,
-                    "nonce": int.from_bytes(bytes.fromhex(signature.nonce[2:]), "big"),
+                    "nonce": int(signature.nonce, 16),
                 },
                 bytes.fromhex(signature.signature),
             )
@@ -402,11 +401,11 @@ class PrimeDelta:
             factory_contract.functions.mintStocks(
                 {
                     "symbol": withdrawal.asset_type,
-                    "amount": int(withdrawal.amount * Decimal(10**18)),
+                    "amount": int(signature.amount),
                     "account": self._account.address,
-                    "nonce": withdrawal_id,
+                    "nonce": int(signature.nonce, 16),
                 },
-                bytes.fromhex(signature),
+                bytes.fromhex(signature.signature.removeprefix("0x")),
             )
         )
 

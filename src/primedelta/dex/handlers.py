@@ -505,8 +505,17 @@ class _AMMPoolHandler:
         npm = self._contract(npm_ref)
         deadline = self._now() + 600
 
+        position = _call_view(
+            "NonfungiblePositionManager.positions",
+            lambda: npm.functions.positions(params.position_id).call(),
+        )
+        token0 = position[2]
         amount_stock_min_units = int(params.amount_stock_min * _STOCK_DECIMALS)
         amount_stablecoin_min_units = int(params.amount_stablecoin_min * _STABLECOIN_DECIMALS)
+        if token0.lower() == contracts.core.stablecoin.address.lower():
+            amount0_min, amount1_min = amount_stablecoin_min_units, amount_stock_min_units
+        else:
+            amount0_min, amount1_min = amount_stock_min_units, amount_stablecoin_min_units
 
         max_uint128 = (1 << 128) - 1
         decrease_call = npm.encode_abi(
@@ -515,8 +524,8 @@ class _AMMPoolHandler:
                 (
                     params.position_id,
                     params.liquidity,
-                    amount_stock_min_units,
-                    amount_stablecoin_min_units,
+                    amount0_min,
+                    amount1_min,
                     deadline,
                 )
             ],

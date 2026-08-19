@@ -499,6 +499,55 @@ class TestAMMHandlerLiquidity:
         assert b"decreaseLiquidity" in calls_arg[0]
         assert b"collect" in calls_arg[1]
 
+    def _decrease_min_amounts(self, contract):
+        decrease = next(
+            c
+            for c in contract.encode_abi.call_args_list
+            if c.kwargs["abi_element_identifier"] == "decreaseLiquidity"
+        )
+        args = decrease.kwargs["args"][0]
+        return args[2], args[3]
+
+    def test_remove_liquidity_orders_min_amounts_when_token0_is_stablecoin(self):
+        handler, web3, contract, send_tx = self._setup()
+        contract.functions.positions.return_value.call.return_value = (
+            0,
+            "0xop",
+            _STABLECOIN_ADDRESS,
+            _AAPL_TOKEN,
+        ) + (0,) * 8
+        handler.remove_liquidity(
+            AMMRemoveLiquidity(
+                position_id=42,
+                liquidity=10**18,
+                amount_stock_min=Decimal("2"),
+                amount_stablecoin_min=Decimal("400"),
+            )
+        )
+        amount0_min, amount1_min = self._decrease_min_amounts(contract)
+        assert amount0_min == 400 * 10**6
+        assert amount1_min == 2 * 10**18
+
+    def test_remove_liquidity_orders_min_amounts_when_token0_is_stock(self):
+        handler, web3, contract, send_tx = self._setup()
+        contract.functions.positions.return_value.call.return_value = (
+            0,
+            "0xop",
+            _AAPL_TOKEN,
+            _STABLECOIN_ADDRESS,
+        ) + (0,) * 8
+        handler.remove_liquidity(
+            AMMRemoveLiquidity(
+                position_id=42,
+                liquidity=10**18,
+                amount_stock_min=Decimal("2"),
+                amount_stablecoin_min=Decimal("400"),
+            )
+        )
+        amount0_min, amount1_min = self._decrease_min_amounts(contract)
+        assert amount0_min == 2 * 10**18
+        assert amount1_min == 400 * 10**6
+
     def test_collect_fees_calls_collect(self):
         handler, web3, contract, send_tx = self._setup()
         handler.collect_fees(99)
@@ -888,3 +937,75 @@ class TestBuildAndSendTransaction:
         assert info.value.function_name == "buyExactInput"
         assert info.value.tx_hash == "0xabc"
         assert "Error('bad')" in info.value.reason
+
+
+class TestClaimWithdrawals:
+    def _pd(self):
+        pd = _make_primedelta()
+        pd._account = MagicMock()
+        pd._account.address = _USER_ADDRESS
+        pd._web3 = MagicMock()
+        pd._web3.to_checksum_address.side_effect = lambda a: a
+        pd._primedelta_client = MagicMock()
+        pd._build_and_send_transaction = MagicMock(return_value="0xTX")
+        factory = MagicMock()
+        pd._web3.eth.contract.return_value = factory
+        return pd, factory
+
+    def test_claim_stablecoin_withdrawal_uses_mintStablecoin_signed_voucher(self):
+        from primedelta.types import ClaimableWithdrawal, WithdrawalSignature
+
+        pd, factory = self._pd()
+        pd._primedelta_client.claimable_withdrawals.return_value = [
+            ClaimableWithdrawal(withdrawal_id=3, amount=Decimal("1"), asset_type="dUSD")
+        ]
+        pd._primedelta_client.get_withdraw_signature.return_value = WithdrawalSignature(
+            signature="ab" * 65, nonce="0xbfbb", amount="1000000"
+        )
+
+        assert pd.claim_stablecoin_withdrawal(3) == "0xTX"
+        struct, sig = factory.functions.mintStablecoin.call_args.args
+        assert struct == {
+            "symbol": "dUSD",
+            "amount": 1000000,
+            "account": _USER_ADDRESS,
+            "nonce": int("0xbfbb", 16),
+        }
+        assert sig == bytes.fromhex("ab" * 65)
+
+    def test_claim_stock_withdrawal_uses_mintStocks_signed_voucher(self):
+        from primedelta.types import ClaimableWithdrawal, WithdrawalSignature
+
+        pd, factory = self._pd()
+        pd._primedelta_client.claimable_withdrawals.return_value = [
+            ClaimableWithdrawal(withdrawal_id=7, amount=Decimal("5"), asset_type="AAPL")
+        ]
+        pd._primedelta_client.get_withdraw_signature.return_value = WithdrawalSignature(
+            signature="cd" * 65, nonce="0x10", amount="5000000000000000000"
+        )
+
+        assert pd.claim_stock_withdrawal(7) == "0xTX"
+        struct, sig = factory.functions.mintStocks.call_args.args
+        assert struct == {
+            "symbol": "AAPL",
+            "amount": 5000000000000000000,
+            "account": _USER_ADDRESS,
+            "nonce": 16,
+        }
+        assert sig == bytes.fromhex("cd" * 65)
+
+    def test_deposit_stock_token_uses_signed_amount_and_parses_odd_nonce(self):
+        from primedelta.types import AccountStatus, DepositStocksSignature
+
+        pd, factory = self._pd()
+        pd._primedelta_client.get_account_status.return_value = AccountStatus.DID_MINTED
+        pd._primedelta_client.get_deposit_stocks_signature.return_value = (
+            DepositStocksSignature(
+                signature="ef" * 65, nonce="0xabc", amount="3000000000000000000"
+            )
+        )
+
+        pd.deposit_stock_token("AAPL", 1)
+        struct, _ = factory.functions.burnStocks.call_args.args
+        assert struct["nonce"] == int("0xabc", 16)
+        assert struct["amount"] == 3000000000000000000
