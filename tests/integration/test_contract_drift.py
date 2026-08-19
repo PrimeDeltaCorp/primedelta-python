@@ -11,7 +11,9 @@ SDK silently depends on still hold:
    as a 4-byte selector in the deployed bytecode. solc emits each external
    selector as a PUSH4 in the dispatcher, so selector-in-code is a reliable
    drift signal for these (non-proxy) contracts. A changed signature moves the
-   selector and trips this test.
+   selector and trips this test. Scope: the fixed core contracts only — the
+   per-symbol pool / UniV3-factory ABIs live at addresses discovered at runtime,
+   so their drift is out of scope here (and `vault` has no on-chain SDK call).
 
 Run: pytest tests/integration/test_contract_drift.py -v -m integration
 (CI runs this on a schedule against dev.)
@@ -35,8 +37,18 @@ _SDK_CALLS = {
         "getStocksCount",
         "getNonce",
     ],
-    "digital_identity": ["getId", "isPro", "isValid"],
-    "dex_router": ["buyExactInput", "sellExactInput", "allStockTokens"],
+    "digital_identity": ["getId", "isPro", "isValid", "mint"],
+    "dex_router": [
+        "buyExactInput",
+        "sellExactInput",
+        "buyExactOutput",
+        "sellExactOutput",
+        "swapExactInput",
+        "swapExactOutput",
+        "stockTokenToPool",
+        "allStockTokens",
+    ],
+    "oracle": ["getUpdateFee"],
     "position_manager": [
         "positions",
         "mint",
