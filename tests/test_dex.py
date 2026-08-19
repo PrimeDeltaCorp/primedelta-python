@@ -832,7 +832,7 @@ class TestBuildAndSendTransaction:
         pd._web3.to_checksum_address.side_effect = lambda a: a
         pd._account = MagicMock()
         pd._account.address = _USER_ADDRESS
-        pd._account.sign_transaction.return_value.rawTransaction = b"\x00"
+        pd._account.sign_transaction.return_value.raw_transaction = b"\x00"
         return pd
 
     def test_raises_transaction_failed_on_pre_submit_revert(self):
