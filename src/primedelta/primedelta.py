@@ -363,7 +363,7 @@ class PrimeDelta:
             factory_contract.functions.burnStocks(
                 {
                     "symbol": stock_symbol,
-                    "amount": int(amount * Decimal(10**18)),
+                    "amount": int(signature.amount),
                     "account": self._account.address,
                     "nonce": int(signature.nonce, 16),
                 },

@@ -994,15 +994,18 @@ class TestClaimWithdrawals:
         }
         assert sig == bytes.fromhex("cd" * 65)
 
-    def test_deposit_stock_token_parses_odd_length_nonce(self):
+    def test_deposit_stock_token_uses_signed_amount_and_parses_odd_nonce(self):
         from primedelta.types import AccountStatus, DepositStocksSignature
 
         pd, factory = self._pd()
         pd._primedelta_client.get_account_status.return_value = AccountStatus.DID_MINTED
         pd._primedelta_client.get_deposit_stocks_signature.return_value = (
-            DepositStocksSignature(signature="ef" * 65, nonce="0xabc")
+            DepositStocksSignature(
+                signature="ef" * 65, nonce="0xabc", amount="3000000000000000000"
+            )
         )
 
         pd.deposit_stock_token("AAPL", 1)
         struct, _ = factory.functions.burnStocks.call_args.args
         assert struct["nonce"] == int("0xabc", 16)
+        assert struct["amount"] == 3000000000000000000

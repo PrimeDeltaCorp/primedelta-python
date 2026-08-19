@@ -262,6 +262,7 @@ class PrimeDeltaClient:
         return DepositStocksSignature(
             signature=response["signature"],
             nonce=response["nonce"],
+            amount=response["amount"],
         )
 
     def request_stablecoin_withdrawal(self, amount: Decimal) -> int:

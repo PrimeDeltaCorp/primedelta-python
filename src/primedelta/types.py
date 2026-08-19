@@ -81,6 +81,7 @@ class DigitalIdentitySignature:
 class DepositStocksSignature:
     signature: str
     nonce: str
+    amount: str
 
 
 @dataclass(frozen=True)
