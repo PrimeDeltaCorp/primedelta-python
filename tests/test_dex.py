@@ -593,11 +593,12 @@ class TestAMMHandlerLiquidity:
         assert args["amount1Desired"] == 2 * 10**18
         assert args["amount0Min"] == 390 * 10**6
         assert args["amount1Min"] == int(Decimal("1.9") * 10**18)
-        # Both desired amounts approved to the NPM before the deposit.
-        spenders = {c.args[0] for c in contract.functions.approve.call_args_list}
-        amounts = {c.args[1] for c in contract.functions.approve.call_args_list}
-        assert spenders == {_NPM_ADDRESS}
-        assert amounts == {400 * 10**6, 2 * 10**18}
+        # token0 approved for amount0 then token1 for amount1, in order, both to
+        # the NPM. Ordered (not set) so a swapped amount0/amount1 pairing fails.
+        assert [c.args for c in contract.functions.approve.call_args_list] == [
+            (_NPM_ADDRESS, 400 * 10**6),
+            (_NPM_ADDRESS, 2 * 10**18),
+        ]
 
     def test_increase_liquidity_orders_when_token0_stock(self):
         handler, web3, contract, send_tx = self._setup()

@@ -750,7 +750,8 @@ class PrimeDelta:
     def preview_fees(self, position_id: int) -> tuple[Decimal, Decimal]:
         """Preview an AMM (V3) position's currently collectable amounts as
         (stock, stablecoin) in human units, via a static `collect` simulation.
-        Read-only — does not require login."""
+        Read-only (no login) but only for positions owned by this wallet — the
+        NPM gates collect on ownership, so a third party's position_id reverts."""
         return self._amm_handler.preview_fees(position_id)
 
     def lp_positions(self) -> list[int]:
