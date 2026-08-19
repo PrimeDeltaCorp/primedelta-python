@@ -1,8 +1,9 @@
 """Full AMM (Uniswap-V3) position lifecycle: add -> increase -> preview -> burn.
 
-The range below sits entirely under the current tick, so the position holds only
-dUSD (token1) — handy when the wallet is short on the stock leg. Widen/centre the
-range for a two-sided position.
+The ticks below sit entirely under the current tick, so the position holds only
+token1 (dUSD is token1 on the dev AMMT1 pool) — handy when the wallet is short on
+the stock leg. Token ordering is per-pool (by address); pick ticks around the
+live tick, or widen/centre the range for a two-sided position.
 """
 
 import os
