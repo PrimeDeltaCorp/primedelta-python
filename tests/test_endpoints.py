@@ -90,14 +90,17 @@ class TestLoginDomainPerNetwork:
     def test_dev_login_signs_dev_domain(self, monkeypatch):
         pd, captured = self._pd("dev", monkeypatch)
         pd.login()
-        assert "mint-dev.primedelta.io" in captured["msg"]
+        # A SIWE message begins with "<domain> wants you to sign in ...", so the
+        # first token IS the domain. Compare it by equality (not `in`/startswith,
+        # which pin the URI line too and trip CodeQL's url-substring rule).
+        assert captured["msg"].split()[0] == "mint-dev.primedelta.io"
 
     def test_testnet_login_signs_testnet_domain(self, monkeypatch):
         pd, captured = self._pd("testnet", monkeypatch)
         pd.login()
-        assert "mint-testnet.primedelta.io" in captured["msg"]
+        assert captured["msg"].split()[0] == "mint-testnet.primedelta.io"
         # chain id in the SIWE message follows the network config (7357).
-        assert "7357" in captured["msg"]
+        assert "Chain ID: 7357" in captured["msg"]
 
     def test_client_base_url_follows_network(self, monkeypatch):
         for var in ("PRIMEDELTA_BASE_URL", "PRIMEDELTA_APP_URL"):
