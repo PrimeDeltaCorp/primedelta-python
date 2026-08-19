@@ -22,6 +22,7 @@ class CoreContracts:
     position_manager: Optional[ContractRef] = None
     oracle: Optional[ContractRef] = None
     wdel: Optional[ContractRef] = None
+    quoter: Optional[ContractRef] = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "CoreContracts":
@@ -48,6 +49,11 @@ class CoreContracts:
             wdel=(
                 ContractRef.from_dict(data["wdel"])
                 if data.get("wdel") and data["wdel"].get("address")
+                else None
+            ),
+            quoter=(
+                ContractRef.from_dict(data["quoter"])
+                if data.get("quoter") and data["quoter"].get("address")
                 else None
             ),
         )

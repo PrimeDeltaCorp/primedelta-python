@@ -14,6 +14,7 @@ from primedelta.signer import LocalAccountSigner, Signer
 from primedelta.dex.handlers import (
     _AMMPoolHandler,
     _DclexPoolHandler,
+    _QuoteHandler,
     _RouterSwapHandler,
 )
 from primedelta.dex.params import (
@@ -219,6 +220,10 @@ class PrimeDelta:
             contracts_provider=self._get_contracts,
             signed_prices_fetcher=self._primedelta_client.get_signed_price_updates,
             send_tx=self._build_and_send_transaction,
+        )
+        self._quote_handler = _QuoteHandler(
+            web3=self._web3,
+            contracts_provider=self._get_contracts,
         )
 
     def _get_contracts(self) -> Contracts:
@@ -953,3 +958,11 @@ class PrimeDelta:
 
     def digital_identity_id(self) -> Optional[int]:
         return self._primedelta_client.digital_identity_id()
+
+    def quote_swap(
+        self, symbol: str, side: SwapSide, amount: Decimal, exact: str = "input"
+    ) -> Decimal:
+        return self._quote_handler.quote_swap(symbol, side, amount, exact)
+
+    def spot_price(self, symbol: str) -> Decimal:
+        return self._quote_handler.spot_price(symbol)

@@ -23,9 +23,11 @@ from primedelta.contracts import (
 from primedelta.dex.handlers import (
     PoolNotFound,
     PositionManagerNotConfigured,
+    QuoterNotConfigured,
     RouterNotConfigured,
     _AMMPoolHandler,
     _DclexPoolHandler,
+    _QuoteHandler,
     _resolve_stock_token,
     _RouterSwapHandler,
 )
@@ -44,6 +46,7 @@ _AMMT1_TOKEN = "0x" + "7" * 40
 _AMMT2_TOKEN = "0x" + "8" * 40
 _DCLEX_POOL = "0x" + "C" * 40
 _AMM_POOL = "0x" + "D" * 40
+_QUOTER_ADDRESS = "0x" + "E" * 40
 
 
 def _ref(address: str) -> ContractRef:
@@ -55,6 +58,7 @@ def _contracts(
     with_router: bool = True,
     with_npm: bool = True,
     with_amm_pools: bool = False,
+    with_quoter: bool = True,
 ) -> Contracts:
     core = CoreContracts(
         stablecoin=_ref(_STABLECOIN_ADDRESS),
@@ -63,6 +67,7 @@ def _contracts(
         digital_identity=_ref(_DID_ADDRESS),
         dex_router=_ref(_ROUTER_ADDRESS) if with_router else None,
         position_manager=_ref(_NPM_ADDRESS) if with_npm else None,
+        quoter=_ref(_QUOTER_ADDRESS) if with_quoter else None,
     )
     pools: dict[str, StockPools] = {
         "AAPL": StockPools(symbol="AAPL", stock_token_address=_AAPL_TOKEN),
@@ -566,6 +571,87 @@ class TestAMMHandlerLiquidity:
         )
         with pytest.raises(PositionManagerNotConfigured):
             handler.collect_fees(1)
+
+
+class TestQuoteHandler:
+    def _handler(self, *, token0, with_quoter=True):
+        web3 = _make_web3_mock()
+        contract = MagicMock()
+        web3.eth.contract.return_value = contract
+        contract.functions.factory.return_value.call.return_value = "0x" + "F" * 40
+        contract.functions.getPool.return_value.call.return_value = _AMM_POOL
+        contract.functions.fee.return_value.call.return_value = 3000
+        contract.functions.token0.return_value.call.return_value = token0
+        handler = _QuoteHandler(
+            web3=web3,
+            contracts_provider=lambda: _contracts(
+                with_amm_pools=True, with_quoter=with_quoter
+            ),
+        )
+        return handler, contract
+
+    def test_quote_exact_input_scales_and_calls_quoter(self):
+        handler, contract = self._handler(token0=_AMMT1_TOKEN)
+        contract.functions.quoteExactInputSingle.return_value.call.return_value = (
+            95981129755396613
+        )
+        result = handler.quote_swap(
+            "AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("1"), exact="input"
+        )
+        assert result == Decimal("95981129755396613") / Decimal(10) ** 18
+        args = contract.functions.quoteExactInputSingle.call_args.args
+        assert args[0] == _STABLECOIN_ADDRESS
+        assert args[1] == _AMMT1_TOKEN
+        assert args[2] == 3000
+        assert args[3] == 10**6
+        assert args[4] == 0
+
+    def test_quote_exact_output_scales(self):
+        handler, contract = self._handler(token0=_AMMT1_TOKEN)
+        contract.functions.quoteExactOutputSingle.return_value.call.return_value = 1042327
+        result = handler.quote_swap(
+            "AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("0.1"), exact="output"
+        )
+        assert result == Decimal("1042327") / Decimal(10) ** 6
+        args = contract.functions.quoteExactOutputSingle.call_args.args
+        assert args[3] == int(Decimal("0.1") * 10**18)
+
+    def test_quote_stock_to_stablecoin_flips_tokens(self):
+        handler, contract = self._handler(token0=_AMMT1_TOKEN)
+        contract.functions.quoteExactInputSingle.return_value.call.return_value = 1014060
+        handler.quote_swap("AMMT1", SwapSide.STOCK_TO_STABLECOIN, Decimal("0.1"))
+        args = contract.functions.quoteExactInputSingle.call_args.args
+        assert args[0] == _AMMT1_TOKEN
+        assert args[1] == _STABLECOIN_ADDRESS
+        assert args[3] == int(Decimal("0.1") * 10**18)
+
+    def test_spot_price_orders_by_token0(self):
+        scale = Decimal(10) ** 12
+        sqrt = 2 * (2**96)
+        handler_stock, contract_stock = self._handler(token0=_AMMT1_TOKEN)
+        contract_stock.functions.slot0.return_value.call.return_value = (sqrt,) + (0,) * 6
+        assert handler_stock.spot_price("AMMT1") == Decimal(4) * scale
+
+        handler_dusd, contract_dusd = self._handler(token0=_STABLECOIN_ADDRESS)
+        contract_dusd.functions.slot0.return_value.call.return_value = (sqrt,) + (0,) * 6
+        assert handler_dusd.spot_price("AMMT1") == (Decimal(1) / Decimal(4)) * scale
+
+    def test_spot_price_real_value_is_sane(self):
+        handler, contract = self._handler(token0=_AMMT1_TOKEN)
+        contract.functions.slot0.return_value.call.return_value = (
+            251377153967608572360981,
+        ) + (0,) * 6
+        assert Decimal("10") < handler.spot_price("AMMT1") < Decimal("11")
+
+    def test_quote_raises_when_quoter_not_configured(self):
+        handler, _ = self._handler(token0=_AMMT1_TOKEN, with_quoter=False)
+        with pytest.raises(QuoterNotConfigured):
+            handler.quote_swap("AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("1"))
+
+    def test_quote_invalid_exact_raises(self):
+        handler, _ = self._handler(token0=_AMMT1_TOKEN)
+        with pytest.raises(ValueError):
+            handler.quote_swap("AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("1"), exact="bad")
 
 
 def _make_primedelta() -> PrimeDelta:
