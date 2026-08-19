@@ -12,7 +12,6 @@ from primedelta.dex.params import (
     SwapSide,
 )
 
-
 _STABLECOIN_DECIMALS = Decimal(10**6)
 _STOCK_DECIMALS = Decimal(10**18)
 
@@ -104,7 +103,9 @@ class QuoterNotConfigured(Exception):
     pass
 
 
-def _lookup_amm_pool_address(web3, contracts: "Contracts", stock_token_addr: str) -> str:
+def _lookup_amm_pool_address(
+    web3, contracts: "Contracts", stock_token_addr: str
+) -> str:
     npm_ref = contracts.core.position_manager
     if npm_ref is None:
         raise PositionManagerNotConfigured()
@@ -167,7 +168,9 @@ class _RouterSwapHandler:
         if side == SwapSide.STABLECOIN_TO_STOCK:
             amount_in_units = int(amount_in * _STABLECOIN_DECIMALS)
             min_out_units = int(min_amount_out * _STOCK_DECIMALS)
-            self._approve(contracts.core.stablecoin, router_ref.address, amount_in_units)
+            self._approve(
+                contracts.core.stablecoin, router_ref.address, amount_in_units
+            )
             tx_function = router.functions.buyExactInput(
                 stock_token_addr,
                 amount_in_units,
@@ -371,7 +374,9 @@ class _RouterSwapHandler:
             token.functions.approve(self._web3.to_checksum_address(spender), amount)
         )
 
-    def _approve_stock(self, stock_token_address: str, spender: str, amount: int) -> None:
+    def _approve_stock(
+        self, stock_token_address: str, spender: str, amount: int
+    ) -> None:
         token = self._erc20_at(stock_token_address)
         self._send_tx(
             token.functions.approve(self._web3.to_checksum_address(spender), amount)
@@ -543,11 +548,19 @@ class _AMMPoolHandler:
         )
         token0 = position[2]
         amount_stock_min_units = int(params.amount_stock_min * _STOCK_DECIMALS)
-        amount_stablecoin_min_units = int(params.amount_stablecoin_min * _STABLECOIN_DECIMALS)
+        amount_stablecoin_min_units = int(
+            params.amount_stablecoin_min * _STABLECOIN_DECIMALS
+        )
         if token0.lower() == contracts.core.stablecoin.address.lower():
-            amount0_min, amount1_min = amount_stablecoin_min_units, amount_stock_min_units
+            amount0_min, amount1_min = (
+                amount_stablecoin_min_units,
+                amount_stock_min_units,
+            )
         else:
-            amount0_min, amount1_min = amount_stock_min_units, amount_stablecoin_min_units
+            amount0_min, amount1_min = (
+                amount_stock_min_units,
+                amount_stablecoin_min_units,
+            )
 
         max_uint128 = (1 << 128) - 1
         decrease_call = npm.encode_abi(
@@ -787,7 +800,9 @@ class _QuoteHandler:
             raise QuoterNotConfigured()
         stock = _resolve_stock_token(self._web3, contracts, symbol)
         dusd = contracts.core.stablecoin.address
-        pool = self._contract(self._amm_pool(contracts, stock), self._pool_abi(contracts))
+        pool = self._contract(
+            self._amm_pool(contracts, stock), self._pool_abi(contracts)
+        )
         fee = _call_view("UniswapV3Pool.fee", lambda: pool.functions.fee().call())
         quoter = self._contract(quoter_ref.address, quoter_ref.abi)
 
@@ -821,7 +836,9 @@ class _QuoteHandler:
     def spot_price(self, symbol: str) -> Decimal:
         contracts = self._contracts_provider()
         stock = _resolve_stock_token(self._web3, contracts, symbol)
-        pool = self._contract(self._amm_pool(contracts, stock), self._pool_abi(contracts))
+        pool = self._contract(
+            self._amm_pool(contracts, stock), self._pool_abi(contracts)
+        )
         sqrt_price = _call_view(
             "UniswapV3Pool.slot0", lambda: pool.functions.slot0().call()
         )[0]
@@ -844,5 +861,3 @@ class _QuoteHandler:
         return self._web3.eth.contract(
             address=self._web3.to_checksum_address(address), abi=abi
         )
-
-

@@ -18,6 +18,7 @@ SDK silently depends on still hold:
 Run: pytest tests/integration/test_contract_drift.py -v -m integration
 (CI runs this on a schedule against dev.)
 """
+
 import pytest
 from eth_utils import function_abi_to_4byte_selector
 
@@ -28,7 +29,14 @@ pytestmark = pytest.mark.integration
 # in dev bytecode, so this stays a true drift signal rather than a proxy false
 # positive.
 _SDK_CALLS = {
-    "stablecoin": ["symbol", "decimals", "balanceOf", "transfer", "approve", "allowance"],
+    "stablecoin": [
+        "symbol",
+        "decimals",
+        "balanceOf",
+        "transfer",
+        "approve",
+        "allowance",
+    ],
     "factory": [
         "mintStocks",
         "burnStocks",
@@ -96,9 +104,7 @@ class TestContractDrift:
             assert ref is not None, f"{name} missing from network config"
             code = w3.eth.get_code(w3.to_checksum_address(ref.address)).hex()
             assert len(code) > 2, f"{name} @ {ref.address} has no bytecode"
-            by_name = {
-                a.get("name"): a for a in ref.abi if a.get("type") == "function"
-            }
+            by_name = {a.get("name"): a for a in ref.abi if a.get("type") == "function"}
             for fn in fns:
                 abi = by_name.get(fn)
                 if abi is None:

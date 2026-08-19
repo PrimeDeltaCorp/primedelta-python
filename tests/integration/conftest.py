@@ -96,7 +96,9 @@ def wait_for_transaction(tx_hash: str, provider_url: str) -> None:
     Web3(Web3.HTTPProvider(provider_url)).eth.wait_for_transaction_receipt(tx_hash)
 
 
-def wait_for_condition(predicate, message: str, timeout_s: float = 60.0, interval_s: float = 1.0):
+def wait_for_condition(
+    predicate, message: str, timeout_s: float = 60.0, interval_s: float = 1.0
+):
     """Poll `predicate()` until it returns a truthy value; pytest.fail if it
     doesn't within `timeout_s`. Returns whatever `predicate()` returned.
 
@@ -117,7 +119,9 @@ def wait_for_condition(predicate, message: str, timeout_s: float = 60.0, interva
 
 # Anvil default deployer key — has 10000 ETH on a fresh local chain.
 # Use to fund the test account with gas + stablecoin (USDCMock.mint is unrestricted).
-_ANVIL_DEPLOYER_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+_ANVIL_DEPLOYER_KEY = (
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+)
 
 
 def _fund_test_account_eth_and_stablecoin(test_address: str, provider_url: str) -> None:
@@ -152,7 +156,9 @@ def _fund_test_account_eth_and_stablecoin(test_address: str, provider_url: str) 
     stablecoin_balance = stablecoin.functions.balanceOf(test_address).call()
     if stablecoin_balance < 10 * 10**6:
         # USDCMock.mint(address,uint256) is public/unrestricted.
-        mint_tx = stablecoin.functions.mint(test_address, 1_000_000 * 10**6).build_transaction(
+        mint_tx = stablecoin.functions.mint(
+            test_address, 1_000_000 * 10**6
+        ).build_transaction(
             {
                 "from": deployer.address,
                 "nonce": w3.eth.get_transaction_count(deployer.address),

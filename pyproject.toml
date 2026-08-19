@@ -5,26 +5,68 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "primedelta"
 version = "0.1.0"
-description = "Prime Delta Python library"
+description = "Python SDK for the PrimeDelta tokenized-equity platform: backend REST + on-chain DEX, with pluggable signers (raw key / keystore / mnemonic / KMS / browser wallet)."
 readme = "README.md"
 requires-python = ">=3.10"
-license = {file = "LICENSE"}
+license = { file = "LICENSE" }
+keywords = ["primedelta", "web3", "ethereum", "defi", "uniswap-v3", "tokenized-equities", "sdk"]
+authors = [{ name = "PrimeDelta" }]
+maintainers = [{ name = "PrimeDelta" }]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
     "Intended Audience :: Financial and Insurance Industry",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 dependencies = ["web3==7.15.0", "siwe==4.4.0", "requests==2.33.0", "sseclient==0.0.27"]
 
 [project.optional-dependencies]
 kms = ["boto3>=1.26"]
 
+[project.urls]
+Repository = "https://github.com/PrimeDeltaCorp/primedelta-python"
+Issues = "https://github.com/PrimeDeltaCorp/primedelta-python/issues"
+
 [dependency-groups]
 dev = ["pytest>=8.0.0", "python-dotenv>=1.0.0"]
+lint = ["black==26.3.1", "isort==7.0.0"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+markers = [
+    "integration: live tests that require dev/testnet creds (self-skip otherwise)",
+    "dex: dex flow integration tests (swap, liquidity)",
+]
 
 [tool.setuptools.package-data]
-"primedelta" = ["networks/*.json", "networks/abis/*.json"]
+"primedelta" = ["py.typed", "networks/*.json", "networks/abis/*.json"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310", "py311", "py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+src_paths = ["src", "tests", "scripts"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+# Strict typing is a follow-up; start lenient so the config can land without a
+# large cleanup and be tightened incrementally.
+check_untyped_defs = true
+
+[tool.coverage.run]
+source = ["src/primedelta"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+show_missing = true

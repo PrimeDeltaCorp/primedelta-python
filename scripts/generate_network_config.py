@@ -55,9 +55,7 @@ def build_config(addresses: dict[str, Any]) -> dict[str, Any]:
         if value is None:
             if target in _REQUIRED:
                 locations = " / ".join(f"{s}.{k}" for s, k in candidates)
-                raise ValueError(
-                    f"missing required address for {target} ({locations})"
-                )
+                raise ValueError(f"missing required address for {target} ({locations})")
             continue
         core[target] = value
     chain_id = addresses.get("chainId", addresses.get("chain_id"))

@@ -4,8 +4,23 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Daily live-contract-drift check against dev (03:17 UTC).
+    - cron: "17 3 * * *"
+  workflow_dispatch:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install black==26.3.1
+      - run: black --check src tests scripts
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -20,3 +35,23 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -e . pytest
       - run: pytest tests --ignore=tests/integration -q
+
+  drift:
+    # Live-contract-drift guard. Runs on schedule / manual dispatch only, not on
+    # every PR. Self-skips (3 skipped) when the dev creds/secrets are absent, so
+    # it is safe even before the secrets are configured.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    env:
+      PRIMEDELTA_PROVIDER_URL: ${{ secrets.PRIMEDELTA_PROVIDER_URL }}
+      PRIMEDELTA_BASE_URL: ${{ secrets.PRIMEDELTA_BASE_URL }}
+      PRIMEDELTA_APP_URL: ${{ secrets.PRIMEDELTA_APP_URL }}
+      PRIMEDELTA_TEST_PRIVATE_KEY: ${{ secrets.PRIMEDELTA_TEST_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e . pytest python-dotenv
+      - run: pytest tests/integration/test_contract_drift.py -m integration -v

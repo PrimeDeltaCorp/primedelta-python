@@ -76,7 +76,9 @@ class TestLimitOrders:
             side_effect=APIError("INSUFFICIENT_FUNDS"),
         ):
             with pytest.raises(NotEnoughFunds):
-                primedelta.send_limit_order(OrderSide.BUY, "AAPL", 1000, Decimal("200.00"))
+                primedelta.send_limit_order(
+                    OrderSide.BUY, "AAPL", 1000, Decimal("200.00")
+                )
 
 
 class TestMarketOrders:
@@ -121,9 +123,7 @@ class TestCancelOrder:
                 web3_provider_url="http://localhost:8545",
             )
 
-        with patch.object(
-            primedelta._primedelta_client, "cancel_order"
-        ) as mock_cancel:
+        with patch.object(primedelta._primedelta_client, "cancel_order") as mock_cancel:
             primedelta.cancel_order(123)
 
         mock_cancel.assert_called_once_with(123)

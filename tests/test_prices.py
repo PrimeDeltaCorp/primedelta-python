@@ -6,7 +6,9 @@ from primedelta.primedelta_client import PrimeDeltaClient
 from primedelta.types import Price
 
 
-@patch("primedelta.primedelta_client.PYTH_HERMES_BASE_URL", "https://hermes.example.test")
+@patch(
+    "primedelta.primedelta_client.PYTH_HERMES_BASE_URL", "https://hermes.example.test"
+)
 class TestGetPythFeedIds:
     def test_returns_feed_ids_for_valid_symbols(self):
         # get_pyth_feed_ids issues one HTTP call per symbol — drive each call
@@ -98,7 +100,8 @@ class TestPythPricesStream:
             PrimeDeltaClient, "get_pyth_feed_ids", return_value=mock_feed_ids
         ):
             with patch(
-                "primedelta.primedelta_client.SSEClient", return_value=[mock_sse_message]
+                "primedelta.primedelta_client.SSEClient",
+                return_value=[mock_sse_message],
             ):
                 prices = list(client.pyth_prices_stream(["AAPL"]))
 
@@ -208,7 +211,9 @@ class TestPricesStreamAutoSwitch:
 
         with patch.object(primedelta, "logged_in", return_value=False):
             with patch.object(
-                primedelta._primedelta_client, "stocks", return_value={"AAPL": MagicMock()}
+                primedelta._primedelta_client,
+                "stocks",
+                return_value={"AAPL": MagicMock()},
             ):
                 with patch.object(
                     primedelta._primedelta_client,

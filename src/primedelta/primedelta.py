@@ -72,6 +72,7 @@ class WithdrawalNotFound(Exception):
 class WdelNotConfigured(Exception):
     """Raised when a DEL/WDEL helper is called on a network whose config has no
     `wdel` address. Add it to `networks/<name>.json` to enable."""
+
     pass
 
 
@@ -114,9 +115,7 @@ class TransactionFailed(Exception):
         if data is not None:
             # Show the 4-byte selector + a short prefix so the line stays readable;
             # the full calldata is on `.data` for programmatic access.
-            parts.append(
-                f"selector={data[:10]} calldata_len={(len(data) - 2) // 2}B"
-            )
+            parts.append(f"selector={data[:10]} calldata_len={(len(data) - 2) // 2}B")
         parts.append(f"reason={reason}")
         super().__init__("; ".join(parts))
 
@@ -197,6 +196,7 @@ class PrimeDelta:
         # Contracts come from the SDK's bundled `networks/<name>.json` — not
         # from the backend. Pin addresses by editing that file.
         from primedelta import networks
+
         self._contracts: Contracts = networks.load(network)
         # Some Besu/PoA RPC nodes lag in updating the nonce counter even after
         # the previous tx's receipt is back. Track locally to avoid collisions
@@ -623,7 +623,9 @@ class PrimeDelta:
                     "Account not verified. Use pyth_prices_stream() for public prices "
                     "or verify your account at https://app.primedelta.io"
                 )
-            prices_stream_access_token = self._primedelta_client.prices_stream_access_token()
+            prices_stream_access_token = (
+                self._primedelta_client.prices_stream_access_token()
+            )
             return self._primedelta_client.prices_stream(prices_stream_access_token)
         else:
             if symbols is None:
@@ -759,9 +761,7 @@ class PrimeDelta:
         npm = self._npm_contract()
         count = npm.functions.balanceOf(self._signer.address).call()
         return [
-            npm.functions.tokenOfOwnerByIndex(
-                self._signer.address, i
-            ).call()
+            npm.functions.tokenOfOwnerByIndex(self._signer.address, i).call()
             for i in range(count)
         ]
 
@@ -940,7 +940,9 @@ class PrimeDelta:
         tx_hash = self._signer.submit_transaction(self._web3, transaction)
         receipt = self._web3.eth.wait_for_transaction_receipt(tx_hash)
         if receipt["status"] == 0:
-            raise TransactionFailed("transfer", "reverted", tx_hash=tx_hash.hex(), to=to)
+            raise TransactionFailed(
+                "transfer", "reverted", tx_hash=tx_hash.hex(), to=to
+            )
         return tx_hash.hex()
 
     def _reserve_nonce(self) -> int:
@@ -1059,9 +1061,7 @@ class PrimeDelta:
         )
 
     def send_del(self, to: str, amount: Decimal) -> str:
-        return self._build_and_send_value_transaction(
-            to, int(amount * Decimal(10**18))
-        )
+        return self._build_and_send_value_transaction(to, int(amount * Decimal(10**18)))
 
     def _token_ref(self, token_symbol: str) -> tuple[str, int]:
         from primedelta.dex.handlers import _resolve_stock_token
