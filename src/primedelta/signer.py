@@ -1,4 +1,6 @@
-from typing import Any, Protocol, runtime_checkable
+import json
+from pathlib import Path
+from typing import Any, Protocol, Union, runtime_checkable
 
 from eth_account import Account
 from eth_account.messages import encode_defunct
@@ -37,6 +39,25 @@ class LocalAccountSigner:
     @classmethod
     def from_key(cls, private_key: str) -> "LocalAccountSigner":
         return cls(Account.from_key(private_key))
+
+    @classmethod
+    def from_keystore(
+        cls, path: Union[str, Path], password: str
+    ) -> "LocalAccountSigner":
+        keyfile = json.loads(Path(path).read_text())
+        return cls(Account.from_key(Account.decrypt(keyfile, password)))
+
+    @classmethod
+    def from_mnemonic(
+        cls, phrase: str, index: int = 0, passphrase: str = ""
+    ) -> "LocalAccountSigner":
+        Account.enable_unaudited_hdwallet_features()
+        account = Account.from_mnemonic(
+            phrase,
+            passphrase=passphrase,
+            account_path=f"m/44'/60'/0'/0/{index}",
+        )
+        return cls(account)
 
     @property
     def address(self) -> str:
