@@ -6,7 +6,7 @@ Thanks for helping improve the PrimeDelta Python SDK.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[kms]" pytest pytest-cov black
+pip install -e ".[kms]" pytest pytest-cov black==26.3.1
 ```
 
 The package layout:
