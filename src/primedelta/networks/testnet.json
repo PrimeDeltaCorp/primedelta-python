@@ -1,0 +1,14 @@
+{
+  "chain_id": 7357,
+  "core": {
+    "stablecoin": "0xAd781ad920b7db0727aC065d3f3B664fB3E6F94b",
+    "vault": "0x682e5f4c2d43aA90A0a0Fa2147BE080b2cB60a7B",
+    "factory": "0x0324347cCA3eDce49E0C8F9B171793257c5998bd",
+    "digital_identity": "0xFC117AA09afca302132A76078439fb0c490B6C91",
+    "dex_router": "0x684f0a336Ca016392484a99A93589C77cbc46E18",
+    "position_manager": "0xf8a85113c17Ed12b8aC08ddBd2A9529fD66adaAE",
+    "oracle": "0x020aE32498e31fA59D904B72ED6c18a77D36DDef",
+    "wdel": "0x232697482df948610b8981dC20b554A54Ef2459B",
+    "quoter": "0xAB6d15eE5617aa810e407a195EAdd8Ab911BEC2a"
+  }
+}

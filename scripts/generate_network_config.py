@@ -16,37 +16,54 @@ import json
 from pathlib import Path
 from typing import Any
 
+# Deployment `addresses.json` files come in two shapes:
+#   dev:            chainId, sections core / router / v3Main
+#   testnet+mainnet: chain_id, sections core / router_stack / v3
+#     (v3.DclexPositionManager there is the unused phase-3 one; the canonical
+#      PM lives in router_stack, so that candidate is listed first).
+# Each target lists candidate (section, key) locations tried in order.
 _CORE_MAPPING = {
-    "stablecoin": ("core", "dUSD"),
-    "vault": ("core", "Vault"),
-    "factory": ("core", "Factory"),
-    "digital_identity": ("core", "DigitalIdentity"),
-    "dex_router": ("router", "DclexRouter"),
-    "position_manager": ("v3Main", "DclexPositionManager"),
-    "oracle": ("router", "FIOracle"),
-    "wdel": ("v3Main", "WDEL"),
-    "quoter": ("v3Main", "Quoter"),
+    "stablecoin": [("core", "dUSD")],
+    "vault": [("core", "Vault")],
+    "factory": [("core", "Factory")],
+    "digital_identity": [("core", "DigitalIdentity")],
+    "dex_router": [("router", "DclexRouter"), ("router_stack", "DclexRouter")],
+    "position_manager": [
+        ("router_stack", "DclexPositionManager"),
+        ("v3Main", "DclexPositionManager"),
+    ],
+    "oracle": [("router", "FIOracle"), ("router_stack", "FIOracle")],
+    "wdel": [("v3Main", "WDEL"), ("v3", "WDEL")],
+    "quoter": [("v3Main", "Quoter"), ("v3", "Quoter")],
 }
 
 _REQUIRED = ("stablecoin", "vault", "factory", "digital_identity")
 
 
-def _pick(addresses: dict[str, Any], section: str, key: str) -> str | None:
-    return (addresses.get(section) or {}).get(key)
+def _pick(addresses: dict[str, Any], candidates: list[tuple[str, str]]) -> str | None:
+    for section, key in candidates:
+        value = (addresses.get(section) or {}).get(key)
+        if value:
+            return value
+    return None
 
 
 def build_config(addresses: dict[str, Any]) -> dict[str, Any]:
     core: dict[str, str] = {}
-    for target, (section, key) in _CORE_MAPPING.items():
-        value = _pick(addresses, section, key)
+    for target, candidates in _CORE_MAPPING.items():
+        value = _pick(addresses, candidates)
         if value is None:
             if target in _REQUIRED:
+                locations = " / ".join(f"{s}.{k}" for s, k in candidates)
                 raise ValueError(
-                    f"missing required address for {target} ({section}.{key})"
+                    f"missing required address for {target} ({locations})"
                 )
             continue
         core[target] = value
-    return {"chain_id": addresses["chainId"], "core": core}
+    chain_id = addresses.get("chainId", addresses.get("chain_id"))
+    if chain_id is None:
+        raise ValueError("addresses file has neither chainId nor chain_id")
+    return {"chain_id": chain_id, "core": core}
 
 
 def main() -> None:
