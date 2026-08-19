@@ -15,7 +15,12 @@ _spec.loader.exec_module(gen)
 
 _DEV_SHAPE = {
     "chainId": 2028,
-    "core": {"dUSD": "0xdUSD", "Vault": "0xVault", "Factory": "0xFac", "DigitalIdentity": "0xDID"},
+    "core": {
+        "dUSD": "0xdUSD",
+        "Vault": "0xVault",
+        "Factory": "0xFac",
+        "DigitalIdentity": "0xDID",
+    },
     "router": {"DclexRouter": "0xRouter", "FIOracle": "0xOracle"},
     "v3Main": {"WDEL": "0xWDEL", "Quoter": "0xQuoter", "DclexPositionManager": "0xPM"},
 }
@@ -23,7 +28,12 @@ _DEV_SHAPE = {
 # testnet/mainnet: chain_id, router_stack + v3; v3 also carries an UNUSED phase-3 PM.
 _TESTNET_SHAPE = {
     "chain_id": 7357,
-    "core": {"dUSD": "0xdUSD", "Vault": "0xVault", "Factory": "0xFac", "DigitalIdentity": "0xDID"},
+    "core": {
+        "dUSD": "0xdUSD",
+        "Vault": "0xVault",
+        "Factory": "0xFac",
+        "DigitalIdentity": "0xDID",
+    },
     "router_stack": {
         "DclexRouter": "0xRouter",
         "FIOracle": "0xOracle",

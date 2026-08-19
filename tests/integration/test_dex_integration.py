@@ -8,6 +8,7 @@ Requires:
 
 Run: uv run pytest tests/integration/test_dex_integration.py -v -m integration
 """
+
 from decimal import Decimal
 
 import pytest
@@ -76,7 +77,9 @@ class TestVerificationFlow:
 class TestDIDRequiredErrors:
     """Verify DID-gated actions raise AccountNotVerified for non-verified accounts."""
 
-    def test_swap_raises_without_did(self, unverified_primedelta_logged_in, test_symbol):
+    def test_swap_raises_without_did(
+        self, unverified_primedelta_logged_in, test_symbol
+    ):
         with pytest.raises(AccountNotVerified):
             unverified_primedelta_logged_in.swap_exact_input(
                 test_symbol,

@@ -9,12 +9,12 @@ on backend ops cycles.
 
 Edit `<network>.json` to change addresses for that network.
 """
+
 import json
 from pathlib import Path
 from typing import Any
 
 from primedelta.contracts import ContractRef, Contracts, CoreContracts
-
 
 _NETWORKS_DIR = Path(__file__).parent
 _ABIS_DIR = _NETWORKS_DIR / "abis"
@@ -56,9 +56,7 @@ def load(network: str) -> Contracts:
     config_path = _NETWORKS_DIR / f"{network}.json"
     if not config_path.exists():
         available = sorted(p.stem for p in _NETWORKS_DIR.glob("*.json"))
-        raise ValueError(
-            f"Unknown network {network!r}; available: {available}"
-        )
+        raise ValueError(f"Unknown network {network!r}; available: {available}")
     config = json.loads(config_path.read_text())
     core_cfg = config["core"]
 

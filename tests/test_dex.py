@@ -33,7 +33,6 @@ from primedelta.dex.handlers import (
 )
 from primedelta.types import AccountStatus
 
-
 _USER_ADDRESS = "0x" + "B" * 40
 _STABLECOIN_ADDRESS = "0x" + "1" * 40
 _VAULT_ADDRESS = "0x" + "2" * 40
@@ -104,7 +103,9 @@ def _make_account() -> MagicMock:
 
 
 class TestRouterSwapHandler:
-    def test_swap_exact_input_stablecoin_to_stock_approves_and_calls_buy_exact_input(self):
+    def test_swap_exact_input_stablecoin_to_stock_approves_and_calls_buy_exact_input(
+        self,
+    ):
         web3 = _make_web3_mock()
         send_tx = MagicMock(return_value="0xTX")
         pyth_data = [b"\xde\xad"]
@@ -158,9 +159,7 @@ class TestRouterSwapHandler:
 
         assert tx == "0xTX"
         contract = web3.eth.contract.return_value
-        contract.functions.approve.assert_called_once_with(
-            _ROUTER_ADDRESS, 2 * 10**18
-        )
+        contract.functions.approve.assert_called_once_with(_ROUTER_ADDRESS, 2 * 10**18)
         contract.functions.sellExactInput.assert_called_once_with(
             _AAPL_TOKEN,
             2 * 10**18,
@@ -188,9 +187,7 @@ class TestRouterSwapHandler:
         )
 
         contract = web3.eth.contract.return_value
-        contract.functions.approve.assert_called_once_with(
-            _ROUTER_ADDRESS, 250 * 10**6
-        )
+        contract.functions.approve.assert_called_once_with(_ROUTER_ADDRESS, 250 * 10**6)
         contract.functions.buyExactOutput.assert_called_once_with(
             _AAPL_TOKEN, 1 * 10**18, 250 * 10**6, 1_700_000_000 + 600, [b""]
         )
@@ -278,9 +275,7 @@ class TestRouterSwapHandler:
         fetcher.assert_called_once_with(["AMMT1", "AAPL"])
 
         contract = web3.eth.contract.return_value
-        contract.functions.approve.assert_called_once_with(
-            _ROUTER_ADDRESS, 3 * 10**18
-        )
+        contract.functions.approve.assert_called_once_with(_ROUTER_ADDRESS, 3 * 10**18)
         contract.functions.swapExactInput.assert_called_once_with(
             _AMMT1_TOKEN,
             _AAPL_TOKEN,
@@ -309,9 +304,7 @@ class TestRouterSwapHandler:
         )
 
         contract = web3.eth.contract.return_value
-        contract.functions.approve.assert_called_once_with(
-            _ROUTER_ADDRESS, 5 * 10**18
-        )
+        contract.functions.approve.assert_called_once_with(_ROUTER_ADDRESS, 5 * 10**18)
         contract.functions.swapExactOutput.assert_called_once_with(
             _AMMT1_TOKEN,
             _AMMT2_TOKEN,
@@ -709,7 +702,9 @@ class TestQuoteHandler:
 
     def test_quote_exact_output_scales(self):
         handler, contract = self._handler(token0=_AMMT1_TOKEN)
-        contract.functions.quoteExactOutputSingle.return_value.call.return_value = 1042327
+        contract.functions.quoteExactOutputSingle.return_value.call.return_value = (
+            1042327
+        )
         result = handler.quote_swap(
             "AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("0.1"), exact="output"
         )
@@ -719,7 +714,9 @@ class TestQuoteHandler:
 
     def test_quote_stock_to_stablecoin_flips_tokens(self):
         handler, contract = self._handler(token0=_AMMT1_TOKEN)
-        contract.functions.quoteExactInputSingle.return_value.call.return_value = 1014060
+        contract.functions.quoteExactInputSingle.return_value.call.return_value = (
+            1014060
+        )
         handler.quote_swap("AMMT1", SwapSide.STOCK_TO_STABLECOIN, Decimal("0.1"))
         args = contract.functions.quoteExactInputSingle.call_args.args
         assert args[0] == _AMMT1_TOKEN
@@ -730,11 +727,15 @@ class TestQuoteHandler:
         scale = Decimal(10) ** 12
         sqrt = 2 * (2**96)
         handler_stock, contract_stock = self._handler(token0=_AMMT1_TOKEN)
-        contract_stock.functions.slot0.return_value.call.return_value = (sqrt,) + (0,) * 6
+        contract_stock.functions.slot0.return_value.call.return_value = (sqrt,) + (
+            0,
+        ) * 6
         assert handler_stock.spot_price("AMMT1") == Decimal(4) * scale
 
         handler_dusd, contract_dusd = self._handler(token0=_STABLECOIN_ADDRESS)
-        contract_dusd.functions.slot0.return_value.call.return_value = (sqrt,) + (0,) * 6
+        contract_dusd.functions.slot0.return_value.call.return_value = (sqrt,) + (
+            0,
+        ) * 6
         assert handler_dusd.spot_price("AMMT1") == (Decimal(1) / Decimal(4)) * scale
 
     def test_spot_price_real_value_is_sane(self):
@@ -752,7 +753,9 @@ class TestQuoteHandler:
     def test_quote_invalid_exact_raises(self):
         handler, _ = self._handler(token0=_AMMT1_TOKEN)
         with pytest.raises(ValueError):
-            handler.quote_swap("AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("1"), exact="bad")
+            handler.quote_swap(
+                "AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("1"), exact="bad"
+            )
 
 
 def _make_primedelta() -> PrimeDelta:
@@ -766,13 +769,16 @@ def _make_primedelta() -> PrimeDelta:
 class TestDispatcher:
     def test_swap_exact_input_routes_to_router_swapper(self):
         primedelta = _make_primedelta()
-        with patch.object(
-            primedelta._primedelta_client,
-            "get_account_status",
-            return_value=AccountStatus.DID_MINTED,
-        ), patch.object(
-            primedelta._router_swapper, "swap_exact_input", return_value="0xTX"
-        ) as mock_swap:
+        with (
+            patch.object(
+                primedelta._primedelta_client,
+                "get_account_status",
+                return_value=AccountStatus.DID_MINTED,
+            ),
+            patch.object(
+                primedelta._router_swapper, "swap_exact_input", return_value="0xTX"
+            ) as mock_swap,
+        ):
             tx = primedelta.swap_exact_input(
                 "AAPL", SwapSide.STABLECOIN_TO_STOCK, Decimal("100"), Decimal("0.5")
             )
@@ -783,13 +789,16 @@ class TestDispatcher:
 
     def test_swap_exact_output_routes_to_router_swapper(self):
         primedelta = _make_primedelta()
-        with patch.object(
-            primedelta._primedelta_client,
-            "get_account_status",
-            return_value=AccountStatus.DID_MINTED,
-        ), patch.object(
-            primedelta._router_swapper, "swap_exact_output", return_value="0xTX"
-        ) as mock_swap:
+        with (
+            patch.object(
+                primedelta._primedelta_client,
+                "get_account_status",
+                return_value=AccountStatus.DID_MINTED,
+            ),
+            patch.object(
+                primedelta._router_swapper, "swap_exact_output", return_value="0xTX"
+            ) as mock_swap,
+        ):
             tx = primedelta.swap_exact_output(
                 "AAPL", SwapSide.STOCK_TO_STABLECOIN, Decimal("100"), Decimal("3")
             )
@@ -798,15 +807,19 @@ class TestDispatcher:
 
     def test_add_liquidity_dispatches_by_params_pool_type(self):
         primedelta = _make_primedelta()
-        with patch.object(
-            primedelta._primedelta_client,
-            "get_account_status",
-            return_value=AccountStatus.DID_MINTED,
-        ), patch.object(
-            primedelta._dclex_handler, "add_liquidity", return_value="0xPF"
-        ) as mock_pf, patch.object(
-            primedelta._amm_handler, "add_liquidity", return_value="0xAMM"
-        ) as mock_amm:
+        with (
+            patch.object(
+                primedelta._primedelta_client,
+                "get_account_status",
+                return_value=AccountStatus.DID_MINTED,
+            ),
+            patch.object(
+                primedelta._dclex_handler, "add_liquidity", return_value="0xPF"
+            ) as mock_pf,
+            patch.object(
+                primedelta._amm_handler, "add_liquidity", return_value="0xAMM"
+            ) as mock_amm,
+        ):
             pf_params = PriceFeedAddLiquidity(
                 symbol="AAPL",
                 liquidity_amount=Decimal("1"),
@@ -857,11 +870,14 @@ class TestNativeDel:
     def test_wrap_del_sends_value_to_wdel_deposit(self):
         primedelta = _make_primedelta()
         primedelta._web3 = _make_web3_mock()
-        with patch.object(
-            primedelta, "_get_contracts", return_value=_contracts_with_wdel()
-        ), patch.object(
-            primedelta, "_build_and_send_transaction", return_value="0xWRAP"
-        ) as mock_send:
+        with (
+            patch.object(
+                primedelta, "_get_contracts", return_value=_contracts_with_wdel()
+            ),
+            patch.object(
+                primedelta, "_build_and_send_transaction", return_value="0xWRAP"
+            ) as mock_send,
+        ):
             tx = primedelta.wrap_del(Decimal("3.5"))
 
         assert tx == "0xWRAP"
@@ -874,11 +890,14 @@ class TestNativeDel:
     def test_unwrap_del_calls_wdel_withdraw_with_amount(self):
         primedelta = _make_primedelta()
         primedelta._web3 = _make_web3_mock()
-        with patch.object(
-            primedelta, "_get_contracts", return_value=_contracts_with_wdel()
-        ), patch.object(
-            primedelta, "_build_and_send_transaction", return_value="0xUNWRAP"
-        ) as mock_send:
+        with (
+            patch.object(
+                primedelta, "_get_contracts", return_value=_contracts_with_wdel()
+            ),
+            patch.object(
+                primedelta, "_build_and_send_transaction", return_value="0xUNWRAP"
+            ) as mock_send,
+        ):
             tx = primedelta.unwrap_del(Decimal("2"))
 
         assert tx == "0xUNWRAP"
@@ -940,10 +959,13 @@ class TestAuthGates:
 
     def test_remove_liquidity_skips_auth_gate(self):
         primedelta = _make_primedelta()
-        with patch.object(
-            primedelta._primedelta_client, "get_account_status"
-        ) as mock_status, patch.object(
-            primedelta._dclex_handler, "remove_liquidity", return_value="0xTX"
+        with (
+            patch.object(
+                primedelta._primedelta_client, "get_account_status"
+            ) as mock_status,
+            patch.object(
+                primedelta._dclex_handler, "remove_liquidity", return_value="0xTX"
+            ),
         ):
             tx = primedelta.remove_liquidity(
                 PriceFeedRemoveLiquidity(symbol="AAPL", liquidity_amount=Decimal("1"))
@@ -1246,9 +1268,7 @@ class TestClaimWithdrawals:
         pd, factory = self._pd()
         pd._primedelta_client.get_account_status.return_value = AccountStatus.DID_MINTED
         pd._primedelta_client.get_deposit_stablecoin_signature.return_value = (
-            DepositStocksSignature(
-                signature="ab" * 65, nonce="0xcd", amount="1000000"
-            )
+            DepositStocksSignature(signature="ab" * 65, nonce="0xcd", amount="1000000")
         )
 
         assert pd.deposit_stablecoin(1) == "0xTX"

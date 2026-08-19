@@ -5,7 +5,6 @@ import pytest
 from primedelta import PrimeDelta
 from primedelta.contracts import Contracts, ContractRef
 
-
 _DCLEX_POOL_ABI = [{"type": "function", "name": "swapExactInput"}]
 _UNIV3_POOL_ABI = [{"type": "function", "name": "swap"}]
 
@@ -16,9 +15,18 @@ def _core_payload() -> dict:
             "address": "0xSTABLECOIN",
             "abi": [{"type": "function", "name": "transfer"}],
         },
-        "vault": {"address": "0xVAULT", "abi": [{"type": "function", "name": "withdraw"}]},
-        "factory": {"address": "0xFACTORY", "abi": [{"type": "function", "name": "burnStocks"}]},
-        "digitalIdentity": {"address": "0xDID", "abi": [{"type": "function", "name": "mint"}]},
+        "vault": {
+            "address": "0xVAULT",
+            "abi": [{"type": "function", "name": "withdraw"}],
+        },
+        "factory": {
+            "address": "0xFACTORY",
+            "abi": [{"type": "function", "name": "burnStocks"}],
+        },
+        "digitalIdentity": {
+            "address": "0xDID",
+            "abi": [{"type": "function", "name": "mint"}],
+        },
         "dexRouter": {"address": "", "abi": []},
         "positionManager": {"address": "", "abi": []},
     }

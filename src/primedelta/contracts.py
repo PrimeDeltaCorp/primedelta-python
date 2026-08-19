@@ -38,7 +38,8 @@ class CoreContracts:
             ),
             position_manager=(
                 ContractRef.from_dict(data["positionManager"])
-                if data.get("positionManager") and data["positionManager"].get("address")
+                if data.get("positionManager")
+                and data["positionManager"].get("address")
                 else None
             ),
             oracle=(

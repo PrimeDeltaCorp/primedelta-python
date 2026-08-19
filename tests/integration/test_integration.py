@@ -8,6 +8,7 @@ These tests require a real environment setup:
 
 Run with: uv run pytest tests/integration/ -v
 """
+
 import os
 from decimal import Decimal
 
@@ -111,9 +112,9 @@ class TestOrderPlacementIntegration:
             if status == OrderStatus.CANCELED:
                 break
 
-        assert status == OrderStatus.CANCELED, (
-            f"order {order_id} did not reach CANCELED within 30s, last status={status}"
-        )
+        assert (
+            status == OrderStatus.CANCELED
+        ), f"order {order_id} did not reach CANCELED within 30s, last status={status}"
 
 
 @pytest.mark.integration
@@ -159,9 +160,8 @@ class TestStablecoinLifecycle:
 
         # Backend: indexer eventually credits the deposit.
         wait_for_condition(
-            lambda: primedelta_logged_in.get_stablecoin_total_balance() >= backend_before
-            + amount
-            - Decimal("0.01"),
+            lambda: primedelta_logged_in.get_stablecoin_total_balance()
+            >= backend_before + amount - Decimal("0.01"),
             f"backend stablecoin balance to reflect +{amount} deposit",
             timeout_s=60,
         )
@@ -227,10 +227,12 @@ class TestStockLifecycle:
         wait_for_transaction(deposit_tx, provider_url)
 
         # On-chain: stock balance dropped by the deposited unit count.
-        wallet_after_deposit = primedelta_logged_in.get_onchain_stock_balance(self.SYMBOL)
-        assert wallet_before - wallet_after_deposit >= Decimal(self.DEPOSIT_AMOUNT) - Decimal(
-            "0.000001"
-        ), (
+        wallet_after_deposit = primedelta_logged_in.get_onchain_stock_balance(
+            self.SYMBOL
+        )
+        assert wallet_before - wallet_after_deposit >= Decimal(
+            self.DEPOSIT_AMOUNT
+        ) - Decimal("0.000001"), (
             f"{self.SYMBOL} wallet balance didn't drop by {self.DEPOSIT_AMOUNT}: "
             f"before={wallet_before}, after={wallet_after_deposit}"
         )
