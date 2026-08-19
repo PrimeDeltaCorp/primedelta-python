@@ -84,6 +84,13 @@ class DepositStocksSignature:
 
 
 @dataclass(frozen=True)
+class WithdrawalSignature:
+    signature: str
+    nonce: str
+    amount: str
+
+
+@dataclass(frozen=True)
 class Order:
     id: int
     order_side: OrderSide
