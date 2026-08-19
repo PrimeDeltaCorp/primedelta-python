@@ -11,7 +11,7 @@ PRIMEDELTA_BASE_URL: str = os.getenv(
     "PRIMEDELTA_BASE_URL", "https://api-dev.primedelta.io"
 )
 PRIMEDELTA_APP_URL: str = os.getenv(
-    "PRIMEDELTA_APP_URL", "https://app-dev.primedelta.io"
+    "PRIMEDELTA_APP_URL", "https://mint-dev.primedelta.io"
 )
 SIWE_URI: str = PRIMEDELTA_APP_URL
 # Backend may strip the port (e.g. accepts "localhost" not "localhost:5173").

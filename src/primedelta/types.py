@@ -7,10 +7,14 @@ from typing import Optional
 
 class AccountStatus(Enum):
     NOT_VERIFIED = "NOT_VERIFIED"
-    REJECTED = "REJECTED"
     PENDING = "PENDING"
+    ON_HOLD = "ON_HOLD"
+    RESUBMISSION_REQUESTED = "RESUBMISSION_REQUESTED"
     VERIFIED = "VERIFIED"
     DID_MINTED = "VERIFIED_MINTED"
+    REJECTED = "REJECTED"
+    REJECTED_FINAL = "REJECTED_FINAL"
+    INVALID = "INVALID"
 
 
 class OrderType(Enum):
@@ -27,6 +31,7 @@ class DistributionType(Enum):
     REVERSE_SPLIT = "REVERSE_SPLIT"
     DELISTING = "DELISTING"
     DIVIDEND = "DIVIDEND"
+    OTHER = "OTHER"
 
 
 class TransferHistoryStatus(Enum):
@@ -97,9 +102,9 @@ class Position:
     total_owned: Decimal
     available_to_sell: Decimal
     average_purchase_price: Decimal
-    last_market_price: Decimal
+    last_market_price: Optional[Decimal]
     profit_loss: Decimal
-    profit_loss_percentage: Decimal
+    profit_loss_percentage: Optional[Decimal]
     is_offboarded: bool
     multiplier_numerator: int
     multiplier_denominator: int
