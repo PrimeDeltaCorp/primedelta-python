@@ -102,9 +102,15 @@ class PrimeDeltaClient:
             return body.get("errorCode") or body.get("code")
         return None
 
+    @staticmethod
+    def _decimal_or_none(value: Optional[str]) -> Optional[Decimal]:
+        return Decimal(value) if value is not None else None
+
     def _handle(self, response: requests.Response) -> dict:
-        if response.status_code == 400:
-            raise APIError(self._error_code(response) or "BAD_REQUEST")
+        if response.status_code in (400, 404):
+            code = self._error_code(response)
+            if code or response.status_code == 400:
+                raise APIError(code or "BAD_REQUEST")
         if response.status_code == 401:
             raise NotLoggedIn()
         if response.status_code == 403:
@@ -117,11 +123,18 @@ class PrimeDeltaClient:
     def _get(self, endpoint: str, params: Optional[dict[str, Any]] = None) -> dict:
         return self._handle(self._request("GET", endpoint, params=params))
 
+    def _unsafe(self, method: str, endpoint: str, **kwargs: Any) -> dict:
+        response = self._request(method, endpoint, **kwargs)
+        if response.status_code == 403 and self._csrf_token is not None:
+            self._csrf_token = None
+            response = self._request(method, endpoint, **kwargs)
+        return self._handle(response)
+
     def _post(self, endpoint: str, json_body: dict) -> dict:
-        return self._handle(self._request("POST", endpoint, json_body=json_body))
+        return self._unsafe("POST", endpoint, json_body=json_body)
 
     def _delete(self, endpoint: str) -> dict:
-        return self._handle(self._request("DELETE", endpoint))
+        return self._unsafe("DELETE", endpoint)
 
     def get_nonce(self) -> str:
         response = self._session.get(self._url("/users/nonce/"))
@@ -140,9 +153,11 @@ class PrimeDeltaClient:
         self._csrf_token = None
 
     def logout(self) -> None:
-        self._post("/logout/", {})
-        self._csrf_token = None
-        self._session.cookies.clear()
+        try:
+            self._post("/logout/", {})
+        finally:
+            self._csrf_token = None
+            self._session.cookies.clear()
 
     def me(self) -> str:
         return self._get("/me/")["address"]
@@ -283,12 +298,10 @@ class PrimeDeltaClient:
                     total_owned=Decimal(stock["totalOwned"]),
                     available_to_sell=Decimal(stock["availableToSell"]),
                     average_purchase_price=Decimal(stock["averagePurchasePrice"]),
-                    last_market_price=Decimal(stock["lastMarketPrice"]),
+                    last_market_price=self._decimal_or_none(stock["lastMarketPrice"]),
                     profit_loss=Decimal(stock["profitLoss"]),
-                    profit_loss_percentage=(
-                        Decimal(stock["profitLossPercentage"])
-                        if stock["profitLossPercentage"] is not None
-                        else None
+                    profit_loss_percentage=self._decimal_or_none(
+                        stock["profitLossPercentage"]
                     ),
                     is_offboarded=stock["isOffboarded"],
                     multiplier_numerator=stock["multiplierNumerator"],

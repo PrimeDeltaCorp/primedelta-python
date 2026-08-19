@@ -198,3 +198,121 @@ class TestReads:
         client, session = _client_with_session()
         session.request.return_value = _Resp(200, {"token": "abc"})
         assert client.prices_stream_access_token() == "abc"
+
+
+class TestAuditFixes:
+    def test_account_status_accepts_new_kyc_states(self):
+        from primedelta.types import AccountStatus
+
+        client, session = _client_with_session()
+        for value, expected in [
+            ("ON_HOLD", AccountStatus.ON_HOLD),
+            ("RESUBMISSION_REQUESTED", AccountStatus.RESUBMISSION_REQUESTED),
+            ("REJECTED_FINAL", AccountStatus.REJECTED_FINAL),
+            ("INVALID", AccountStatus.INVALID),
+        ]:
+            session.request.return_value = _Resp(200, {"status": value})
+            assert client.get_account_status() == expected
+
+    def test_distributions_accepts_other_type(self):
+        from primedelta.types import DistributionType
+
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(
+            200,
+            {
+                "items": [
+                    {
+                        "amount": "1",
+                        "type": "OTHER",
+                        "stockSymbol": "X",
+                        "quantity": "1",
+                    }
+                ]
+            },
+        )
+        assert client.get_distributions(1, 10)[0].type == DistributionType.OTHER
+
+    def test_portfolio_handles_null_last_market_price(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(
+            200,
+            {
+                "balance": {
+                    "available": "0",
+                    "equity": "0",
+                    "funds": "0",
+                    "profitLoss": "0",
+                    "totalValue": "0",
+                },
+                "stocks": [
+                    {
+                        "symbol": "X",
+                        "name": "X",
+                        "totalOwned": "1",
+                        "availableToSell": "1",
+                        "averagePurchasePrice": "0",
+                        "lastMarketPrice": None,
+                        "profitLoss": "0",
+                        "profitLossPercentage": None,
+                        "isOffboarded": False,
+                        "multiplierNumerator": 1,
+                        "multiplierDenominator": 1,
+                    }
+                ],
+            },
+        )
+        position = client.portfolio().positions[0]
+        assert position.last_market_price is None
+        assert position.profit_loss_percentage is None
+
+    def test_404_with_error_code_maps_to_api_error(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(404, {"errorCode": "ORDER_NOT_FOUND"})
+        with pytest.raises(APIError) as info:
+            client.cancel_order(5)
+        assert info.value.error_code == "ORDER_NOT_FOUND"
+
+    def test_404_without_error_code_raises_http_error(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(404)
+        with pytest.raises(requests.HTTPError):
+            client.cancel_order(5)
+
+    def test_stale_csrf_403_refetches_and_retries_once(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.side_effect = [
+            _Resp(403, {"detail": ["csrf"], "code": "PERMISSION_DENIED"}),
+            _Resp(200, {"withdrawalId": 9}),
+        ]
+        assert client.request_stablecoin_withdrawal(Decimal("1")) == 9
+        assert session.request.call_count == 2
+        csrf_gets = [
+            c
+            for c in session.get.call_args_list
+            if c.args and c.args[0].endswith("/csrf-token/")
+        ]
+        assert len(csrf_gets) == 2
+
+    def test_persistent_403_raises_after_one_retry(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.side_effect = [
+            _Resp(403, {"code": "PERMISSION_DENIED"}),
+            _Resp(403, {"code": "PERMISSION_DENIED"}),
+        ]
+        with pytest.raises(AuthorizationError):
+            client.request_stablecoin_withdrawal(Decimal("1"))
+        assert session.request.call_count == 2
+
+    def test_logout_clears_session_even_when_post_fails(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(403, {"code": "PERMISSION_DENIED"})
+        with pytest.raises(AuthorizationError):
+            client.logout()
+        assert client._csrf_token is None
+        session.cookies.clear.assert_called_once()

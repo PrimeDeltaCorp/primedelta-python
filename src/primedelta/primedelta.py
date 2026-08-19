@@ -319,6 +319,7 @@ class PrimeDelta:
         except APIError as exc:
             if exc.error_code == "INSUFFICIENT_FUNDS":
                 raise NotEnoughFunds()
+            raise
 
     def claim_stablecoin_withdrawal(self, withdrawal_id: int) -> str:
         withdrawal = self._get_claimable_withdrawal(withdrawal_id)
@@ -384,6 +385,7 @@ class PrimeDelta:
         except APIError as exc:
             if exc.error_code == "INSUFFICIENT_FUNDS":
                 raise NotEnoughFunds()
+            raise
 
     def claim_stock_withdrawal(self, withdrawal_id: int) -> str:
         withdrawal = self._get_claimable_withdrawal(withdrawal_id)
