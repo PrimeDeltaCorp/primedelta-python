@@ -1,3 +1,4 @@
+import contextlib
 import json
 import re
 import threading
@@ -9,7 +10,6 @@ from hexbytes import HexBytes
 
 from primedelta import BrowserSigner
 from primedelta.browser import BrowserSignerError, _render_page
-from primedelta.signer import Signer
 
 ADDR = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
 
@@ -38,10 +38,8 @@ def _opener(responder, wrong_state=False):
                 data=body,
                 method="POST",
             )
-            try:
+            with contextlib.suppress(Exception):
                 urllib.request.urlopen(request, timeout=5)
-            except Exception:
-                pass
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -54,10 +52,10 @@ class TestBrowserSigner:
         signer._open = _opener(responder)
         return signer
 
-    def test_is_wallet_signer(self):
-        signer = BrowserSigner()
-        assert signer.fills_gas_and_nonce is True
-        assert isinstance(signer, Signer)
+    def test_conforms_to_wallet_signer_shape(self):
+        assert BrowserSigner.fills_gas_and_nonce is True
+        for member in ("address", "sign_message", "submit_transaction"):
+            assert hasattr(BrowserSigner, member)
 
     def test_address_connects_and_caches(self):
         ops = []
