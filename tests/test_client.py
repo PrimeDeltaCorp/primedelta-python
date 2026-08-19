@@ -11,6 +11,7 @@ from primedelta.primedelta_client import (
     PrimeDeltaClient,
     UserSignedMessageVerificationError,
 )
+from primedelta.types import OrderSide
 
 _UNSET = object()
 
@@ -316,3 +317,115 @@ class TestAuditFixes:
             client.logout()
         assert client._csrf_token is None
         session.cookies.clear.assert_called_once()
+
+
+class TestAccountFeatures:
+    def test_messages_parses_items(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(200, [{"id": 3, "content": "hi"}])
+        messages = client.messages()
+        assert messages[0].id == 3 and messages[0].content == "hi"
+
+    def test_mark_message_read_posts_to_message(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(200)
+        client.mark_message_read(7)
+        method, url = session.request.call_args.args
+        assert method == "POST" and url.endswith("/messages/7/")
+
+    def test_bank_details_parses_nullable_fields(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(
+            200,
+            {
+                "beneficiaryName": "X Ltd",
+                "beneficiaryAddress": "somewhere",
+                "referenceCode": "REF-1",
+                "bankName": "A Bank",
+                "bic": "AAAABBCC",
+                "accountNumber": None,
+                "transitNumber": None,
+                "institutionNumber": None,
+                "bankAddress": None,
+            },
+        )
+        details = client.bank_details()
+        assert details.reference_code == "REF-1"
+        assert details.account_number is None
+
+    def test_request_fiat_withdrawal_returns_id(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(200, {"withdrawalId": 12})
+        assert client.request_fiat_withdrawal(Decimal("50")) == 12
+        assert session.request.call_args.kwargs["json"] == {"amount": "50"}
+
+    def test_limit_order_cost_parses(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(
+            200,
+            {
+                "total": "101.00",
+                "serviceFee": "1.00",
+                "serviceFeeRatePercentage": "1.00",
+            },
+        )
+        cost = client.limit_order_cost(OrderSide.BUY, "AAPL", 1, Decimal("100"))
+        assert cost.total == Decimal("101.00")
+        assert cost.last_price is None
+        _, url = session.request.call_args.args
+        assert url.endswith("/orders/limit/buy/cost/")
+
+    def test_market_sell_cost_parses_last_price(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(
+            200,
+            {
+                "total": "9.90",
+                "serviceFee": "0.10",
+                "serviceFeeRatePercentage": "1.00",
+                "lastPrice": "10.00",
+            },
+        )
+        cost = client.market_sell_cost("AAPL", 1)
+        assert cost.last_price == Decimal("10.00")
+
+    def test_swappable_symbols_returns_list(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(200, ["AAPL", "TSLA"])
+        assert client.swappable_symbols() == ["AAPL", "TSLA"]
+
+    def test_application_settings_parses(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(
+            200, {"portfolioRefreshRate": 3000, "buyingDigitalIdentityFee": "0.00"}
+        )
+        settings = client.application_settings()
+        assert settings.portfolio_refresh_rate == 3000
+        assert settings.buying_digital_identity_fee == Decimal("0.00")
+
+    def test_portfolio_history_parses(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(
+            200,
+            {
+                "range": "7d",
+                "startValue": "100",
+                "endValue": "110",
+                "change": "10",
+                "changePercentage": "10.00",
+            },
+        )
+        history = client.portfolio_history("7d")
+        assert history.range == "7d" and history.change == Decimal("10")
+
+    def test_digital_identity_id_returns_token(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(200, {"tokenId": 47})
+        assert client.digital_identity_id() == 47
+
+    def test_digital_identity_id_none_when_absent(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(404, {"detail": ["no did"]})
+        assert client.digital_identity_id() is None

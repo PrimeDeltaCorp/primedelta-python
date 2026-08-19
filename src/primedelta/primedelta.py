@@ -35,13 +35,18 @@ from primedelta.settings import (
 )
 from primedelta.types import (
     AccountStatus,
+    ApplicationSettings,
+    BankDetails,
     ClaimableWithdrawal,
     Distribution,
     LPPosition,
+    Message,
     Order,
+    OrderCost,
     OrderSide,
     OrderStatus,
     Portfolio,
+    PortfolioHistory,
     Stock,
     Transfer,
 )
@@ -902,3 +907,49 @@ class PrimeDelta:
 
     def is_market_open(self) -> bool:
         return self._primedelta_client.is_market_open()
+
+    def messages(self) -> list[Message]:
+        return self._primedelta_client.messages()
+
+    def mark_message_read(self, message_id: int) -> None:
+        self._primedelta_client.mark_message_read(message_id)
+
+    def bank_details(self) -> BankDetails:
+        return self._primedelta_client.bank_details()
+
+    def request_fiat_withdrawal(self, amount: Decimal) -> int:
+        try:
+            return self._primedelta_client.request_fiat_withdrawal(amount)
+        except APIError as exc:
+            if exc.error_code == "INSUFFICIENT_FUNDS":
+                raise NotEnoughFunds()
+            raise
+
+    def limit_buy_cost(
+        self, stock_symbol: str, amount: int, price_limit: Decimal
+    ) -> OrderCost:
+        return self._primedelta_client.limit_order_cost(
+            OrderSide.BUY, stock_symbol, amount, price_limit
+        )
+
+    def limit_sell_cost(
+        self, stock_symbol: str, amount: int, price_limit: Decimal
+    ) -> OrderCost:
+        return self._primedelta_client.limit_order_cost(
+            OrderSide.SELL, stock_symbol, amount, price_limit
+        )
+
+    def market_sell_cost(self, stock_symbol: str, amount: int) -> OrderCost:
+        return self._primedelta_client.market_sell_cost(stock_symbol, amount)
+
+    def swappable_symbols(self) -> list[str]:
+        return self._primedelta_client.swappable_symbols()
+
+    def application_settings(self) -> ApplicationSettings:
+        return self._primedelta_client.application_settings()
+
+    def portfolio_history(self, history_range: str) -> PortfolioHistory:
+        return self._primedelta_client.portfolio_history(history_range)
+
+    def digital_identity_id(self) -> Optional[int]:
+        return self._primedelta_client.digital_identity_id()
