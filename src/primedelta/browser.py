@@ -89,6 +89,9 @@ run().then(
 
 def _render_page(op: str, params: dict, state: str) -> str:
     config = json.dumps({"op": op, "params": params, "state": state})
+    config = (
+        config.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    )
     return _PAGE % {"config": config}
 
 

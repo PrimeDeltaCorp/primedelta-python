@@ -143,3 +143,12 @@ class TestBrowserSigner:
         assert "<script src" not in page
         assert "personal_sign" in page
         assert "eth_sendTransaction" in page
+
+    def test_page_escapes_script_breakout_in_params(self):
+        page = _render_page(
+            "personal_sign",
+            {"message": "</script><script>alert(1)</script>", "address": ADDR},
+            "S",
+        )
+        assert "<script>alert(1)" not in page
+        assert page.count("</script>") == 2
