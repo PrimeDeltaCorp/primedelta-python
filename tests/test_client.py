@@ -429,3 +429,67 @@ class TestAccountFeatures:
         client, session = _client_with_session()
         session.request.return_value = _Resp(404, {"detail": ["no did"]})
         assert client.digital_identity_id() is None
+
+
+class TestTransportLayer:
+    def test_handle_204_returns_empty_dict_without_parsing(self):
+        # Seed a body so the empty-content fallback can't mask a missing 204
+        # guard: a 204 must return {} even when content is present.
+        client, _ = _client_with_session()
+        assert client._handle(_Resp(204, {"x": 1})) == {}
+
+    def test_handle_200_empty_body_returns_empty_dict(self):
+        client, _ = _client_with_session()
+        assert client._handle(_Resp(200, content=b"")) == {}
+
+    def test_handle_200_json_body_is_parsed(self):
+        client, _ = _client_with_session()
+        assert client._handle(_Resp(200, {"a": 1})) == {"a": 1}
+
+    def test_handle_maps_status_codes(self):
+        client, _ = _client_with_session()
+        with pytest.raises(NotLoggedIn):
+            client._handle(_Resp(401, {"detail": "x"}))
+        with pytest.raises(AuthorizationError):
+            client._handle(_Resp(403, {"detail": "x"}))
+        with pytest.raises(APIError):
+            client._handle(_Resp(400, {"errorCode": "NOPE"}))
+
+    def test_origin_strips_path_from_base_url(self, monkeypatch):
+        monkeypatch.setattr(
+            "primedelta.primedelta_client.PRIMEDELTA_BASE_URL",
+            "https://api.example.io/api/v2",
+        )
+        client, _ = _client_with_session()
+        assert client._origin() == "https://api.example.io"
+
+    def test_url_joins_endpoint_onto_base(self, monkeypatch):
+        monkeypatch.setattr(
+            "primedelta.primedelta_client.PRIMEDELTA_BASE_URL",
+            "https://api.example.io",
+        )
+        client, _ = _client_with_session()
+        assert client._url("/messages/") == "https://api.example.io/messages/"
+
+    def test_error_code_non_json_body_is_none(self):
+        assert PrimeDeltaClient._error_code(_Resp(400, content=b"<html>")) is None
+
+    def test_error_code_list_body_is_none(self):
+        assert PrimeDeltaClient._error_code(_Resp(400, ["a", "b"])) is None
+
+    def test_error_code_prefers_errorcode_over_code(self):
+        resp = _Resp(400, {"errorCode": "PRIMARY", "code": "secondary"})
+        assert PrimeDeltaClient._error_code(resp) == "PRIMARY"
+
+    def test_decimal_or_none(self):
+        assert PrimeDeltaClient._decimal_or_none(None) is None
+        assert PrimeDeltaClient._decimal_or_none("1.5") == Decimal("1.5")
+
+    def test_get_passes_params_and_omits_csrf(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(200, {"ok": 1})
+        assert client._get("/thing/", {"size": 100}) == {"ok": 1}
+        kwargs = session.request.call_args.kwargs
+        assert kwargs["params"] == {"size": 100}
+        assert "X-CSRFToken" not in kwargs["headers"]
+        session.get.assert_not_called()
