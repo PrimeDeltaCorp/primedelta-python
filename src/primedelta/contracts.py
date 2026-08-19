@@ -51,6 +51,11 @@ class CoreContracts:
                 if data.get("wdel") and data["wdel"].get("address")
                 else None
             ),
+            quoter=(
+                ContractRef.from_dict(data["quoter"])
+                if data.get("quoter") and data["quoter"].get("address")
+                else None
+            ),
         )
 
 
