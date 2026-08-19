@@ -38,6 +38,7 @@ tx = primedelta.swap_exact_input(
 - [Deposit, withdraw, distributions](./examples/mint-platform/deposit_withdraw_distribution.py)
 - [Buying and selling stocks (orders)](./examples/mint-platform/buying_and_selling_stocks.py)
 - [Portfolio](./examples/mint-platform/portfolio.py)
+- [Allowances, native DEL, DID reads](./examples/mint-platform/allowances_and_did.py) — `approve` / `allowance` / `revoke_approval`, `send_del`, `did_token_id` / `is_pro` / `is_valid`
 - [Real-time price stream (logged in)](./examples/mint-platform/price_stream/prices_stream_logged.py)
 - [Real-time price stream (public Pyth — parked since the 2026-07-31 free-Hermes shutdown; set PYTH_HERMES_BASE_URL to an authenticated endpoint to re-enable)](./examples/mint-platform/price_stream/prices_stream_not_logged.py)
 
@@ -54,14 +55,26 @@ The router accepts dUSD on one side (`buyExact*`/`sellExact*`) or two non-dUSD t
 
 > The stablecoin is **dUSD** on chain. `SwapSide.STABLECOIN_TO_STOCK` and `SwapSide.STOCK_TO_STABLECOIN` are the two single-hop directions; cross-dex swaps use the dedicated `swap_token_to_token_*` methods instead of `SwapSide`.
 
+### Quoting
+
+- [Pre-trade quoting & spot price](./examples/dex/quoting.py) — read-only `quote_swap` (V3 Quoter) and `spot_price` (slot0), no login required
+
 ### Liquidity
 
 - [Price-feed pool liquidity](./examples/dex/liquidity_pricefeed.py) — `add_liquidity` / `remove_liquidity` with `PriceFeedAddLiquidity` / `PriceFeedRemoveLiquidity`
 - [AMM (Uniswap V3) liquidity](./examples/dex/liquidity_amm.py) — concentrated-range positions via `AMMAddLiquidity` / `AMMRemoveLiquidity`
+- [Full V3 position lifecycle](./examples/dex/v3_lifecycle.py) — `add` → `increase_liquidity` → `preview_fees` → `burn_position`
+
+## Signers / wallets
+
+A `Signer` is the whole wallet dependency (`address`, `sign_message`, submit-a-tx). `private_key=` is a thin wrapper for the raw-key case; everything else is identical regardless of signer.
+
+- [Provisioning recipes](./examples/signers.py) — raw key, encrypted keystore, mnemonic, AWS KMS (`pip install "primedelta[kms]"`), and network switching
+- [Browser wallet (MetaMask / EIP-6963)](./examples/browser_wallet.py) — a local loopback bridge; the user signs in their own extension
 
 ## Networks
 
-Addresses and ABIs ship inside the package under [`networks/`](./src/primedelta/networks/). Default network is `dev`. To pin a different deployment, edit the JSON file or pass `network="..."` to `PrimeDelta(...)`.
+Addresses and ABIs ship inside the package under [`networks/`](./src/primedelta/networks/). Pass `network="dev"` (default) or `network="testnet"` to `PrimeDelta(...)` — the backend base URL and SIWE signing domain follow the network automatically (no extra env). `PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL` env vars still override for local stacks. To pin a different deployment, edit the network's JSON file.
 
 ## License
 
