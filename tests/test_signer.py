@@ -6,7 +6,13 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 
 from primedelta import PrimeDelta
-from primedelta.signer import LocalAccountSigner, Signer
+from primedelta.signer import (
+    KmsSigner,
+    LocalAccountSigner,
+    Signer,
+    _SECP256K1_N,
+    _SPKI_PREFIX,
+)
 
 KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
 ADDR = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
@@ -111,3 +117,97 @@ class TestPrimeDeltaSignerWiring:
         siwe_message = signer.sign_message.call_args.args[0]
         assert ADDR in siwe_message
         assert pd._primedelta_client.login.call_args.kwargs["signature"] == "deadbeef"
+
+
+OTHER_KEY = "0x" + "2" * 64
+
+
+def _der_int(x: int) -> bytes:
+    body = x.to_bytes((x.bit_length() + 7) // 8 or 1, "big")
+    if body[0] & 0x80:
+        body = b"\x00" + body
+    return b"\x02" + bytes([len(body)]) + body
+
+
+class _FakeKms:
+    def __init__(self, priv_hex, high_s=False, sign_priv_hex=None):
+        from eth_keys import keys
+
+        self._pub = keys.PrivateKey(bytes.fromhex(priv_hex.removeprefix("0x")))
+        self._signer = keys.PrivateKey(
+            bytes.fromhex((sign_priv_hex or priv_hex).removeprefix("0x"))
+        )
+        self._high_s = high_s
+
+    def get_public_key(self, KeyId):
+        return {"PublicKey": _SPKI_PREFIX + b"\x04" + self._pub.public_key.to_bytes()}
+
+    def sign(self, KeyId, Message, MessageType, SigningAlgorithm):
+        assert MessageType == "DIGEST"
+        assert SigningAlgorithm == "ECDSA_SHA_256"
+        sig = self._signer.sign_msg_hash(Message)
+        s = _SECP256K1_N - sig.s if self._high_s else sig.s
+        body = _der_int(sig.r) + _der_int(s)
+        return {"Signature": b"\x30" + bytes([len(body)]) + body}
+
+
+class TestKmsSigner:
+    def _signer(self, **kwargs):
+        return KmsSigner("dummy-arn", kms_client=_FakeKms(KEY, **kwargs))
+
+    def test_address_matches_key(self):
+        assert self._signer().address == ADDR
+
+    def test_satisfies_signer_protocol(self):
+        signer = self._signer()
+        assert isinstance(signer, Signer)
+        assert signer.fills_gas_and_nonce is False
+
+    def test_sign_message_matches_local_and_recovers(self):
+        message = "hello prime delta"
+        signature = self._signer().sign_message(message)
+        assert signature == LocalAccountSigner.from_key(KEY).sign_message(message)
+        recovered = Account.recover_message(
+            encode_defunct(text=message), signature=bytes.fromhex(signature)
+        )
+        assert recovered == ADDR
+
+    def test_submit_transaction_matches_local_signing(self):
+        captured = {}
+        web3 = MagicMock()
+        web3.eth.send_raw_transaction.side_effect = lambda raw: captured.__setitem__(
+            "raw", raw
+        )
+        tx = {
+            "to": ADDR,
+            "value": 1,
+            "gas": 21000,
+            "gasPrice": 10**9,
+            "nonce": 0,
+            "chainId": 2028,
+            "data": b"",
+        }
+        self._signer().submit_transaction(web3, dict(tx))
+        assert Account.recover_transaction(captured["raw"]) == ADDR
+        assert bytes(captured["raw"]) == bytes(
+            Account.sign_transaction(tx, KEY).raw_transaction
+        )
+
+    def test_normalizes_high_s_from_kms(self):
+        message = "high-s case"
+        low = self._signer(high_s=False).sign_message(message)
+        high = self._signer(high_s=True).sign_message(message)
+        assert low == high
+        assert (
+            Account.recover_message(
+                encode_defunct(text=message), signature=bytes.fromhex(high)
+            )
+            == ADDR
+        )
+
+    def test_raises_when_signature_does_not_recover_key(self):
+        signer = KmsSigner(
+            "dummy-arn", kms_client=_FakeKms(KEY, sign_priv_hex=OTHER_KEY)
+        )
+        with pytest.raises(ValueError):
+            signer.sign_message("x")

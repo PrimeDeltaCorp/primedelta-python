@@ -73,6 +73,21 @@ signer = LocalAccountSigner.from_key(data["private_key"])
 
 ## Keys that never leave the HSM
 
-For keys that must never be materialized in process (e.g. an AWS KMS-managed
-secp256k1 key), a dedicated signer that only asks the HSM to sign digests is
-planned — `KmsSigner`, under the optional extra `primedelta[kms]`.
+`KmsSigner` keeps an AWS KMS-managed secp256k1 key inside the HSM and only sends
+it 32-byte digests to sign — the private key is never materialized in process.
+Install the optional extra:
+
+```
+pip install "primedelta[kms]"
+```
+
+```python
+from primedelta import PrimeDelta, KmsSigner
+
+signer = KmsSigner(key_id="arn:aws:kms:...:key/...", region_name="eu-central-1")
+pd = PrimeDelta(signer=signer, web3_provider_url=RPC)
+```
+
+The KMS key must be an asymmetric secp256k1 signing key (KeySpec
+`ECC_SECG_P256K1`, KeyUsage `SIGN_VERIFY`). Pass an existing boto3 client as
+`kms_client=` to reuse credentials and config.
