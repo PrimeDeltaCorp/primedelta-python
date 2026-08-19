@@ -957,7 +957,7 @@ class TestBuildAndSendTransaction:
         assert tx_params["gasPrice"] == 10**9
         pd._signer.submit_transaction.assert_called_once()
 
-    def test_wallet_signer_tx_omits_nonce_and_gas(self):
+    def test_wallet_signer_builds_raw_call_without_gas_or_nonce(self):
         pd = self._make_pd_with_fresh_web3()
         pd._signer.fills_gas_and_nonce = True
         pd._web3.eth.wait_for_transaction_receipt.return_value = {"status": 1}
@@ -966,13 +966,20 @@ class TestBuildAndSendTransaction:
         pd._signer.submit_transaction.return_value = sent
         fn = MagicMock()
         fn.fn_name = "approve"
-        fn.build_transaction.return_value = {"to": "0x0"}
+        fn.address = "0xC0FFEE"
+        fn._encode_transaction_data.return_value = "0xda7a"
 
         assert pd._build_and_send_transaction(fn) == "0xdead"
-        tx_params = fn.build_transaction.call_args.args[0]
-        assert "nonce" not in tx_params
-        assert "gas" not in tx_params
-        assert "gasPrice" not in tx_params
+        fn.build_transaction.assert_not_called()
+        submitted = pd._signer.submit_transaction.call_args.args[1]
+        assert submitted["from"] == _USER_ADDRESS
+        assert submitted["to"] == "0xC0FFEE"
+        assert submitted["data"] == "0xda7a"
+        assert submitted["value"] == 0
+        assert submitted["chainId"] == 2028
+        assert "nonce" not in submitted
+        assert "gas" not in submitted
+        assert "gasPrice" not in submitted
 
 
 class TestClaimWithdrawals:

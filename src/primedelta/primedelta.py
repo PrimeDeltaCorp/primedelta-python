@@ -798,38 +798,45 @@ class PrimeDelta:
             calldata = contract_function._encode_transaction_data()
         except Exception:
             calldata = None
-        tx_params: dict[str, Any] = {
-            "from": self._signer.address,
-            "value": value,
-        }
-        if not self._signer.fills_gas_and_nonce:
-            tx_params["gasPrice"] = self._web3.eth.gas_price
-            tx_params["nonce"] = self._reserve_nonce()
-            tx_params["gas"] = 5_000_000
-        try:
-            transaction = contract_function.build_transaction(tx_params)
-        except ContractLogicError as e:
-            # Don't burn this nonce — the tx never went out.
-            self._next_nonce = None
-            trace = self._try_debug_trace_call(
-                {
-                    "from": self._signer.address,
-                    "to": to_address,
-                    "data": calldata,
-                    "value": hex(value) if value else "0x0",
-                }
-            )
-            reason = _decode_revert(e)
-            deepest = _deepest_trace_error(trace)
-            if deepest and deepest != reason and "revert" in reason.lower():
-                reason = f"{deepest} (top-level: {reason})"
-            raise TransactionFailed(
-                fn_name,
-                reason,
-                to=to_address,
-                data=calldata,
-                trace=trace,
-            ) from e
+        if self._signer.fills_gas_and_nonce:
+            transaction = {
+                "from": self._signer.address,
+                "to": to_address,
+                "value": value,
+                "data": calldata,
+                "chainId": self._get_contracts().chain_id,
+            }
+        else:
+            tx_params: dict[str, Any] = {
+                "from": self._signer.address,
+                "value": value,
+                "gasPrice": self._web3.eth.gas_price,
+                "nonce": self._reserve_nonce(),
+                "gas": 5_000_000,
+            }
+            try:
+                transaction = contract_function.build_transaction(tx_params)
+            except ContractLogicError as e:
+                self._next_nonce = None
+                trace = self._try_debug_trace_call(
+                    {
+                        "from": self._signer.address,
+                        "to": to_address,
+                        "data": calldata,
+                        "value": hex(value) if value else "0x0",
+                    }
+                )
+                reason = _decode_revert(e)
+                deepest = _deepest_trace_error(trace)
+                if deepest and deepest != reason and "revert" in reason.lower():
+                    reason = f"{deepest} (top-level: {reason})"
+                raise TransactionFailed(
+                    fn_name,
+                    reason,
+                    to=to_address,
+                    data=calldata,
+                    trace=trace,
+                ) from e
 
         tx_hash = self._signer.submit_transaction(self._web3, transaction)
         # Wait for the receipt so chained calls (e.g. approve → swap) see the

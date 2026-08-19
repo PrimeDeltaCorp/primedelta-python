@@ -72,6 +72,39 @@ class LocalAccountSigner:
         return web3.eth.send_raw_transaction(signed.raw_transaction)
 
 
+class MockBrowserSigner:
+    """Wallet-style signer (``fills_gas_and_nonce=True``) that signs locally with
+    a dev key, standing in for a browser wallet so the wallet path is exercisable
+    without a human — in CI and against dev.
+    """
+
+    fills_gas_and_nonce = True
+
+    def __init__(self, account: LocalAccount) -> None:
+        self._account = account
+
+    @classmethod
+    def from_key(cls, private_key: str) -> "MockBrowserSigner":
+        return cls(Account.from_key(private_key))
+
+    @property
+    def address(self) -> str:
+        return self._account.address
+
+    def sign_message(self, message: str) -> str:
+        return self._account.sign_message(encode_defunct(text=message)).signature.hex()
+
+    def submit_transaction(self, web3: Any, transaction: dict) -> Any:
+        prepared = dict(transaction)
+        prepared.setdefault(
+            "nonce", web3.eth.get_transaction_count(self._account.address, "pending")
+        )
+        prepared.setdefault("gas", 5_000_000)
+        prepared.setdefault("gasPrice", web3.eth.gas_price)
+        signed = self._account.sign_transaction(prepared)
+        return web3.eth.send_raw_transaction(signed.raw_transaction)
+
+
 _SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 _SPKI_PREFIX = bytes.fromhex("3056301006072a8648ce3d020106052b8104000a034200")
 
