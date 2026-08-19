@@ -879,9 +879,9 @@ class TestBuildAndSendTransaction:
         # Replace the lazy auto-mock with a fresh MagicMock we control end-to-end.
         pd._web3 = MagicMock()
         pd._web3.to_checksum_address.side_effect = lambda a: a
-        pd._account = MagicMock()
-        pd._account.address = _USER_ADDRESS
-        pd._account.sign_transaction.return_value.raw_transaction = b"\x00"
+        pd._signer = MagicMock()
+        pd._signer.address = _USER_ADDRESS
+        pd._signer.fills_gas_and_nonce = False
         return pd
 
     def test_raises_transaction_failed_on_pre_submit_revert(self):
@@ -917,7 +917,7 @@ class TestBuildAndSendTransaction:
         # Submission succeeds.
         sent_hash = MagicMock()
         sent_hash.hex.return_value = "0xabc"
-        pd._web3.eth.send_raw_transaction.return_value = sent_hash
+        pd._signer.submit_transaction.return_value = sent_hash
         pd._web3.eth.wait_for_transaction_receipt.return_value = {
             "status": 0,
             "blockNumber": 99,
@@ -938,12 +938,48 @@ class TestBuildAndSendTransaction:
         assert info.value.tx_hash == "0xabc"
         assert "Error('bad')" in info.value.reason
 
+    def test_local_signer_tx_includes_nonce_and_gas(self):
+        pd = self._make_pd_with_fresh_web3()
+        pd._web3.eth.gas_price = 10**9
+        pd._web3.eth.get_transaction_count.return_value = 5
+        pd._web3.eth.wait_for_transaction_receipt.return_value = {"status": 1}
+        sent = MagicMock()
+        sent.hex.return_value = "0xbeef"
+        pd._signer.submit_transaction.return_value = sent
+        fn = MagicMock()
+        fn.fn_name = "approve"
+        fn.build_transaction.return_value = {"to": "0x0"}
+
+        assert pd._build_and_send_transaction(fn) == "0xbeef"
+        tx_params = fn.build_transaction.call_args.args[0]
+        assert tx_params["nonce"] == 5
+        assert tx_params["gas"] == 5_000_000
+        assert tx_params["gasPrice"] == 10**9
+        pd._signer.submit_transaction.assert_called_once()
+
+    def test_wallet_signer_tx_omits_nonce_and_gas(self):
+        pd = self._make_pd_with_fresh_web3()
+        pd._signer.fills_gas_and_nonce = True
+        pd._web3.eth.wait_for_transaction_receipt.return_value = {"status": 1}
+        sent = MagicMock()
+        sent.hex.return_value = "0xdead"
+        pd._signer.submit_transaction.return_value = sent
+        fn = MagicMock()
+        fn.fn_name = "approve"
+        fn.build_transaction.return_value = {"to": "0x0"}
+
+        assert pd._build_and_send_transaction(fn) == "0xdead"
+        tx_params = fn.build_transaction.call_args.args[0]
+        assert "nonce" not in tx_params
+        assert "gas" not in tx_params
+        assert "gasPrice" not in tx_params
+
 
 class TestClaimWithdrawals:
     def _pd(self):
         pd = _make_primedelta()
-        pd._account = MagicMock()
-        pd._account.address = _USER_ADDRESS
+        pd._signer = MagicMock()
+        pd._signer.address = _USER_ADDRESS
         pd._web3 = MagicMock()
         pd._web3.to_checksum_address.side_effect = lambda a: a
         pd._primedelta_client = MagicMock()
