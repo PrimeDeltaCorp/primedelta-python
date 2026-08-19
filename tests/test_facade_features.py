@@ -121,3 +121,25 @@ class TestAllowancesAndSend:
         pd._build_and_send_value_transaction("0xTO", 5)
         tx = pd._signer.submit_transaction.call_args.args[1]
         assert "gas" not in tx and "nonce" not in tx and "gasPrice" not in tx
+
+    def test_value_transaction_retries_on_nonce_too_low(self):
+        from primedelta.primedelta import TransactionFailed
+
+        pd = _pd()
+        pd._signer = MagicMock()
+        pd._signer.address = "0xME"
+        calls = {"n": 0}
+
+        def once(to, value):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise TransactionFailed(
+                    "transfer", "nonce too low; expected account nonce 7"
+                )
+            return "0xOK"
+
+        with patch("time.sleep"):
+            pd._build_and_send_value_transaction_once = MagicMock(side_effect=once)
+            assert pd._build_and_send_value_transaction("0xTO", 5) == "0xOK"
+        assert calls["n"] == 2
+        assert pd._next_nonce == 6

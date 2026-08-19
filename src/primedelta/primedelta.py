@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from siwe import SiweMessage
 from eth_abi import decode as abi_decode
@@ -769,9 +769,7 @@ class PrimeDelta:
         if account_status != AccountStatus.DID_MINTED:
             raise AccountNotVerified()
 
-    def _build_and_send_transaction(
-        self, contract_function: ContractFunction, value: int = 0
-    ) -> str:
+    def _send_with_nonce_retry(self, send_once: Callable[[], str]) -> str:
         # Besu's "pending" nonce occasionally lags behind the actual account
         # state after a fresh receipt. When the chain rejects "nonce too low"
         # it tells us the expected nonce in the error — parse it and retry.
@@ -782,7 +780,7 @@ class PrimeDelta:
         last_error: Optional[TransactionFailed] = None
         for attempt in range(5):
             try:
-                return self._build_and_send_transaction_once(contract_function, value)
+                return send_once()
             except TransactionFailed as e:
                 if "nonce too low" not in (e.reason or "").lower():
                     raise
@@ -798,6 +796,13 @@ class PrimeDelta:
                 time.sleep(1.0 + attempt)  # back off: 1s, 2s, 3s, 4s, 5s
         assert last_error is not None
         raise last_error
+
+    def _build_and_send_transaction(
+        self, contract_function: ContractFunction, value: int = 0
+    ) -> str:
+        return self._send_with_nonce_retry(
+            lambda: self._build_and_send_transaction_once(contract_function, value)
+        )
 
     def _build_and_send_transaction_once(
         self, contract_function: ContractFunction, value: int = 0
@@ -881,6 +886,11 @@ class PrimeDelta:
         return tx_hash.hex()
 
     def _build_and_send_value_transaction(self, to: str, value: int) -> str:
+        return self._send_with_nonce_retry(
+            lambda: self._build_and_send_value_transaction_once(to, value)
+        )
+
+    def _build_and_send_value_transaction_once(self, to: str, value: int) -> str:
         to = self._web3.to_checksum_address(to)
         transaction = {
             "from": self._signer.address,
