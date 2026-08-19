@@ -165,3 +165,45 @@ class LPPosition:
     liquidity: int
     tokens_owed_0: int
     tokens_owed_1: int
+
+
+@dataclass(frozen=True)
+class Message:
+    id: int
+    content: str
+
+
+@dataclass(frozen=True)
+class BankDetails:
+    beneficiary_name: str
+    beneficiary_address: str
+    reference_code: str
+    bank_name: str
+    bic: str
+    account_number: Optional[str]
+    transit_number: Optional[str]
+    institution_number: Optional[str]
+    bank_address: Optional[str]
+
+
+@dataclass(frozen=True)
+class OrderCost:
+    total: Optional[Decimal]
+    service_fee: Optional[Decimal]
+    service_fee_rate_percentage: Optional[Decimal]
+    last_price: Optional[Decimal] = None
+
+
+@dataclass(frozen=True)
+class ApplicationSettings:
+    portfolio_refresh_rate: int
+    buying_digital_identity_fee: Decimal
+
+
+@dataclass(frozen=True)
+class PortfolioHistory:
+    range: str
+    start_value: Decimal
+    end_value: Decimal
+    change: Decimal
+    change_percentage: Optional[Decimal]

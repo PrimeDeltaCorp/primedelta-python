@@ -10,15 +10,20 @@ from sseclient import SSEClient
 from primedelta.settings import PRIMEDELTA_BASE_URL, PYTH_HERMES_BASE_URL
 from primedelta.types import (
     AccountStatus,
+    ApplicationSettings,
+    BankDetails,
     ClaimableWithdrawal,
     DepositStocksSignature,
     DigitalIdentitySignature,
     Distribution,
     DistributionType,
+    Message,
     Order,
+    OrderCost,
     OrderSide,
     OrderStatus,
     Portfolio,
+    PortfolioHistory,
     Position,
     Price,
     Stock,
@@ -392,6 +397,84 @@ class PrimeDeltaClient:
         response = self._session.get(self._url("/market-status/"))
         response.raise_for_status()
         return response.json()["isMarketOpen"]
+
+    def messages(self) -> list[Message]:
+        return [
+            Message(id=item["id"], content=item["content"])
+            for item in self._get("/messages/")
+        ]
+
+    def mark_message_read(self, message_id: int) -> None:
+        self._post(f"/messages/{message_id}/", {})
+
+    def bank_details(self) -> BankDetails:
+        response = self._get("/user/bank-details/")
+        return BankDetails(
+            beneficiary_name=response["beneficiaryName"],
+            beneficiary_address=response["beneficiaryAddress"],
+            reference_code=response["referenceCode"],
+            bank_name=response["bankName"],
+            bic=response["bic"],
+            account_number=response["accountNumber"],
+            transit_number=response["transitNumber"],
+            institution_number=response["institutionNumber"],
+            bank_address=response["bankAddress"],
+        )
+
+    def request_fiat_withdrawal(self, amount: Decimal) -> int:
+        response = self._post("/fiat-withdrawals/", {"amount": str(amount)})
+        return response["withdrawalId"]
+
+    def _order_cost(self, response: dict) -> OrderCost:
+        return OrderCost(
+            total=self._decimal_or_none(response["total"]),
+            service_fee=self._decimal_or_none(response["serviceFee"]),
+            service_fee_rate_percentage=self._decimal_or_none(
+                response["serviceFeeRatePercentage"]
+            ),
+            last_price=self._decimal_or_none(response.get("lastPrice")),
+        )
+
+    def limit_order_cost(
+        self, order_side: OrderSide, symbol: str, amount: int, price_limit: Decimal
+    ) -> OrderCost:
+        response = self._get(
+            f"/orders/limit/{order_side.value.lower()}/cost/",
+            {"amount": amount, "priceLimit": str(price_limit), "stockSymbol": symbol},
+        )
+        return self._order_cost(response)
+
+    def market_sell_cost(self, symbol: str, amount: int) -> OrderCost:
+        response = self._get(
+            "/orders/market/sell/cost/", {"amount": amount, "stockSymbol": symbol}
+        )
+        return self._order_cost(response)
+
+    def swappable_symbols(self) -> list[str]:
+        return self._get("/swappable-symbols/")
+
+    def application_settings(self) -> ApplicationSettings:
+        response = self._get("/application-settings/")
+        return ApplicationSettings(
+            portfolio_refresh_rate=response["portfolioRefreshRate"],
+            buying_digital_identity_fee=Decimal(response["buyingDigitalIdentityFee"]),
+        )
+
+    def portfolio_history(self, history_range: str) -> PortfolioHistory:
+        response = self._get("/portfolio/history/", {"range": history_range})
+        return PortfolioHistory(
+            range=response["range"],
+            start_value=Decimal(response["startValue"]),
+            end_value=Decimal(response["endValue"]),
+            change=Decimal(response["change"]),
+            change_percentage=self._decimal_or_none(response["changePercentage"]),
+        )
+
+    def digital_identity_id(self) -> Optional[int]:
+        response = self._request("GET", "/digital-identity/")
+        if response.status_code == 404:
+            return None
+        return self._handle(response)["tokenId"]
 
     def get_signed_price_updates(self, symbols: list[str]) -> list[bytes]:
         if not symbols:
