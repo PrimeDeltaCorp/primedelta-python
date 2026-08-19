@@ -2,7 +2,6 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
-from eth_account.messages import encode_defunct
 from siwe import SiweMessage
 from eth_abi import decode as abi_decode
 from web3 import Web3
@@ -11,6 +10,7 @@ from web3.exceptions import ContractLogicError
 from web3.middleware import ExtraDataToPOAMiddleware
 
 from primedelta.contracts import Contracts
+from primedelta.signer import LocalAccountSigner, Signer
 from primedelta.dex.handlers import (
     _AMMPoolHandler,
     _DclexPoolHandler,
@@ -168,11 +168,20 @@ def _deepest_trace_error(trace: Any) -> Optional[str]:
 class PrimeDelta:
     def __init__(
         self,
-        private_key: str,
-        web3_provider_url: str,
+        private_key: Optional[str] = None,
+        web3_provider_url: Optional[str] = None,
         network: str = "dev",
+        signer: Optional[Signer] = None,
     ) -> None:
-        self._account = Web3().eth.account.from_key(private_key)
+        if web3_provider_url is None:
+            raise ValueError("web3_provider_url is required")
+        if signer is not None and private_key is not None:
+            raise ValueError("Provide either private_key or signer, not both")
+        if signer is None:
+            if private_key is None:
+                raise ValueError("Provide either private_key or signer")
+            signer = LocalAccountSigner.from_key(private_key)
+        self._signer: Signer = signer
         self._web3 = Web3(Web3.HTTPProvider(web3_provider_url))
         # Besu IBFT / Clique chains pack signer info into a 241-byte extraData
         # field; web3.py's default response formatter rejects anything > 32B.
@@ -189,19 +198,19 @@ class PrimeDelta:
         self._next_nonce: Optional[int] = None
         self._dclex_handler = _DclexPoolHandler(
             web3=self._web3,
-            account=self._account,
+            account=self._signer,
             contracts_provider=self._get_contracts,
             send_tx=self._build_and_send_transaction,
         )
         self._amm_handler = _AMMPoolHandler(
             web3=self._web3,
-            account=self._account,
+            account=self._signer,
             contracts_provider=self._get_contracts,
             send_tx=self._build_and_send_transaction,
         )
         self._router_swapper = _RouterSwapHandler(
             web3=self._web3,
-            account=self._account,
+            account=self._signer,
             contracts_provider=self._get_contracts,
             signed_prices_fetcher=self._primedelta_client.get_signed_price_updates,
             send_tx=self._build_and_send_transaction,
@@ -215,7 +224,7 @@ class PrimeDelta:
         issued_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         message = SiweMessage(
             domain=SIWE_DOMAIN,
-            address=self._account.address,
+            address=self._signer.address,
             statement=SIWE_MESSAGE,
             uri=SIWE_URI,
             version="1",
@@ -223,9 +232,7 @@ class PrimeDelta:
             nonce=nonce,
             issued_at=issued_at,
         ).prepare_message()
-        signature = self._account.sign_message(
-            encode_defunct(text=message),
-        ).signature.hex()
+        signature = self._signer.sign_message(message)
         self._primedelta_client.login(message=message, signature=signature, nonce=nonce)
 
     def logged_in(self) -> bool:
@@ -257,7 +264,7 @@ class PrimeDelta:
         return self._build_and_send_transaction(
             digital_identity_contract.functions.mint(
                 {
-                    "account": self._account.address,
+                    "account": self._signer.address,
                     "nonce": int.from_bytes(bytes.fromhex(signature.nonce), "big"),
                     "isPro": signature.is_pro,
                     "data": bytes.fromhex(signature.data),
@@ -337,7 +344,7 @@ class PrimeDelta:
                 {
                     "symbol": withdrawal.asset_type,
                     "amount": int(signature.amount),
-                    "account": self._account.address,
+                    "account": self._signer.address,
                     "nonce": int(signature.nonce, 16),
                 },
                 bytes.fromhex(signature.signature.removeprefix("0x")),
@@ -364,7 +371,7 @@ class PrimeDelta:
                 {
                     "symbol": stock_symbol,
                     "amount": int(signature.amount),
-                    "account": self._account.address,
+                    "account": self._signer.address,
                     "nonce": int(signature.nonce, 16),
                 },
                 bytes.fromhex(signature.signature),
@@ -402,7 +409,7 @@ class PrimeDelta:
                 {
                     "symbol": withdrawal.asset_type,
                     "amount": int(signature.amount),
-                    "account": self._account.address,
+                    "account": self._signer.address,
                     "nonce": int(signature.nonce, 16),
                 },
                 bytes.fromhex(signature.signature.removeprefix("0x")),
@@ -464,7 +471,7 @@ class PrimeDelta:
             address=self._web3.to_checksum_address(stablecoin.address),
             abi=stablecoin.abi,
         )
-        raw = token.functions.balanceOf(self._account.address).call()
+        raw = token.functions.balanceOf(self._signer.address).call()
         return Decimal(raw) / Decimal(10**6)
 
     def get_onchain_stock_balance(self, symbol: str) -> Decimal:
@@ -480,12 +487,12 @@ class PrimeDelta:
             address=self._web3.to_checksum_address(stock_addr),
             abi=_require_pool_abi(contracts, "erc20"),
         )
-        raw = token.functions.balanceOf(self._account.address).call()
+        raw = token.functions.balanceOf(self._signer.address).call()
         return Decimal(raw) / Decimal(10**18)
 
     def get_native_del_balance(self) -> Decimal:
         """Read native DEL balance from chain."""
-        raw = self._web3.eth.get_balance(self._account.address)
+        raw = self._web3.eth.get_balance(self._signer.address)
         return Decimal(raw) / Decimal(10**18)
 
     def wrap_del(self, amount: Decimal) -> str:
@@ -705,10 +712,10 @@ class PrimeDelta:
     def lp_positions(self) -> list[int]:
         """Return all AMM (V3) position NFT token IDs owned by the wallet."""
         npm = self._npm_contract()
-        count = npm.functions.balanceOf(self._account.address).call()
+        count = npm.functions.balanceOf(self._signer.address).call()
         return [
             npm.functions.tokenOfOwnerByIndex(
-                self._account.address, i
+                self._signer.address, i
             ).call()
             for i in range(count)
         ]
@@ -791,18 +798,14 @@ class PrimeDelta:
             calldata = contract_function._encode_transaction_data()
         except Exception:
             calldata = None
-        tx_params = {
-            "from": self._account.address,
-            "gasPrice": self._web3.eth.gas_price,
-            "nonce": self._reserve_nonce(),
+        tx_params: dict[str, Any] = {
+            "from": self._signer.address,
             "value": value,
-            # Pre-set a generous gas limit; chain refunds unused. Skipping the
-            # automatic `estimate_gas` step avoids a Besu race where the node
-            # advances the account nonce during simulation, causing the next
-            # submission to be rejected as "nonce too low".
-            "gas": 5_000_000,
         }
-        # Pre-submit revert (gas estimation): no tx_hash exists yet.
+        if not self._signer.fills_gas_and_nonce:
+            tx_params["gasPrice"] = self._web3.eth.gas_price
+            tx_params["nonce"] = self._reserve_nonce()
+            tx_params["gas"] = 5_000_000
         try:
             transaction = contract_function.build_transaction(tx_params)
         except ContractLogicError as e:
@@ -810,7 +813,7 @@ class PrimeDelta:
             self._next_nonce = None
             trace = self._try_debug_trace_call(
                 {
-                    "from": self._account.address,
+                    "from": self._signer.address,
                     "to": to_address,
                     "data": calldata,
                     "value": hex(value) if value else "0x0",
@@ -828,10 +831,7 @@ class PrimeDelta:
                 trace=trace,
             ) from e
 
-        signed_transaction = self._account.sign_transaction(transaction)
-        tx_hash = self._web3.eth.send_raw_transaction(
-            signed_transaction.raw_transaction
-        )
+        tx_hash = self._signer.submit_transaction(self._web3, transaction)
         # Wait for the receipt so chained calls (e.g. approve → swap) see the
         # state change. Without this the next tx's gas estimation runs against
         # pre-approve state on chains with real block time (dev/prod), reverting.
@@ -871,7 +871,7 @@ class PrimeDelta:
         nodes lag), bump past our last-used value. Never goes backwards.
         """
         chain_nonce = self._web3.eth.get_transaction_count(
-            self._web3.to_checksum_address(self._account.address),
+            self._web3.to_checksum_address(self._signer.address),
             "pending",
         )
         if self._next_nonce is not None and chain_nonce <= self._next_nonce:

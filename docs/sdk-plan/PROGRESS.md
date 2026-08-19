@@ -3,19 +3,28 @@
 > Living status log for the SDK revive effort. Update at the end of each work session.
 > Plan: `02-plan.md` · Findings: `01-recon-findings.md` · Baseline: `00-current-inventory.md`.
 
-## Status: PHASE 0 GREEN — core validated end-to-end on live dev; branch `feat/sdk-revive`
+## Status: PHASE 1 GREEN — Signer abstraction live-verified; PR #7 open (Phase 0 #5 + on-chain fixes #6 merged)
 
 | Phase | Title | State |
 | --- | --- | --- |
 | Recon | Inventory + gap map (5-agent) | ✅ done 2026-08-18 |
-| 0 | Validate & un-break the core | ✅ done 2026-08-19 (reality gate PASS on dev) |
-| 1 | Signer abstraction | ⬜ not started |
-| 2 | Headless provisioning (keystore/mnemonic/KMS) | ⬜ not started |
+| 0 | Validate & un-break the core | ✅ merged (#5) 2026-08-19 (reality gate PASS on dev) |
+| — | On-chain fixes (withdraw/deposit/AMM) | ✅ merged (#6) 2026-08-19 (adversarial-audit driven; live round-trip) |
+| 1 | Signer abstraction | ✅ done 2026-08-19 → PR #7 (cold review clean; live dev) |
+| 2 | Headless provisioning (keystore/mnemonic/KMS) | ⬜ next |
 | 3 | MetaMask bridge (BrowserSigner) | ⬜ not started |
 | 4 | Feature completeness (backend + on-chain gaps) | ⬜ not started |
 | 5 | Multi-network (testnet/mainnet) | ⬜ not started |
 | 6 | Test hardening + drift test | ⬜ not started |
 | 7 | Packaging, CI, docs, publish | ⬜ not started |
+
+**Phase 1 (Signer) notes:** `signer.py` = `Signer` Protocol + `LocalAccountSigner` (`from_key`). `PrimeDelta(signer=)`;
+`private_key=` is now a thin back-compat wrapper. `login()` and the tx builder go through `self._signer`
+(branch on `fills_gas_and_nonce`); handlers unchanged (`.address` only). Cold review clean; 131 tests; live dev
+verified (signer= construct + login + wrap/unwrap DEL). **Phase 3 carry-over:** the `fills_gas_and_nonce=True`
+path is dormant — a wallet signer must NOT rely on `contract_function.build_transaction({from,value})` (web3
+auto-estimates gas + fills nonce during build, defeating "wallet fills its own" and re-hitting the Besu nonce
+race). Build the wallet tx from raw calldata/to/value instead when `BrowserSigner` lands.
 
 ## Decisions log
 - 2026-08-18: Recon complete. Verdict = **not delete** — breakage is concentrated in the stale
