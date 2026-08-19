@@ -56,15 +56,18 @@ class UserSignedMessageVerificationError(Exception):
 
 
 class PrimeDeltaClient:
-    def __init__(self) -> None:
+    def __init__(self, base_url: Optional[str] = None) -> None:
         self._session = requests.Session()
         self._csrf_token: Optional[str] = None
+        # Falls back to the module default so direct `PrimeDeltaClient()` use
+        # (and tests that patch PRIMEDELTA_BASE_URL) keep working.
+        self._base_url = base_url if base_url is not None else PRIMEDELTA_BASE_URL
 
     def _url(self, endpoint: str) -> str:
-        return f"{PRIMEDELTA_BASE_URL}{endpoint}"
+        return f"{self._base_url}{endpoint}"
 
     def _origin(self) -> str:
-        parts = urlsplit(PRIMEDELTA_BASE_URL)
+        parts = urlsplit(self._base_url)
         return f"{parts.scheme}://{parts.netloc}"
 
     def _ensure_csrf_token(self) -> str:
