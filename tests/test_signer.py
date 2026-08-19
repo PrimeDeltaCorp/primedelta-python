@@ -9,6 +9,7 @@ from primedelta import PrimeDelta
 from primedelta.signer import (
     KmsSigner,
     LocalAccountSigner,
+    MockBrowserSigner,
     Signer,
     _SECP256K1_N,
     _SPKI_PREFIX,
@@ -117,6 +118,43 @@ class TestPrimeDeltaSignerWiring:
         siwe_message = signer.sign_message.call_args.args[0]
         assert ADDR in siwe_message
         assert pd._primedelta_client.login.call_args.kwargs["signature"] == "deadbeef"
+
+
+class TestMockBrowserSigner:
+    def test_is_a_wallet_signer(self):
+        signer = MockBrowserSigner.from_key(KEY)
+        assert signer.address == ADDR
+        assert signer.fills_gas_and_nonce is True
+        assert isinstance(signer, Signer)
+
+    def test_sign_message_recovers(self):
+        signature = MockBrowserSigner.from_key(KEY).sign_message("hi")
+        recovered = Account.recover_message(
+            encode_defunct(text="hi"),
+            signature=bytes.fromhex(signature.removeprefix("0x")),
+        )
+        assert recovered == ADDR
+
+    def test_submit_transaction_fills_gas_nonce_and_broadcasts(self):
+        captured = {}
+        web3 = MagicMock()
+        web3.eth.get_transaction_count.return_value = 7
+        web3.eth.gas_price = 10**9
+        web3.eth.send_raw_transaction.side_effect = lambda raw: captured.__setitem__(
+            "raw", raw
+        )
+        raw_call = {"from": ADDR, "to": ADDR, "value": 1, "data": b"", "chainId": 2028}
+        MockBrowserSigner.from_key(KEY).submit_transaction(web3, raw_call)
+        assert Account.recover_transaction(captured["raw"]) == ADDR
+        rebuilt = {
+            **raw_call,
+            "nonce": 7,
+            "gas": 5_000_000,
+            "gasPrice": 10**9,
+        }
+        assert bytes(captured["raw"]) == bytes(
+            Account.sign_transaction(rebuilt, KEY).raw_transaction
+        )
 
 
 OTHER_KEY = "0x" + "2" * 64

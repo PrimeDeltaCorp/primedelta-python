@@ -20,5 +20,5 @@ from .primedelta import (
     WdelNotConfigured,
 )
 from .primedelta_client import NotLoggedIn, UserSignedMessageVerificationError
-from .signer import KmsSigner, LocalAccountSigner, Signer
+from .signer import KmsSigner, LocalAccountSigner, MockBrowserSigner, Signer
 from .types import *
