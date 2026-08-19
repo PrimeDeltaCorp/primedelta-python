@@ -25,6 +25,7 @@ _CORE_MAPPING = {
     "position_manager": ("v3Main", "DclexPositionManager"),
     "oracle": ("router", "FIOracle"),
     "wdel": ("v3Main", "WDEL"),
+    "quoter": ("v3Main", "Quoter"),
 }
 
 _REQUIRED = ("stablecoin", "vault", "factory", "digital_identity")

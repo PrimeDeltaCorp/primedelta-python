@@ -1,6 +1,7 @@
 from .dex.handlers import (
     PoolNotFound,
     PositionManagerNotConfigured,
+    QuoterNotConfigured,
     RouterNotConfigured,
 )
 from .dex.params import (

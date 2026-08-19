@@ -100,6 +100,10 @@ class PositionManagerNotConfigured(Exception):
     pass
 
 
+class QuoterNotConfigured(Exception):
+    pass
+
+
 class _RouterSwapHandler:
     def __init__(
         self,
@@ -638,6 +642,104 @@ class _AMMPoolHandler:
         )
         self._send_tx(
             token.functions.approve(self._web3.to_checksum_address(spender), amount)
+        )
+
+
+_DUSD_EXP = 6
+_STOCK_EXP = 18
+
+
+class _QuoteHandler:
+    def __init__(self, web3, contracts_provider: Callable[[], Contracts]) -> None:
+        self._web3 = web3
+        self._contracts_provider = contracts_provider
+
+    def quote_swap(
+        self, symbol: str, side: SwapSide, amount: Decimal, exact: str = "input"
+    ) -> Decimal:
+        contracts = self._contracts_provider()
+        quoter_ref = contracts.core.quoter
+        if quoter_ref is None:
+            raise QuoterNotConfigured()
+        stock = _resolve_stock_token(self._web3, contracts, symbol)
+        dusd = contracts.core.stablecoin.address
+        pool = self._contract(self._amm_pool(contracts, stock), self._pool_abi(contracts))
+        fee = _call_view("UniswapV3Pool.fee", lambda: pool.functions.fee().call())
+        quoter = self._contract(quoter_ref.address, quoter_ref.abi)
+
+        if side == SwapSide.STABLECOIN_TO_STOCK:
+            token_in, token_out, in_exp, out_exp = dusd, stock, _DUSD_EXP, _STOCK_EXP
+        else:
+            token_in, token_out, in_exp, out_exp = stock, dusd, _STOCK_EXP, _DUSD_EXP
+        token_in = self._web3.to_checksum_address(token_in)
+        token_out = self._web3.to_checksum_address(token_out)
+
+        if exact == "input":
+            amount_in = int(amount * Decimal(10) ** in_exp)
+            out_units = _call_view(
+                "Quoter.quoteExactInputSingle",
+                lambda: quoter.functions.quoteExactInputSingle(
+                    token_in, token_out, fee, amount_in, 0
+                ).call(),
+            )
+            return Decimal(out_units) / Decimal(10) ** out_exp
+        if exact == "output":
+            amount_out = int(amount * Decimal(10) ** out_exp)
+            in_units = _call_view(
+                "Quoter.quoteExactOutputSingle",
+                lambda: quoter.functions.quoteExactOutputSingle(
+                    token_in, token_out, fee, amount_out, 0
+                ).call(),
+            )
+            return Decimal(in_units) / Decimal(10) ** in_exp
+        raise ValueError("exact must be 'input' or 'output'")
+
+    def spot_price(self, symbol: str) -> Decimal:
+        contracts = self._contracts_provider()
+        stock = _resolve_stock_token(self._web3, contracts, symbol)
+        pool = self._contract(self._amm_pool(contracts, stock), self._pool_abi(contracts))
+        sqrt_price = _call_view(
+            "UniswapV3Pool.slot0", lambda: pool.functions.slot0().call()
+        )[0]
+        token0 = _call_view(
+            "UniswapV3Pool.token0", lambda: pool.functions.token0().call()
+        )
+        raw = (Decimal(sqrt_price) / Decimal(2**96)) ** 2
+        scale = Decimal(10) ** (_STOCK_EXP - _DUSD_EXP)
+        if token0.lower() == stock.lower():
+            return raw * scale
+        return (Decimal(1) / raw) * scale
+
+    def _amm_pool(self, contracts: Contracts, stock_token_addr: str) -> str:
+        npm_ref = contracts.core.position_manager
+        if npm_ref is None:
+            raise PositionManagerNotConfigured()
+        npm = self._contract(npm_ref.address, npm_ref.abi)
+        factory_addr = _call_view(
+            "NonfungiblePositionManager.factory",
+            lambda: npm.functions.factory().call(),
+        )
+        factory = self._contract(
+            factory_addr, _require_pool_abi(contracts, "univ3_factory")
+        )
+        pool_addr = _call_view(
+            "UniswapV3Factory.getPool",
+            lambda: factory.functions.getPool(
+                self._web3.to_checksum_address(stock_token_addr),
+                self._web3.to_checksum_address(contracts.core.stablecoin.address),
+                _AMM_FEE_TIER,
+            ).call(),
+        )
+        if int(pool_addr, 16) == 0:
+            raise PoolNotFound(f"no AMM pool for {stock_token_addr}")
+        return pool_addr
+
+    def _pool_abi(self, contracts: Contracts) -> list:
+        return _require_pool_abi(contracts, "univ3_pool")
+
+    def _contract(self, address: str, abi):
+        return self._web3.eth.contract(
+            address=self._web3.to_checksum_address(address), abi=abi
         )
 
 

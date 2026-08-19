@@ -28,6 +28,7 @@ _CORE_ABIS = {
     "position_manager": "position_manager.json",
     "oracle": "oracle.json",
     "wdel": "wdel.json",
+    "quoter": "quoter.json",
 }
 
 _POOL_ABIS = {
@@ -87,6 +88,11 @@ def load(network: str) -> Contracts:
         wdel=(
             _make_ref(core_cfg["wdel"], _CORE_ABIS["wdel"])
             if core_cfg.get("wdel")
+            else None
+        ),
+        quoter=(
+            _make_ref(core_cfg["quoter"], _CORE_ABIS["quoter"])
+            if core_cfg.get("quoter")
             else None
         ),
     )

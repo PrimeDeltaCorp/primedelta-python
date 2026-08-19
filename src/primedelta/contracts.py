@@ -22,6 +22,7 @@ class CoreContracts:
     position_manager: Optional[ContractRef] = None
     oracle: Optional[ContractRef] = None
     wdel: Optional[ContractRef] = None
+    quoter: Optional[ContractRef] = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "CoreContracts":
