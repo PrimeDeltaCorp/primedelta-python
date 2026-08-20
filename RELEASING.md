@@ -31,7 +31,8 @@ job runs, so the variable guard is what actually protects you.)
 
 To enable publishing, all of:
 
-1. ✅ **License** — MIT (`LICENSE`), publication approved.
+1. The **license** is finalized (see the plan / `LICENSE`) — the package is not
+   published under the current non-commercial license.
 2. A PyPI project `primedelta` exists with a **Trusted Publisher** pointing at
    this repo + the `Release` workflow + the `pypi` environment
    (PyPI → project → Publishing → Add a GitHub Actions publisher).
