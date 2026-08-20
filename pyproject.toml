@@ -60,9 +60,17 @@ src_paths = ["src", "tests", "scripts"]
 [tool.mypy]
 python_version = "3.10"
 ignore_missing_imports = true
-# Strict typing is a follow-up; start lenient so the config can land without a
-# large cleanup and be tightened incrementally.
 check_untyped_defs = true
+# Toward strict, incrementally: signatures must be typed and generics
+# parametrized. warn_return_any stays off — the JSON client helpers return Any
+# by design (a body is legitimately dict or list).
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_any_generics = true
+no_implicit_optional = true
+strict_equality = true
+warn_unused_ignores = true
+warn_redundant_casts = true
 
 [tool.coverage.run]
 source = ["src/primedelta"]

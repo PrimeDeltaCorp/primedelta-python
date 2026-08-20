@@ -1,6 +1,7 @@
 from decimal import Decimal
 from typing import Any, Callable, Optional
 
+from web3 import Web3
 from web3.exceptions import ContractLogicError
 
 from primedelta.contracts import ContractRef, Contracts
@@ -41,7 +42,7 @@ def _call_view(fn_name: str, call_fn: Callable[[], Any]) -> Any:
         raise TransactionFailed(fn_name, _decode_revert(e)) from e
 
 
-def _resolve_stock_token(web3, contracts: "Contracts", symbol: str) -> str:
+def _resolve_stock_token(web3: Web3, contracts: "Contracts", symbol: str) -> str:
     """Resolve a stock symbol to its on-chain token address.
 
     Prefers the backend's `/contracts/` pools (fast dict lookup). Falls back
@@ -63,7 +64,7 @@ def _resolve_stock_token(web3, contracts: "Contracts", symbol: str) -> str:
 
 
 def _resolve_via_router(
-    web3, contracts: "Contracts", router_ref: ContractRef, symbol: str
+    web3: Web3, contracts: "Contracts", router_ref: ContractRef, symbol: str
 ) -> Optional[str]:
     erc20_abi = _require_pool_abi(contracts, "erc20")
     try:
@@ -104,7 +105,7 @@ class QuoterNotConfigured(Exception):
 
 
 def _lookup_amm_pool_address(
-    web3, contracts: "Contracts", stock_token_addr: str
+    web3: Web3, contracts: "Contracts", stock_token_addr: str
 ) -> str:
     npm_ref = contracts.core.position_manager
     if npm_ref is None:
@@ -136,8 +137,8 @@ def _lookup_amm_pool_address(
 class _RouterSwapHandler:
     def __init__(
         self,
-        web3,
-        account,
+        web3: Web3,
+        account: Any,
         contracts_provider: Callable[[], Contracts],
         signed_prices_fetcher: Callable[[list[str]], list[bytes]],
         send_tx: Callable[..., str],
@@ -363,7 +364,7 @@ class _RouterSwapHandler:
     def _now(self) -> int:
         return int(self._web3.eth.get_block("latest")["timestamp"])
 
-    def _contract(self, ref: ContractRef):
+    def _contract(self, ref: ContractRef) -> Any:
         return self._web3.eth.contract(
             address=self._web3.to_checksum_address(ref.address), abi=ref.abi
         )
@@ -382,7 +383,7 @@ class _RouterSwapHandler:
             token.functions.approve(self._web3.to_checksum_address(spender), amount)
         )
 
-    def _erc20_at(self, address: str):
+    def _erc20_at(self, address: str) -> Any:
         return self._web3.eth.contract(
             address=self._web3.to_checksum_address(address),
             abi=_require_pool_abi(self._contracts_provider(), "erc20"),
@@ -392,8 +393,8 @@ class _RouterSwapHandler:
 class _DclexPoolHandler:
     def __init__(
         self,
-        web3,
-        account,
+        web3: Web3,
+        account: Any,
         contracts_provider: Callable[[], Contracts],
         send_tx: Callable[..., str],
     ) -> None:
@@ -453,7 +454,7 @@ class _DclexPoolHandler:
             raise PoolNotFound(f"no DCLEX pool registered for {stock_token_addr}")
         return pool_addr
 
-    def _dclex_pool(self, contracts: Contracts, pool_address: str):
+    def _dclex_pool(self, contracts: Contracts, pool_address: str) -> Any:
         abi = contracts.pool_abis.get("dclex_pool")
         if abi is None:
             raise RuntimeError("dclex_pool ABI missing from /contracts/ payload")
@@ -482,8 +483,8 @@ class _DclexPoolHandler:
 class _AMMPoolHandler:
     def __init__(
         self,
-        web3,
-        account,
+        web3: Web3,
+        account: Any,
         contracts_provider: Callable[[], Contracts],
         send_tx: Callable[..., str],
     ) -> None:
@@ -767,7 +768,7 @@ class _AMMPoolHandler:
     def _now(self) -> int:
         return int(self._web3.eth.get_block("latest")["timestamp"])
 
-    def _contract(self, ref: ContractRef):
+    def _contract(self, ref: ContractRef) -> Any:
         return self._web3.eth.contract(
             address=self._web3.to_checksum_address(ref.address), abi=ref.abi
         )
@@ -787,7 +788,7 @@ _STOCK_EXP = 18
 
 
 class _QuoteHandler:
-    def __init__(self, web3, contracts_provider: Callable[[], Contracts]) -> None:
+    def __init__(self, web3: Web3, contracts_provider: Callable[[], Contracts]) -> None:
         self._web3 = web3
         self._contracts_provider = contracts_provider
 
@@ -854,10 +855,10 @@ class _QuoteHandler:
     def _amm_pool(self, contracts: Contracts, stock_token_addr: str) -> str:
         return _lookup_amm_pool_address(self._web3, contracts, stock_token_addr)
 
-    def _pool_abi(self, contracts: Contracts) -> list:
+    def _pool_abi(self, contracts: Contracts) -> list[Any]:
         return _require_pool_abi(contracts, "univ3_pool")
 
-    def _contract(self, address: str, abi):
+    def _contract(self, address: str, abi: Any) -> Any:
         return self._web3.eth.contract(
             address=self._web3.to_checksum_address(address), abi=abi
         )
