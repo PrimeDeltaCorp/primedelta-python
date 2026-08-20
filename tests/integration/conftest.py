@@ -233,13 +233,11 @@ def _bootstrap_test_account(test_private_key, provider_url):
         if status == AccountStatus.DID_MINTED:
             return
         if status == AccountStatus.NOT_VERIFIED:
-            base_url = os.getenv("PRIMEDELTA_BASE_URL")
-            token = sdk._primedelta_client._token
-            response = requests.post(
-                f"{base_url}/verification-token/",
-                headers={"Authorization": f"Token {token}"},
-            )
-            response.raise_for_status()
+            # Cookie-auth: the client session already carries the auth cookie
+            # after login; drive the FakeVerification endpoint through the same
+            # CSRF/referer machinery as any other unsafe call (the old Token
+            # header auth was removed in the Phase 0 rewrite).
+            sdk._primedelta_client._unsafe("POST", "/verification-token/")
             status = sdk.get_account_status()
         if status == AccountStatus.VERIFIED:
             try:
