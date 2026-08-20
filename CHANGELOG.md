@@ -32,4 +32,5 @@ semantic versioning once published.
 ### Notes
 - The `mainnet` config is intentionally not shipped yet — the documented
   addresses are not resolvable on the public mainnet RPC read path.
-- License is unchanged pending the relicense decision; not a build blocker.
+- Relicensed under the **MIT License** (was the non-commercial license) —
+  publication approved.
