@@ -24,6 +24,15 @@ from primedelta.types import AccountStatus
 from .conftest import wait_for_transaction
 
 
+@pytest.fixture
+def require_market_open(primedelta_logged_in):
+    """Skip PRICE_FEED swap/liquidity tests when the US market is closed — the
+    signed oracle prices those pools require are empty outside market hours, so
+    the tx reverts (0x19abf40e). Self-skip keeps the suite green off-hours."""
+    if not primedelta_logged_in.is_market_open():
+        pytest.skip("US market closed — PRICE_FEED oracle prices unavailable")
+
+
 def _ensure_stock_balance(
     primedelta_logged_in, symbol: str, fallback_stablecoin: Decimal
 ) -> None:
@@ -112,7 +121,7 @@ class TestSwapLive:
     """Real on-chain swap via DclexRouter. Tiny amounts, won't move the market."""
 
     def test_buy_small_amount_of_stock(
-        self, primedelta_logged_in, test_symbol, provider_url
+        self, primedelta_logged_in, test_symbol, provider_url, require_market_open
     ):
         tx_hash = primedelta_logged_in.swap_exact_input(
             test_symbol,
@@ -124,7 +133,7 @@ class TestSwapLive:
         wait_for_transaction(tx_hash, provider_url)
 
     def test_sell_small_amount_of_stock(
-        self, primedelta_logged_in, test_symbol, provider_url
+        self, primedelta_logged_in, test_symbol, provider_url, require_market_open
     ):
         # Ensure the wallet has something to sell — auto-fund via swap.
         _ensure_stock_balance(
@@ -147,7 +156,7 @@ class TestLiquidityLive:
     """Add liquidity then remove what was added — round-trip."""
 
     def test_add_then_remove_pricefeed_liquidity(
-        self, primedelta_logged_in, test_symbol, provider_url
+        self, primedelta_logged_in, test_symbol, provider_url, require_market_open
     ):
         # Pool needs the wallet to hold both legs; top up stock side via swap.
         _ensure_stock_balance(

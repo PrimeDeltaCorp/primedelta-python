@@ -165,6 +165,12 @@ def _deepest_trace_error(trace: Any) -> Optional[str]:
     return deepest
 
 
+def _tx_hash_0x(tx_hash: Any) -> str:
+    """Normalize a tx hash to a 0x-prefixed hex string. web3 v7's HexBytes.hex()
+    returns bare hex; explorers, cast and the wider ecosystem expect the 0x."""
+    return "0x" + tx_hash.hex().removeprefix("0x")
+
+
 class PrimeDelta:
     def __init__(
         self,
@@ -910,12 +916,12 @@ class PrimeDelta:
             raise TransactionFailed(
                 fn_name,
                 reason,
-                tx_hash=tx_hash.hex(),
+                tx_hash=_tx_hash_0x(tx_hash),
                 to=to_address,
                 data=calldata,
                 trace=trace,
             )
-        return tx_hash.hex()
+        return _tx_hash_0x(tx_hash)
 
     def _build_and_send_value_transaction(self, to: str, value: int) -> str:
         return self._send_with_nonce_retry(
@@ -938,9 +944,9 @@ class PrimeDelta:
         receipt = self._web3.eth.wait_for_transaction_receipt(tx_hash)
         if receipt["status"] == 0:
             raise TransactionFailed(
-                "transfer", "reverted", tx_hash=tx_hash.hex(), to=to
+                "transfer", "reverted", tx_hash=_tx_hash_0x(tx_hash), to=to
             )
-        return tx_hash.hex()
+        return _tx_hash_0x(tx_hash)
 
     def _reserve_nonce(self) -> int:
         """Return the next nonce to use.
