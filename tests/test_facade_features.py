@@ -182,3 +182,98 @@ class TestDidReads:
         pd_no, did_no = self._pd(0)
         assert pd_no.is_valid() is False
         did_no.functions.isValid.assert_not_called()
+
+
+class TestAgentSafetyRails:
+    def test_min_out_from_quote(self):
+        assert PrimeDelta.min_out_from_quote(Decimal("100"), 100) == Decimal("99")
+        assert PrimeDelta.min_out_from_quote(Decimal("100"), 0) == Decimal("100")
+        assert PrimeDelta.min_out_from_quote(Decimal("50"), 250) == Decimal("48.75")
+
+    def test_min_out_from_quote_rejects_bad_slippage(self):
+        with pytest.raises(ValueError):
+            PrimeDelta.min_out_from_quote(Decimal("100"), -1)
+        with pytest.raises(ValueError):
+            PrimeDelta.min_out_from_quote(Decimal("100"), 10_001)
+
+    def test_decode_revert_recognizes_stale_price(self):
+        from web3.exceptions import ContractLogicError
+
+        from primedelta.primedelta import _decode_revert
+
+        reason = _decode_revert(ContractLogicError("reverted", data="0x19abf40e"))
+        assert "StalePrice" in reason
+
+    def _tx_pd(self):
+        pd = _pd()
+        pd._signer = MagicMock()
+        pd._signer.address = "0xME"
+        pd._signer.fills_gas_and_nonce = False
+        pd._web3 = MagicMock()
+        pd._web3.to_checksum_address.side_effect = lambda a: a
+        pd._web3.eth.gas_price = 10**9
+        pd._web3.eth.get_transaction_count.return_value = 1
+        pd._get_contracts = MagicMock(return_value=MagicMock(chain_id=2028))
+        pd._try_debug_trace_call = MagicMock(return_value=None)
+        return pd
+
+    def _fn_reverting_with(self, data):
+        from web3.exceptions import ContractLogicError
+
+        fn = MagicMock()
+        fn.fn_name = "swap"
+        fn.address = "0xPOOL"
+        fn._encode_transaction_data.return_value = "0xdead"
+        fn.build_transaction.side_effect = ContractLogicError("reverted", data=data)
+        return fn
+
+    def test_stale_price_revert_raises_market_closed(self):
+        from primedelta import MarketClosed, TransactionFailed
+
+        pd = self._tx_pd()
+        with pytest.raises(MarketClosed) as info:
+            pd._build_and_send_transaction_once(self._fn_reverting_with("0x19abf40e"))
+        assert isinstance(info.value, TransactionFailed)  # still a TransactionFailed
+
+    def test_other_revert_stays_transaction_failed(self):
+        from primedelta import MarketClosed, TransactionFailed
+
+        pd = self._tx_pd()
+        with pytest.raises(TransactionFailed) as info:
+            # a generic panic selector must NOT be classified as MarketClosed
+            pd._build_and_send_transaction_once(self._fn_reverting_with("0x4e487b71"))
+        assert not isinstance(info.value, MarketClosed)
+
+    def test_halt_blocks_sends_resume_reenables(self):
+        from primedelta import TradingHalted
+
+        pd = _pd()
+        pd._halted = False
+        pd._tx_lock = __import__("threading").Lock()
+        pd.halt()
+        assert pd.is_halted is True
+        with pytest.raises(TradingHalted):
+            pd._send_with_nonce_retry(lambda: "0xTX")
+        pd.resume()
+        assert pd.is_halted is False
+        assert pd._send_with_nonce_retry(lambda: "0xTX") == "0xTX"
+
+    def test_instrument_kind_amm_vs_oracle(self):
+        from primedelta.dex.handlers import PoolNotFound
+
+        pd = _pd()
+        pd._web3 = MagicMock()
+        pd._get_contracts = MagicMock(return_value=MagicMock())
+        with patch(
+            "primedelta.dex.handlers._resolve_stock_token", return_value="0xSTK"
+        ):
+            with patch(
+                "primedelta.dex.handlers._lookup_amm_pool_address",
+                return_value="0xPOOL",
+            ):
+                assert pd.instrument_kind("AMMT1") == "amm"
+            with patch(
+                "primedelta.dex.handlers._lookup_amm_pool_address",
+                side_effect=PoolNotFound("no amm"),
+            ):
+                assert pd.instrument_kind("AAPL") == "oracle"

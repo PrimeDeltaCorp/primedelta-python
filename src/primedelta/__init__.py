@@ -16,8 +16,10 @@ from .dex.params import (
 from .primedelta import (
     AccountNotVerified,
     DigitalIdentityAlreadyClaimed,
+    MarketClosed,
     NotEnoughFunds,
     PrimeDelta,
+    TradingHalted,
     TransactionFailed,
     WdelNotConfigured,
 )
