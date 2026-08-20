@@ -142,7 +142,7 @@ class PrimeDeltaClient:
     def _post(self, endpoint: str, json_body: dict) -> Any:
         return self._unsafe("POST", endpoint, json_body=json_body)
 
-    def _delete(self, endpoint: str) -> dict:
+    def _delete(self, endpoint: str) -> Any:
         return self._unsafe("DELETE", endpoint)
 
     def get_nonce(self) -> str:
