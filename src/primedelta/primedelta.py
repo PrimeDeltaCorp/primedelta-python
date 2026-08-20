@@ -1,3 +1,4 @@
+import threading
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable, Iterator, Optional, cast
@@ -117,8 +118,23 @@ class TransactionFailed(Exception):
         super().__init__("; ".join(parts))
 
 
+class MarketClosed(TransactionFailed):
+    """An oracle/price-feed swap reverted because the signed equity price was
+    stale or absent — the US market is closed (or the price was withheld).
+    A subclass of TransactionFailed, so existing handlers still catch it, but
+    agents can catch it specifically to distinguish 'market closed' from a bug.
+    """
+
+
+class TradingHalted(Exception):
+    """Raised when a transaction is attempted while the client's kill switch is
+    engaged (`halt()`); call `resume()` to re-enable."""
+
+
 _ERROR_STRING_SELECTOR = "0x08c379a0"
 _PANIC_SELECTOR = "0x4e487b71"
+# FIOracle.StalePrice() — oracle price stale/absent (market likely closed).
+_STALE_PRICE_SELECTOR = "0x19abf40e"
 
 
 def _decode_revert(err: Exception) -> str:
@@ -137,6 +153,8 @@ def _decode_revert(err: Exception) -> str:
                 return f"Panic(0x{code:x})"
             except Exception:
                 pass
+        if data.startswith(_STALE_PRICE_SELECTOR):
+            return "StalePrice() (oracle price stale or absent — market likely closed)"
         return f"raw_data={data}"
     message = getattr(err, "message", None)
     return message or str(err) or "no reason given"
@@ -207,6 +225,10 @@ class PrimeDelta:
         # the previous tx's receipt is back. Track locally to avoid collisions
         # in chained submissions (e.g. approve → swap, mint → remove).
         self._next_nonce: Optional[int] = None
+        # Kill switch + a lock that serializes on-chain sends from this instance
+        # (one signer, one in-flight tx — the nonce manager is not concurrent).
+        self._halted = False
+        self._tx_lock = threading.Lock()
         self._dclex_handler = _DclexPoolHandler(
             web3=self._web3,
             account=self._signer,
@@ -820,25 +842,30 @@ class PrimeDelta:
         import re
         import time
 
-        last_error: Optional[TransactionFailed] = None
-        for attempt in range(5):
-            try:
-                return send_once()
-            except TransactionFailed as e:
-                if "nonce too low" not in (e.reason or "").lower():
-                    raise
-                last_error = e
-                # The error tells us exactly what the chain expects next; pin
-                # our local counter to that and let the chain settle briefly
-                # before retrying so failed-status mined txs propagate.
-                match = re.search(r"account nonce (\d+)", e.reason)
-                if match:
-                    self._next_nonce = int(match.group(1)) - 1  # reserve bumps +1
-                else:
-                    self._next_nonce = None
-                time.sleep(1.0 + attempt)  # back off: 1s, 2s, 3s, 4s, 5s
-        assert last_error is not None
-        raise last_error
+        if self._halted:
+            raise TradingHalted("trading is halted; call resume() to re-enable")
+        # Serialize sends per instance so concurrent callers can't collide on
+        # the (non-thread-safe) local nonce counter.
+        with self._tx_lock:
+            last_error: Optional[TransactionFailed] = None
+            for attempt in range(5):
+                try:
+                    return send_once()
+                except TransactionFailed as e:
+                    if "nonce too low" not in (e.reason or "").lower():
+                        raise
+                    last_error = e
+                    # The error tells us exactly what the chain expects next;
+                    # pin our local counter to that and let the chain settle
+                    # briefly before retrying so failed-status mined txs land.
+                    match = re.search(r"account nonce (\d+)", e.reason)
+                    if match:
+                        self._next_nonce = int(match.group(1)) - 1  # reserve bumps +1
+                    else:
+                        self._next_nonce = None
+                    time.sleep(1.0 + attempt)  # back off: 1s, 2s, 3s, 4s, 5s
+            assert last_error is not None
+            raise last_error
 
     def _build_and_send_transaction(
         self, contract_function: ContractFunction, value: int = 0
@@ -890,7 +917,10 @@ class PrimeDelta:
                 deepest = _deepest_trace_error(trace)
                 if deepest and deepest != reason and "revert" in reason.lower():
                     reason = f"{deepest} (top-level: {reason})"
-                raise TransactionFailed(
+                exc_class = (
+                    MarketClosed if "StalePrice" in reason else TransactionFailed
+                )
+                raise exc_class(
                     fn_name,
                     reason,
                     to=to_address,
@@ -922,7 +952,8 @@ class PrimeDelta:
             deepest = _deepest_trace_error(trace)
             if deepest and deepest != reason and "revert" in reason.lower():
                 reason = f"{deepest} (top-level: {reason})"
-            raise TransactionFailed(
+            exc_class = MarketClosed if "StalePrice" in reason else TransactionFailed
+            raise exc_class(
                 fn_name,
                 reason,
                 tx_hash=_tx_hash_0x(tx_hash),
@@ -989,6 +1020,48 @@ class PrimeDelta:
 
     def is_market_open(self) -> bool:
         return self._primedelta_client.is_market_open()
+
+    def instrument_kind(self, symbol: str) -> str:
+        """Classify a tradable symbol as ``"amm"`` (a 24/7 Uniswap-V3 AMM pool)
+        or ``"oracle"`` (a price-feed pool, tradable only in US market hours).
+        Agents should gate oracle-instrument swaps on ``is_market_open()``.
+        """
+        from primedelta.dex.handlers import (
+            PoolNotFound,
+            _lookup_amm_pool_address,
+            _resolve_stock_token,
+        )
+
+        contracts = self._get_contracts()
+        stock = _resolve_stock_token(self._web3, contracts, symbol)
+        try:
+            _lookup_amm_pool_address(self._web3, contracts, stock)
+            return "amm"
+        except PoolNotFound:
+            return "oracle"
+
+    @staticmethod
+    def min_out_from_quote(quote: Decimal, slippage_bps: int = 100) -> Decimal:
+        """Compute a safe ``min_amount_out`` from a ``quote_swap`` result and a
+        slippage budget in basis points (default 100 = 1%). Never pass a raw
+        ``Decimal("0")`` to a swap in production — derive the bound from a quote.
+        """
+        if not 0 <= slippage_bps <= 10_000:
+            raise ValueError("slippage_bps must be between 0 and 10000")
+        return quote * (Decimal(10_000 - slippage_bps) / Decimal(10_000))
+
+    def halt(self) -> None:
+        """Engage the kill switch: every subsequent on-chain send raises
+        ``TradingHalted`` until ``resume()``. Reads are unaffected."""
+        self._halted = True
+
+    def resume(self) -> None:
+        """Release the kill switch engaged by ``halt()``."""
+        self._halted = False
+
+    @property
+    def is_halted(self) -> bool:
+        return self._halted
 
     def messages(self) -> list[Message]:
         return self._primedelta_client.messages()
