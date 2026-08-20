@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from primedelta import PrimeDelta, AccountNotVerified, DigitalIdentityAlreadyClaimed
+from primedelta import AccountNotVerified, DigitalIdentityAlreadyClaimed, PrimeDelta
 from primedelta.primedelta_client import NotLoggedIn
 from primedelta.types import AccountStatus, Portfolio, Position
 

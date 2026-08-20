@@ -84,6 +84,7 @@ class TestOrderPlacementIntegration:
         """Place a limit buy order at a very low price, then cancel it."""
         import time
         from decimal import Decimal
+
         from primedelta.types import OrderSide, OrderStatus
 
         # Place limit buy at $1 (unrealistically low, won't execute)
@@ -283,6 +284,7 @@ class TestPriceStreamingIntegration:
     def test_pyth_prices_stream_when_not_logged_in(self, primedelta):
         """Pyth stream works without login."""
         from decimal import Decimal
+
         from primedelta.types import Price
 
         assert not primedelta.logged_in()
@@ -299,6 +301,7 @@ class TestPriceStreamingIntegration:
     def test_prices_stream_uses_pyth_when_not_logged_in(self, primedelta):
         """prices_stream() auto-switches to Pyth when not logged in."""
         from decimal import Decimal
+
         from primedelta.types import Price
 
         assert not primedelta.logged_in()
@@ -314,6 +317,7 @@ class TestPriceStreamingIntegration:
     def test_prices_stream_uses_broker_when_logged_in(self, primedelta_logged_in):
         """prices_stream() uses broker API when logged in."""
         from decimal import Decimal
+
         from primedelta.types import Price
 
         assert primedelta_logged_in.logged_in()

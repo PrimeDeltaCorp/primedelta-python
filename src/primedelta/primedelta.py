@@ -2,8 +2,8 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable, Optional, cast
 
-from siwe import SiweMessage
 from eth_abi import decode as abi_decode
+from siwe import SiweMessage
 from web3 import Web3
 from web3.contract.contract import ContractFunction
 from web3.exceptions import ContractLogicError
@@ -11,7 +11,6 @@ from web3.middleware import ExtraDataToPOAMiddleware
 from web3.types import RPCEndpoint, TxParams
 
 from primedelta.contracts import Contracts
-from primedelta.signer import LocalAccountSigner, Signer
 from primedelta.dex.handlers import (
     _AMMPoolHandler,
     _DclexPoolHandler,
@@ -28,8 +27,9 @@ from primedelta.dex.params import (
     RemoveLiquidityParams,
     SwapSide,
 )
-from primedelta.primedelta_client import APIError, PrimeDeltaClient, NotLoggedIn
+from primedelta.primedelta_client import APIError, NotLoggedIn, PrimeDeltaClient
 from primedelta.settings import SIWE_MESSAGE, resolve_endpoints
+from primedelta.signer import LocalAccountSigner, Signer
 from primedelta.types import (
     AccountStatus,
     ApplicationSettings,
@@ -815,7 +815,6 @@ class PrimeDelta:
         # state after a fresh receipt. When the chain rejects "nonce too low"
         # it tells us the expected nonce in the error — parse it and retry.
         import re
-
         import time
 
         last_error: Optional[TransactionFailed] = None

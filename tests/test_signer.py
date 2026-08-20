@@ -7,12 +7,12 @@ from eth_account.messages import encode_defunct
 
 from primedelta import PrimeDelta
 from primedelta.signer import (
+    _SECP256K1_N,
+    _SPKI_PREFIX,
     KmsSigner,
     LocalAccountSigner,
     MockBrowserSigner,
     Signer,
-    _SECP256K1_N,
-    _SPKI_PREFIX,
 )
 
 KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"

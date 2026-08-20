@@ -1,3 +1,4 @@
+from .browser import BrowserSigner
 from .dex.handlers import (
     PoolNotFound,
     PositionManagerNotConfigured,
@@ -21,6 +22,5 @@ from .primedelta import (
     WdelNotConfigured,
 )
 from .primedelta_client import NotLoggedIn, UserSignedMessageVerificationError
-from .browser import BrowserSigner
 from .signer import KmsSigner, LocalAccountSigner, MockBrowserSigner, Signer
 from .types import *
