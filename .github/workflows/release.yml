@@ -1,0 +1,52 @@
+name: Release
+
+# Build + validate a wheel/sdist on every version tag, and publish to PyPI via
+# OIDC Trusted Publishing. The publish job is guarded by an explicit repo
+# variable `PYPI_PUBLISH_ENABLED` — until it is set to "true", publish is
+# SKIPPED entirely, so tagging only builds and checks the artifacts. (A GitHub
+# Environment alone does NOT gate: a referenced-but-absent environment is
+# auto-created rule-free and the job runs. The variable guard makes "safe to
+# land" true by construction, independent of PyPI/environment state.)
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip build twine
+      - run: python -m build
+      # Fail the release if metadata / long-description won't render on PyPI.
+      - run: twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    # Hard guard: publish runs ONLY when the repo variable PYPI_PUBLISH_ENABLED
+    # is "true" (Settings → Secrets and variables → Actions → Variables). Until
+    # then this job is skipped and no upload is attempted.
+    if: ${{ vars.PYPI_PUBLISH_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    # The `pypi` environment adds a second layer (per-release approval) — set
+    # required reviewers on it so a release still needs a human sign-off.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/primedelta
+    permissions:
+      id-token: write # OIDC token for Trusted Publishing (no API token needed).
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
