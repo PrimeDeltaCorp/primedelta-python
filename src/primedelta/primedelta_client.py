@@ -115,7 +115,7 @@ class PrimeDeltaClient:
     def _decimal_or_none(value: Optional[str]) -> Optional[Decimal]:
         return Decimal(value) if value is not None else None
 
-    def _handle(self, response: requests.Response) -> dict:
+    def _handle(self, response: requests.Response) -> Any:
         if response.status_code in (400, 404):
             code = self._error_code(response)
             if code or response.status_code == 400:
@@ -129,20 +129,20 @@ class PrimeDeltaClient:
             return {}
         return response.json()
 
-    def _get(self, endpoint: str, params: Optional[dict[str, Any]] = None) -> dict:
+    def _get(self, endpoint: str, params: Optional[dict[str, Any]] = None) -> Any:
         return self._handle(self._request("GET", endpoint, params=params))
 
-    def _unsafe(self, method: str, endpoint: str, **kwargs: Any) -> dict:
+    def _unsafe(self, method: str, endpoint: str, **kwargs: Any) -> Any:
         response = self._request(method, endpoint, **kwargs)
         if response.status_code == 403 and self._csrf_token is not None:
             self._csrf_token = None
             response = self._request(method, endpoint, **kwargs)
         return self._handle(response)
 
-    def _post(self, endpoint: str, json_body: dict) -> dict:
+    def _post(self, endpoint: str, json_body: dict) -> Any:
         return self._unsafe("POST", endpoint, json_body=json_body)
 
-    def _delete(self, endpoint: str) -> dict:
+    def _delete(self, endpoint: str) -> Any:
         return self._unsafe("DELETE", endpoint)
 
     def get_nonce(self) -> str:

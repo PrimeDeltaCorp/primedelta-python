@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 
 from primedelta import PrimeDelta
-from primedelta.contracts import Contracts, ContractRef
+from primedelta.contracts import ContractRef, Contracts
 
 _DCLEX_POOL_ABI = [{"type": "function", "name": "swapExactInput"}]
 _UNIV3_POOL_ABI = [{"type": "function", "name": "swap"}]

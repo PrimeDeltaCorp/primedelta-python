@@ -7,13 +7,12 @@ from primedelta import (
     AccountNotVerified,
     AMMAddLiquidity,
     AMMRemoveLiquidity,
-    PrimeDelta,
     PriceFeedAddLiquidity,
     PriceFeedRemoveLiquidity,
+    PrimeDelta,
     SwapSide,
     TransactionFailed,
 )
-from primedelta.primedelta import _decode_revert
 from primedelta.contracts import (
     ContractRef,
     Contracts,
@@ -31,6 +30,7 @@ from primedelta.dex.handlers import (
     _resolve_stock_token,
     _RouterSwapHandler,
 )
+from primedelta.primedelta import _decode_revert
 from primedelta.types import AccountStatus
 
 _USER_ADDRESS = "0x" + "B" * 40

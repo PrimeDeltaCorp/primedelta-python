@@ -11,8 +11,8 @@ from primedelta.types import (
     ClaimableWithdrawal,
     Distribution,
     DistributionType,
-    Transfer,
     TransactionType,
+    Transfer,
     TransferHistoryStatus,
 )
 
