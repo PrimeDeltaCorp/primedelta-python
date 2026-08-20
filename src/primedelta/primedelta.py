@@ -28,12 +28,7 @@ from primedelta.dex.params import (
     SwapSide,
 )
 from primedelta.primedelta_client import APIError, PrimeDeltaClient, NotLoggedIn
-from primedelta.settings import (
-    PRIMEDELTA_APP_URL,
-    SIWE_DOMAIN,
-    SIWE_MESSAGE,
-    SIWE_URI,
-)
+from primedelta.settings import SIWE_MESSAGE, resolve_endpoints
 from primedelta.types import (
     AccountStatus,
     ApplicationSettings,
@@ -192,7 +187,9 @@ class PrimeDelta:
         # field; web3.py's default response formatter rejects anything > 32B.
         # Injecting the PoA middleware is a no-op on non-PoA chains.
         self._web3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
-        self._primedelta_client = PrimeDeltaClient()
+        # Backend + SIWE endpoints follow the network (env vars override).
+        self._endpoints = resolve_endpoints(network)
+        self._primedelta_client = PrimeDeltaClient(base_url=self._endpoints.base_url)
         # Contracts come from the SDK's bundled `networks/<name>.json` — not
         # from the backend. Pin addresses by editing that file.
         from primedelta import networks
@@ -233,10 +230,10 @@ class PrimeDelta:
         nonce = self._primedelta_client.get_nonce()
         issued_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         message = SiweMessage(
-            domain=SIWE_DOMAIN,
+            domain=self._endpoints.siwe_domain,
             address=self._signer.address,
             statement=SIWE_MESSAGE,
-            uri=SIWE_URI,
+            uri=self._endpoints.siwe_uri,
             version="1",
             chain_id=self._get_contracts().chain_id,
             nonce=nonce,
@@ -294,7 +291,7 @@ class PrimeDelta:
         backend marks the account as VERIFIED and the SDK can call
         `claim_digital_identity()` to mint the on-chain DID NFT.
         """
-        return PRIMEDELTA_APP_URL
+        return self._endpoints.app_url
 
     def open_verification_page(self) -> str:
         """Open the verification web page in the user's default browser.
