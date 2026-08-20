@@ -203,7 +203,27 @@ def _bootstrap_test_account(test_private_key, provider_url):
     if not test_private_key or test_private_key == "0x...":
         return  # Real fixtures will pytest.skip; nothing to bootstrap.
 
-    test_address = Web3().eth.account.from_key(test_private_key).address
+    w3 = Web3(Web3.HTTPProvider(provider_url))
+    test_address = w3.eth.account.from_key(test_private_key).address
+
+    if w3.eth.chain_id != 31337:
+        # Real chain (dev/testnet): funding + FakeVerification are local-only.
+        # The wallet must already be provisioned (funded + KYC + DID) — assert
+        # that and otherwise skip the session cleanly instead of trying to
+        # anvil-fund a live chain.
+        sdk = PrimeDelta(private_key=test_private_key, web3_provider_url=provider_url)
+        sdk.login()
+        try:
+            if sdk.get_account_status() != AccountStatus.DID_MINTED:
+                pytest.skip(
+                    "integration wallet is not VERIFIED_MINTED on this chain; "
+                    "provision it (fund + KYC + DID) before running"
+                )
+        finally:
+            sdk.logout()
+        return
+
+    # Local Anvil (31337): full bootstrap.
     _fund_test_account_eth_and_stablecoin(test_address, provider_url)
 
     sdk = PrimeDelta(private_key=test_private_key, web3_provider_url=provider_url)
