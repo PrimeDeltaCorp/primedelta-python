@@ -16,15 +16,16 @@
 | 4 | Feature completeness (backend + on-chain gaps) | ✅ merged #13–#18 (messages/fiat/cost/helpers, dUSD burn voucher, allowances, DID reads, quoting, V3 lifecycle, send_del) |
 | 5 | Multi-network | ✅ testnet #19 (on-chain-verified) + per-network endpoints/SIWE #23; ⛔ **mainnet.json blocked** — see below |
 | 6 | Test hardening + drift test | ✅ client transport tests #20, live-contract-drift guard #21, env-aware happy-path #24, coverage gate 85% #25 |
-| 7 | Packaging, CI, docs, publish | ✅ py.typed/metadata/CHANGELOG #22, examples #26, README+CONTRIBUTING #27, isort+mypy gates #30, gated release pipeline #31; ⛔ **publish blocked on license** |
+| 7 | Packaging, CI, docs, publish | ✅ py.typed/metadata/CHANGELOG #22, examples #26, README+CONTRIBUTING #27, isort+mypy gates #30, gated release pipeline #31; ✅ **MIT license**; publish pending PyPI Trusted Publisher + `PYPI_PUBLISH_ENABLED` |
 | 5.3 | Config-refresh runbook | ✅ merged #32 |
 
 ### Externally blocked (not code — need a decision/access/redeploy)
-- **7.3 License / publish (7.6/7.8):** package is not published under the current
-  non-commercial LICENSE. Release infra is armed — the `Release` workflow builds +
-  `twine check`s on a `v*` tag and publishes via OIDC once the license is chosen,
-  a PyPI Trusted Publisher is configured, and the `PYPI_PUBLISH_ENABLED` repo
-  variable is set to `true`. See `RELEASING.md`.
+- **Publish (7.6/7.8):** ✅ license decided — **MIT** (publication approved). Release
+  infra is armed — the `Release` workflow builds + `twine check`s on a `v*` tag and
+  publishes via OIDC once a PyPI Trusted Publisher is configured and the
+  `PYPI_PUBLISH_ENABLED` repo variable is set to `true`. See `RELEASING.md`. This is
+  the only remaining step to a first published release, and it's repo-settings +
+  PyPI-side (not code).
 - **mainnet.json:** intentionally NOT shipped. The public `chain-mainnet.primedelta.io`
   RPC serves a **re-genesised** chain 4109 (block ~16k on 2026-08-20, well below the
   deployment's `initial_block` 27352) where every documented mainnet address has
