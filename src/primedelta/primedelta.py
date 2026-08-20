@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 from siwe import SiweMessage
 from eth_abi import decode as abi_decode
@@ -8,6 +8,7 @@ from web3 import Web3
 from web3.contract.contract import ContractFunction
 from web3.exceptions import ContractLogicError
 from web3.middleware import ExtraDataToPOAMiddleware
+from web3.types import RPCEndpoint, TxParams
 
 from primedelta.contracts import Contracts
 from primedelta.signer import LocalAccountSigner, Signer
@@ -512,7 +513,9 @@ class PrimeDelta:
 
     def get_native_del_balance(self) -> Decimal:
         """Read native DEL balance from chain."""
-        raw = self._web3.eth.get_balance(self._signer.address)
+        raw = self._web3.eth.get_balance(
+            self._web3.to_checksum_address(self._signer.address)
+        )
         return Decimal(raw) / Decimal(10**18)
 
     def wrap_del(self, amount: Decimal) -> str:
@@ -868,7 +871,9 @@ class PrimeDelta:
                 "gas": 5_000_000,
             }
             try:
-                transaction = contract_function.build_transaction(tx_params)
+                transaction = dict(
+                    contract_function.build_transaction(cast(TxParams, tx_params))
+                )
             except ContractLogicError as e:
                 self._next_nonce = None
                 trace = self._try_debug_trace_call(
@@ -904,7 +909,9 @@ class PrimeDelta:
             # actual revert.
             reason = "reverted with no reason"
             try:
-                self._web3.eth.call(transaction, receipt["blockNumber"] - 1)
+                self._web3.eth.call(
+                    cast(TxParams, transaction), receipt["blockNumber"] - 1
+                )
             except ContractLogicError as e:
                 reason = _decode_revert(e)
             except Exception as e:
@@ -955,7 +962,7 @@ class PrimeDelta:
         chain's view hasn't caught up since our last submission (some Besu/PoA
         nodes lag), bump past our last-used value. Never goes backwards.
         """
-        chain_nonce = self._web3.eth.get_transaction_count(
+        chain_nonce: int = self._web3.eth.get_transaction_count(
             self._web3.to_checksum_address(self._signer.address),
             "pending",
         )
@@ -972,7 +979,7 @@ class PrimeDelta:
         """
         try:
             return self._web3.manager.request_blocking(
-                "debug_traceCall",
+                RPCEndpoint("debug_traceCall"),
                 [tx, "latest", {"tracer": "callTracer"}],
             )
         except Exception:
