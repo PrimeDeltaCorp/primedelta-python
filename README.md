@@ -31,6 +31,10 @@ tx = primedelta.swap_exact_input(
 )
 ```
 
+## For autonomous agents
+
+If an AI agent operates this SDK to trade, read [**AGENTS.md**](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/AGENTS.md) — the operating handbook: capability map, the mandatory safe pattern (quote → min-out → market-hours check → send), and the fair-use / anti-abuse policy. Background + readiness analysis: [docs/agentic-trading-research.md](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/docs/agentic-trading-research.md).
+
 ## Mint platform examples
 
 - [Login and logout](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/mint-platform/login_and_logout.py)
