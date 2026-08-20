@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any, Callable, Optional, cast
+from typing import Any, Callable, Iterator, Optional, cast
 
 from eth_abi import decode as abi_decode
 from siwe import SiweMessage
@@ -10,7 +10,7 @@ from web3.exceptions import ContractLogicError
 from web3.middleware import ExtraDataToPOAMiddleware
 from web3.types import RPCEndpoint, TxParams
 
-from primedelta.contracts import Contracts
+from primedelta.contracts import ContractRef, Contracts
 from primedelta.dex.handlers import (
     _AMMPoolHandler,
     _DclexPoolHandler,
@@ -44,6 +44,7 @@ from primedelta.types import (
     OrderStatus,
     Portfolio,
     PortfolioHistory,
+    Price,
     Stock,
     Transfer,
 )
@@ -337,7 +338,7 @@ class PrimeDelta:
             )
         )
 
-    def request_stablecoin_withdrawal(self, amount: Decimal):
+    def request_stablecoin_withdrawal(self, amount: Decimal) -> int:
         account_status = self._primedelta_client.get_account_status()
         if account_status not in [AccountStatus.VERIFIED, AccountStatus.DID_MINTED]:
             raise AccountNotVerified()
@@ -399,7 +400,7 @@ class PrimeDelta:
             )
         )
 
-    def request_stock_withdrawal(self, stock_symbol: str, amount: int):
+    def request_stock_withdrawal(self, stock_symbol: str, amount: int) -> int:
         account_status = self._primedelta_client.get_account_status()
         if account_status != AccountStatus.DID_MINTED:
             raise AccountNotVerified()
@@ -543,7 +544,7 @@ class PrimeDelta:
             wdel_contract.functions.withdraw(int(amount * Decimal(10**18))),
         )
 
-    def _require_wdel(self):
+    def _require_wdel(self) -> ContractRef:
         wdel = self._get_contracts().core.wdel
         if wdel is None:
             raise WdelNotConfigured()
@@ -607,7 +608,7 @@ class PrimeDelta:
     def stocks(self) -> dict[str, Stock]:
         return self._primedelta_client.stocks()
 
-    def prices_stream(self, symbols: Optional[list[str]] = None):
+    def prices_stream(self, symbols: Optional[list[str]] = None) -> Iterator[Price]:
         """Stream real-time price updates.
 
         When logged in, uses the broker's authenticated price stream.
@@ -638,7 +639,9 @@ class PrimeDelta:
                 symbols = list(self.stocks().keys())
             return self._primedelta_client.pyth_prices_stream(symbols)
 
-    def pyth_prices_stream(self, symbols: Optional[list[str]] = None):
+    def pyth_prices_stream(
+        self, symbols: Optional[list[str]] = None
+    ) -> Iterator[Price]:
         """Stream prices from Pyth Hermes API.
 
         This method does not require authentication and can be used when not logged in.
@@ -787,7 +790,7 @@ class PrimeDelta:
             tokens_owed_1=p[11],
         )
 
-    def _npm_contract(self):
+    def _npm_contract(self) -> Any:
         from primedelta.dex.handlers import PositionManagerNotConfigured
 
         npm_ref = self._get_contracts().core.position_manager
@@ -798,7 +801,7 @@ class PrimeDelta:
             abi=npm_ref.abi,
         )
 
-    def _handler_for(self, pool_type: PoolType):
+    def _handler_for(self, pool_type: PoolType) -> Any:
         if pool_type == PoolType.PRICE_FEED:
             return self._dclex_handler
         if pool_type == PoolType.AMM:
@@ -970,7 +973,7 @@ class PrimeDelta:
         self._next_nonce = chain_nonce
         return chain_nonce
 
-    def _try_debug_trace_call(self, tx: dict) -> Optional[Any]:
+    def _try_debug_trace_call(self, tx: dict[str, Any]) -> Optional[Any]:
         """Attempt `debug_traceCall` for a richer call trace.
 
         Many public RPCs disable this. We swallow any failure so error
@@ -1080,7 +1083,7 @@ class PrimeDelta:
             return contracts.core.stablecoin.address, 6
         return _resolve_stock_token(self._web3, contracts, token_symbol), 18
 
-    def _erc20(self, address: str):
+    def _erc20(self, address: str) -> Any:
         from primedelta.dex.handlers import _require_pool_abi
 
         return self._web3.eth.contract(
@@ -1104,7 +1107,7 @@ class PrimeDelta:
             return False
         return self._did_contract().functions.isValid(token_id).call()
 
-    def _did_contract(self):
+    def _did_contract(self) -> Any:
         did = self._get_contracts().core.digital_identity
         return self._web3.eth.contract(
             address=self._web3.to_checksum_address(did.address), abi=did.abi

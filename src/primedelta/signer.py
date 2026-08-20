@@ -27,7 +27,7 @@ class Signer(Protocol):
     def sign_message(self, message: str) -> str:
         raise NotImplementedError
 
-    def submit_transaction(self, web3: Any, transaction: dict) -> Any:
+    def submit_transaction(self, web3: Any, transaction: dict[str, Any]) -> Any:
         raise NotImplementedError
 
 
@@ -67,7 +67,7 @@ class LocalAccountSigner:
     def sign_message(self, message: str) -> str:
         return self._account.sign_message(encode_defunct(text=message)).signature.hex()
 
-    def submit_transaction(self, web3: Any, transaction: dict) -> Any:
+    def submit_transaction(self, web3: Any, transaction: dict[str, Any]) -> Any:
         signed = self._account.sign_transaction(transaction)
         return web3.eth.send_raw_transaction(signed.raw_transaction)
 
@@ -94,7 +94,7 @@ class MockBrowserSigner:
     def sign_message(self, message: str) -> str:
         return self._account.sign_message(encode_defunct(text=message)).signature.hex()
 
-    def submit_transaction(self, web3: Any, transaction: dict) -> Any:
+    def submit_transaction(self, web3: Any, transaction: dict[str, Any]) -> Any:
         prepared = dict(transaction)
         prepared.setdefault(
             "nonce", web3.eth.get_transaction_count(self._account.address, "pending")
@@ -115,7 +115,7 @@ def _pubkey_from_spki_der(der: bytes) -> bytes:
     return der[-64:]
 
 
-def _parse_der_signature(der: bytes) -> tuple:
+def _parse_der_signature(der: bytes) -> tuple[int, int]:
     if not der or der[0] != 0x30:
         raise ValueError("malformed DER signature")
     index = 2
@@ -167,7 +167,7 @@ class KmsSigner:
     def address(self) -> str:
         return self._address
 
-    def _sign_digest(self, digest: bytes) -> tuple:
+    def _sign_digest(self, digest: bytes) -> tuple[int, int, int]:
         response = self._kms.sign(
             KeyId=self._key_id,
             Message=digest,
@@ -194,7 +194,7 @@ class KmsSigner:
         )
         return signature.hex()
 
-    def submit_transaction(self, web3: Any, transaction: dict) -> Any:
+    def submit_transaction(self, web3: Any, transaction: dict[str, Any]) -> Any:
         from eth_account._utils.legacy_transactions import (
             encode_transaction,
             serializable_unsigned_transaction_from_dict,

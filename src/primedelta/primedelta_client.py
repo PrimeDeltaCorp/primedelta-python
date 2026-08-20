@@ -1,7 +1,7 @@
 import json
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 from urllib.parse import urlsplit
 
 import requests
@@ -139,7 +139,7 @@ class PrimeDeltaClient:
             response = self._request(method, endpoint, **kwargs)
         return self._handle(response)
 
-    def _post(self, endpoint: str, json_body: dict) -> Any:
+    def _post(self, endpoint: str, json_body: dict[str, Any]) -> Any:
         return self._unsafe("POST", endpoint, json_body=json_body)
 
     def _delete(self, endpoint: str) -> Any:
@@ -183,7 +183,7 @@ class PrimeDeltaClient:
         return [self._parse_transfer(item) for item in response["items"]]
 
     @staticmethod
-    def _parse_transfer(item: dict) -> Transfer:
+    def _parse_transfer(item: dict[str, Any]) -> Transfer:
         return Transfer(
             transaction_id=item["transactionId"],
             amount=Decimal(item["amount"]),
@@ -394,7 +394,7 @@ class PrimeDeltaClient:
     def prices_stream_access_token(self) -> str:
         return self._get("/prices-stream-token/")["token"]
 
-    def prices_stream(self, prices_stream_access_token: str):
+    def prices_stream(self, prices_stream_access_token: str) -> Iterator[Price]:
         for sse_message in SSEClient(
             self._url("/prices-stream/"),
             session=self._session,
@@ -440,7 +440,7 @@ class PrimeDeltaClient:
         response = self._post("/fiat-withdrawals/", {"amount": str(amount)})
         return response["withdrawalId"]
 
-    def _order_cost(self, response: dict) -> OrderCost:
+    def _order_cost(self, response: dict[str, Any]) -> OrderCost:
         return OrderCost(
             total=self._decimal_or_none(response["total"]),
             service_fee=self._decimal_or_none(response["serviceFee"]),
@@ -532,7 +532,7 @@ class PrimeDeltaClient:
                     break
         return feed_ids
 
-    def pyth_prices_stream(self, symbols: list[str]):
+    def pyth_prices_stream(self, symbols: list[str]) -> Iterator[Price]:
         feed_ids = self.get_pyth_feed_ids(symbols)
         if not feed_ids:
             return

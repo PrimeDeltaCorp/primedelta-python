@@ -87,7 +87,7 @@ run().then(
 """
 
 
-def _render_page(op: str, params: dict, state: str) -> str:
+def _render_page(op: str, params: dict[str, Any], state: str) -> str:
     config = json.dumps({"op": op, "params": params, "state": state})
     config = (
         config.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
@@ -100,7 +100,7 @@ class _LoopbackBridge:
         self._timeout = timeout
 
     def request(self, html: str, state: str, opener: Callable[[str], None]) -> Any:
-        result_box: dict = {}
+        result_box: dict[str, Any] = {}
         done = threading.Event()
 
         class Handler(BaseHTTPRequestHandler):
@@ -161,7 +161,9 @@ class BrowserSigner:
 
     fills_gas_and_nonce = True
 
-    def __init__(self, *, chain: Optional[dict] = None, timeout: float = 180.0) -> None:
+    def __init__(
+        self, *, chain: Optional[dict[str, Any]] = None, timeout: float = 180.0
+    ) -> None:
         self._chain = chain
         self._bridge = _LoopbackBridge(timeout)
         self._address: Optional[str] = None
@@ -169,7 +171,7 @@ class BrowserSigner:
     def _open(self, url: str) -> None:
         webbrowser.open(url)
 
-    def _run(self, op: str, params: dict) -> Any:
+    def _run(self, op: str, params: dict[str, Any]) -> Any:
         params = {**params, "chain": self._chain}
         state = secrets.token_urlsafe(32)
         html = _render_page(op, params, state)
@@ -184,7 +186,7 @@ class BrowserSigner:
     def sign_message(self, message: str) -> str:
         return self._run("personal_sign", {"message": message, "address": self.address})
 
-    def submit_transaction(self, web3: Any, transaction: dict) -> Any:
+    def submit_transaction(self, web3: Any, transaction: dict[str, Any]) -> Any:
         tx = {
             "from": transaction["from"],
             "to": transaction["to"],
