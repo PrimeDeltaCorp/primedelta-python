@@ -37,8 +37,9 @@ order):
 | dev | `chainId` | `core` / `router` / `v3Main` |
 | testnet + mainnet | `chain_id` | `core` / `router_stack` / `v3` |
 
-For `position_manager` it prefers `router_stack.DclexPositionManager` (the
-canonical PM) over the unused `v3.DclexPositionManager_phase3_unused`.
+For `position_manager` the generator reads `DclexPositionManager` from
+`router_stack` (canonical, testnet/mainnet) or `v3Main` (dev) — it never reads
+the stale `v3.DclexPositionManager_phase3_unused`.
 
 ABIs are **not** regenerated — they come from `src/primedelta/networks/abis/`.
 If a contract's ABI changed in the redeploy, update the corresponding file there
