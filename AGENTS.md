@@ -83,7 +83,7 @@ Signers: `LocalAccountSigner` (raw key / keystore / mnemonic), `KmsSigner` (AWS 
 
 **4.2 DID / KYC gating.** Every custodial and on-chain equity/dUSD movement requires `DID_MINTED` and a **valid** DID (`is_valid()` → `True`). On `AccountNotVerified`: if `VERIFIED`, call `claim_digital_identity()`; if below, the user must finish KYC at `verification_url()`. A revoked/blocked DID makes `is_valid()` false and reverts all trading — treat as terminal, not retryable.
 
-**4.3 Slippage / min-out. Non-negotiable.** Never call `swap_exact_input` with `min_amount_out=0` or `swap_exact_output` with unbounded `max_amount_in` in production. Derive the bound from `quote_swap` with an explicit slippage budget. Examples use `0` for readability only.
+**4.3 Slippage / min-out. Non-negotiable.** Never call `swap_exact_input` with `min_amount_out=0` or `swap_exact_output` with unbounded `max_amount_in` in production. Derive the bound from `quote_swap` with an explicit slippage budget (or `min_out_from_quote(quote, slippage_bps)`). Some example FILES show `0` for readability — never do so in production.
 
 **4.4 Allowance hygiene.** Prefer **exact-amount, short-lived approvals** over unbounded MAX approvals; check `allowance(symbol, spender)` first, `revoke_approval(symbol, spender)` when done. Do not leave standing infinite approvals across sessions.
 
@@ -104,7 +104,7 @@ PrimeDelta welcomes automated, legitimate trading agents and does **not** tolera
 
 - **Identity is mandatory and revocable.** Every equity and dUSD movement is gated on-chain by your Digital Identity (DID). We can invalidate a DID, which immediately reverts all of that identity's transfers, swaps, and LP actions, and we can block an account so pending withdrawals cancel and no new orders are accepted. Operating multiple identities to evade limits (Sybil) is grounds for invalidation of all linked identities.
 - **Prices are bounded, expiring, and market-hours-only.** Signed equity prices are withheld when they deviate beyond set tolerances, are stale, or fall outside US market hours; the on-chain oracle rejects stale, future-dated, or non-monotonic price updates. A swap built on a withheld or expired price reverts. There is no valid way to trade an equity pool against a stale or off-hours price — the attempt simply fails.
-- **Self-dealing is refused.** An order that crosses your own opposite-side resting order is rejected.
+- **Self-dealing is refused.** A limit order that crosses your own opposite-side resting order at the same price is rejected.
 - **Vouchers are single-use.** Mint/burn/withdrawal authorizations are nonce-bound and cannot be replayed.
 - **Conduct is logged, reviewed, and acted on.** Trading activity is logged and subject to review. Accounts and identities involved in wash trading, quote-stuffing, oracle-timing abuse, or attempts to evade market-hours or KYC controls will be blocked and their DIDs invalidated. Repeat or automated abuse results in permanent removal.
 
