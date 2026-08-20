@@ -1,0 +1,47 @@
+name: Release
+
+# Build + validate a wheel/sdist on every version tag, and publish to PyPI via
+# OIDC Trusted Publishing. The publish job is gated on the `pypi` GitHub
+# Environment: until that environment (and the PyPI trusted publisher) are
+# configured, tagging builds and checks the artifacts but does NOT publish, so
+# this workflow is safe to land before the license/publish decision is final.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip build twine
+      - run: python -m build
+      # Fail the release if metadata / long-description won't render on PyPI.
+      - run: twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Gate: this environment must exist in repo settings (with the PyPI trusted
+    # publisher configured) before the job can run. Absent it, publish is a
+    # no-op pending setup — build/twine-check above still guard the tag.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/primedelta
+    permissions:
+      id-token: write # OIDC token for Trusted Publishing (no API token needed).
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

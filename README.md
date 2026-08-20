@@ -78,7 +78,7 @@ Addresses and ABIs ship inside the package under [`networks/`](https://github.co
 
 ## Development
 
-See [CONTRIBUTING.md](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/CONTRIBUTING.md) for local setup, tests, and formatting. Release notes live in [CHANGELOG.md](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/CHANGELOG.md).
+See [CONTRIBUTING.md](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/CONTRIBUTING.md) for local setup, tests, and formatting, and [RELEASING.md](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/RELEASING.md) for cutting a release. Release notes live in [CHANGELOG.md](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/CHANGELOG.md).
 
 ## License
 
