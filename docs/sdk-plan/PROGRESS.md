@@ -3,20 +3,42 @@
 > Living status log for the SDK revive effort. Update at the end of each work session.
 > Plan: `02-plan.md` · Findings: `01-recon-findings.md` · Baseline: `00-current-inventory.md`.
 
-## Status: PHASE 1 GREEN — Signer abstraction live-verified; PR #7 open (Phase 0 #5 + on-chain fixes #6 merged)
+## Status: PLAN COMPLETE (2026-08-20) — all executable phases merged; only externally-blocked items remain (license/publish, mainnet re-deploy, testnet KYC wallet)
 
 | Phase | Title | State |
 | --- | --- | --- |
 | Recon | Inventory + gap map (5-agent) | ✅ done 2026-08-18 |
-| 0 | Validate & un-break the core | ✅ merged (#5) 2026-08-19 (reality gate PASS on dev) |
-| — | On-chain fixes (withdraw/deposit/AMM) | ✅ merged (#6) 2026-08-19 (adversarial-audit driven; live round-trip) |
-| 1 | Signer abstraction | ✅ done 2026-08-19 → PR #7 (cold review clean; live dev) |
-| 2 | Headless provisioning (keystore/mnemonic/KMS) | ⬜ next |
-| 3 | MetaMask bridge (BrowserSigner) | ⬜ not started |
-| 4 | Feature completeness (backend + on-chain gaps) | ⬜ not started |
-| 5 | Multi-network (testnet/mainnet) | ⬜ not started |
-| 6 | Test hardening + drift test | ⬜ not started |
-| 7 | Packaging, CI, docs, publish | ⬜ not started |
+| 0 | Validate & un-break the core | ✅ merged #5 (reality gate PASS on dev) |
+| — | On-chain fixes (withdraw/deposit/AMM) | ✅ merged #6 (adversarial-audit driven; live round-trip) |
+| 1 | Signer abstraction | ✅ merged #7 |
+| 2 | Headless provisioning (keystore/mnemonic/KMS) | ✅ merged (LocalAccountSigner from_keystore/from_mnemonic, KmsSigner) |
+| 3 | MetaMask bridge (BrowserSigner) | ✅ merged (loopback bridge + MockBrowserSigner) |
+| 4 | Feature completeness (backend + on-chain gaps) | ✅ merged #13–#18 (messages/fiat/cost/helpers, dUSD burn voucher, allowances, DID reads, quoting, V3 lifecycle, send_del) |
+| 5 | Multi-network | ✅ testnet #19 (on-chain-verified) + per-network endpoints/SIWE #23; ⛔ **mainnet.json blocked** — see below |
+| 6 | Test hardening + drift test | ✅ client transport tests #20, live-contract-drift guard #21, env-aware happy-path #24, coverage gate 85% #25 |
+| 7 | Packaging, CI, docs, publish | ✅ py.typed/metadata/CHANGELOG #22, examples #26, README+CONTRIBUTING #27, isort+mypy gates #30, gated release pipeline #31; ⛔ **publish blocked on license** |
+| 5.3 | Config-refresh runbook | ✅ merged #32 |
+
+### Externally blocked (not code — need a decision/access/redeploy)
+- **7.3 License / publish (7.6/7.8):** package is not published under the current
+  non-commercial LICENSE. Release infra is armed — the `Release` workflow builds +
+  `twine check`s on a `v*` tag and publishes via OIDC once the license is chosen,
+  a PyPI Trusted Publisher is configured, and the `PYPI_PUBLISH_ENABLED` repo
+  variable is set to `true`. See `RELEASING.md`.
+- **mainnet.json:** intentionally NOT shipped. The public `chain-mainnet.primedelta.io`
+  RPC serves a **re-genesised** chain 4109 (block ~16k on 2026-08-20, well below the
+  deployment's `initial_block` 27352) where every documented mainnet address has
+  zero bytecode — i.e. the 2026-07-13 deploy is on an abandoned chain state. Needs
+  ops to re-deploy (or confirm the correct RPC + `addresses.json`), then run the
+  generator (`docs/refresh-network-config.md`).
+- **Full testnet authed flow:** endpoint/SIWE resolution + read paths verified;
+  a complete login→order→swap needs a VERIFIED_MINTED testnet wallet.
+
+### Follow-ups (small, non-blocking)
+- Local-Anvil integration bootstrap still references a removed `_token` attr
+  (cookie-auth migration fallout) — unreachable on dev/testnet; fix when a local
+  Anvil stack is available.
+- Tighten mypy from the current lenient config toward strict, incrementally.
 
 **Phase 1 (Signer) notes:** `signer.py` = `Signer` Protocol + `LocalAccountSigner` (`from_key`). `PrimeDelta(signer=)`;
 `private_key=` is now a thin back-compat wrapper. `login()` and the tx builder go through `self._signer`
