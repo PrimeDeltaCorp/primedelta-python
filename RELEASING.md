@@ -23,16 +23,23 @@ following semantic versioning, and tag the merge commit `vX.Y.Z` to match.
 
 ## One-time publish setup (pending)
 
-The `publish` job is gated on a GitHub Environment named `pypi`, so tagging is
-safe today — it builds and checks the artifacts but publishes nothing until:
+The `publish` job has a **hard guard**: `if: vars.PYPI_PUBLISH_ENABLED == 'true'`.
+Until that repo variable is set to `true`, publish is **skipped** and a tag only
+builds and validates artifacts — safe today. (A GitHub Environment alone does
+NOT gate: a referenced-but-absent environment is auto-created rule-free and the
+job runs, so the variable guard is what actually protects you.)
+
+To enable publishing, all of:
 
 1. The **license** is finalized (see the plan / `LICENSE`) — the package is not
    published under the current non-commercial license.
 2. A PyPI project `primedelta` exists with a **Trusted Publisher** pointing at
    this repo + the `Release` workflow + the `pypi` environment
    (PyPI → project → Publishing → Add a GitHub Actions publisher).
-3. A `pypi` Environment is created in repo settings (optionally with required
-   reviewers) so releases are approved before upload.
+3. The `pypi` Environment is created in repo settings **with required reviewers**
+   so each release needs a human sign-off before upload.
+4. The repo variable `PYPI_PUBLISH_ENABLED` is set to `true`
+   (Settings → Secrets and variables → Actions → Variables).
 
-Until then a tag produces validated build artifacts and the publish job waits on
-the (absent) environment.
+Until step 4, a tag produces validated build artifacts and the publish job is
+skipped.
