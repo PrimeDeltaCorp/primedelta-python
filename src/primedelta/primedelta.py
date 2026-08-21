@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable, Iterator, Optional, cast
@@ -48,6 +49,11 @@ from primedelta.types import (
     Stock,
     Transfer,
 )
+
+# Placeholder "tx hash" returned by the send path while crafting (see `craft`).
+# It is never a real hash — the tx is captured, not broadcast — and callers of
+# `craft` ignore it in favour of the captured unsigned-tx list.
+_CRAFT_SENTINEL = "0x" + "0" * 64
 
 
 class NotEnoughFunds(Exception):
@@ -207,6 +213,10 @@ class PrimeDelta:
         # the previous tx's receipt is back. Track locally to avoid collisions
         # in chained submissions (e.g. approve → swap, mint → remove).
         self._next_nonce: Optional[int] = None
+        # When non-None, the send path captures unsigned transactions into this
+        # list instead of broadcasting them (see `craft`). Non-custodial flow:
+        # this client builds the calldata; an external wallet signs and sends.
+        self._crafting: Optional[list[dict[str, Any]]] = None
         self._dclex_handler = _DclexPoolHandler(
             web3=self._web3,
             account=self._signer,
@@ -233,6 +243,57 @@ class PrimeDelta:
 
     def _get_contracts(self) -> Contracts:
         return self._contracts
+
+    @contextmanager
+    def _crafting_scope(self) -> Iterator[list[dict[str, Any]]]:
+        if self._crafting is not None:
+            raise RuntimeError("craft() cannot be nested")
+        captured: list[dict[str, Any]] = []
+        self._crafting = captured
+        try:
+            yield captured
+        finally:
+            self._crafting = None
+
+    @staticmethod
+    def _as_unsigned(tx: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "from": tx["from"],
+            "to": tx["to"],
+            "value": int(tx.get("value") or 0),
+            "data": tx.get("data") or "0x",
+            "chainId": tx["chainId"],
+        }
+
+    def craft(self, action: Callable[[], Any]) -> list[dict[str, Any]]:
+        """Run a trading ``action`` WITHOUT broadcasting and return the unsigned
+        transaction(s) it would have sent, for an external wallet to sign.
+
+        Non-custodial flow (per Web3/MCP security guidance): this SDK builds the
+        calldata but never signs a fund-moving transaction here — the returned
+        dicts go to the user's own wallet (MetaMask / hardware) to review and
+        sign. ``action`` is any zero-arg callable that would normally send a
+        transaction::
+
+            txs = pd.craft(
+                lambda: pd.swap_exact_input(
+                    "AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("10"), Decimal("0")
+                )
+            )
+
+        Each returned dict is ``{from, to, value, data, chainId}``. Gas and
+        nonce are intentionally omitted for the signing wallet to fill. A
+        multi-step action (e.g. approve -> swap) returns one dict per
+        transaction, in send order.
+
+        The action still reads the chain and backend to build calldata (pool
+        addresses, allowances, signed prices, deadlines). For oracle-priced
+        instruments the signed price and deadline baked into the calldata expire
+        — sign and broadcast promptly.
+        """
+        with self._crafting_scope() as captured:
+            action()
+        return [self._as_unsigned(tx) for tx in captured]
 
     def login(self) -> None:
         nonce = self._primedelta_client.get_nonce()
@@ -856,7 +917,7 @@ class PrimeDelta:
             calldata = contract_function._encode_transaction_data()
         except Exception:
             calldata = None
-        if self._signer.fills_gas_and_nonce:
+        if self._signer.fills_gas_and_nonce or self._crafting is not None:
             transaction = {
                 "from": self._signer.address,
                 "to": to_address,
@@ -864,6 +925,18 @@ class PrimeDelta:
                 "data": calldata,
                 "chainId": self._get_contracts().chain_id,
             }
+            if self._crafting is not None:
+                # Crafting: never broadcast. Capture the unsigned tx for an
+                # external wallet to sign, and skip submit + receipt wait.
+                if calldata is None:
+                    raise TransactionFailed(
+                        fn_name,
+                        "could not encode calldata to craft an unsigned tx",
+                        to=to_address,
+                        data=calldata,
+                    )
+                self._crafting.append(transaction)
+                return _CRAFT_SENTINEL
         else:
             tx_params: dict[str, Any] = {
                 "from": self._signer.address,
@@ -939,12 +1012,17 @@ class PrimeDelta:
 
     def _build_and_send_value_transaction_once(self, to: str, value: int) -> str:
         to = self._web3.to_checksum_address(to)
-        transaction = {
+        transaction: dict[str, Any] = {
             "from": self._signer.address,
             "to": to,
             "value": value,
             "chainId": self._get_contracts().chain_id,
         }
+        if self._crafting is not None:
+            # Crafting: capture the unsigned value transfer, do not broadcast.
+            transaction["data"] = "0x"
+            self._crafting.append(transaction)
+            return _CRAFT_SENTINEL
         if not self._signer.fills_gas_and_nonce:
             transaction["gasPrice"] = self._web3.eth.gas_price
             transaction["nonce"] = self._reserve_nonce()

@@ -7,6 +7,12 @@ semantic versioning once published.
 ## [Unreleased]
 
 ### Added
+- **Non-custodial crafting** — `craft(action)` runs any trading action (swap,
+  order, LP, transfer) without broadcasting and returns the unsigned
+  transaction(s) it would have sent, as `{from, to, value, data, chainId}` with
+  gas and nonce left for an external wallet to fill. Multi-step actions (e.g.
+  approve → swap) return one dict per transaction, in send order. This lets an
+  agent build calldata while the user's own wallet holds the key and signs.
 - **Signer abstraction** — `Signer` protocol with `LocalAccountSigner`
   (`from_key` / `from_keystore` / `from_mnemonic`), `KmsSigner` (AWS KMS
   secp256k1, key never leaves the HSM), `BrowserSigner` (loopback bridge to a
