@@ -61,7 +61,7 @@ class TestCraft:
         erc20.functions.approve.assert_called_once_with("0xSPENDER", 5_000_000)
         pd._signer.submit_transaction.assert_not_called()
 
-    def test_multi_step_action_captures_each_tx_in_order(self):
+    def test_multi_step_action_captures_distinct_txs_in_order(self):
         pd = _pd()
         erc20 = MagicMock()
         pd._erc20 = MagicMock(return_value=erc20)
@@ -71,15 +71,32 @@ class TestCraft:
         fn.fn_name = "approve"
         fn._encode_transaction_data.return_value = "0xAPPROVE"
 
-        def two_approvals():
-            pd.approve("dUSD", "0xA", Decimal("5"))
-            pd.approve("dUSD", "0xB", Decimal("7"))
+        def approve_then_transfer():
+            pd.approve("dUSD", "0xSPENDER", Decimal("5"))
+            pd.send_del("0xRECIPIENT", Decimal("0.001"))
 
-        txs = pd.craft(two_approvals)
+        txs = pd.craft(approve_then_transfer)
 
-        assert len(txs) == 2
-        assert erc20.functions.approve.call_args_list[0].args == ("0xA", 5_000_000)
-        assert erc20.functions.approve.call_args_list[1].args == ("0xB", 7_000_000)
+        chain_id = pd._get_contracts().chain_id
+        # a contract-call approve, then a native transfer — two DISTINCT txs in
+        # send order (not two copies of one captured dict).
+        assert txs == [
+            {
+                "from": "0xME",
+                "to": "0xTOKEN",
+                "value": 0,
+                "data": "0xAPPROVE",
+                "chainId": chain_id,
+            },
+            {
+                "from": "0xME",
+                "to": "0xRECIPIENT",
+                "value": 10**15,
+                "data": "0x",
+                "chainId": chain_id,
+            },
+        ]
+        assert txs[0] != txs[1]
 
     def test_raises_when_calldata_cannot_be_encoded(self):
         pd = _pd()

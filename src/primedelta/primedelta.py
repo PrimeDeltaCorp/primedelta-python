@@ -290,6 +290,11 @@ class PrimeDelta:
         addresses, allowances, signed prices, deadlines). For oracle-priced
         instruments the signed price and deadline baked into the calldata expire
         — sign and broadcast promptly.
+
+        Not thread-safe: crafting toggles an instance-level flag, so do not share
+        one client across threads while a ``craft`` is in flight — a concurrent
+        fund-moving call on the same client would be captured instead of
+        broadcast. Use a separate client per thread, or don't overlap them.
         """
         with self._crafting_scope() as captured:
             action()
