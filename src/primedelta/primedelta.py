@@ -56,8 +56,9 @@ from primedelta.types import (
 # `craft` ignore it in favour of the captured unsigned-tx list.
 _CRAFT_SENTINEL = "0x" + "0" * 64
 
-# JSON-RPC request timeout (seconds) so a hung node can't stall a caller/task
-# indefinitely — without it web3's HTTPProvider waits forever.
+# JSON-RPC request timeout (seconds). web3 v7's HTTPProvider already defaults to
+# 30s; pin it explicitly so a future web3 default change can't silently let a
+# hung node stall a caller/task.
 _RPC_TIMEOUT = 30
 
 
