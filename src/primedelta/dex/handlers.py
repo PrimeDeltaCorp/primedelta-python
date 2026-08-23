@@ -521,21 +521,19 @@ class _AMMPoolHandler:
         deadline = self._now() + 600
         return self._send_tx(
             npm.functions.mint(
-                # MintParams as a tuple in ABI order — a dict works for the
-                # broadcast path but craft()'s offline encoder needs a tuple.
-                (
-                    self._web3.to_checksum_address(token0),
-                    self._web3.to_checksum_address(token1),
-                    fee,
-                    params.tick_lower,
-                    params.tick_upper,
-                    amounts[0],
-                    amounts[1],
-                    amounts_min[0],
-                    amounts_min[1],
-                    self._account.address,
-                    deadline,
-                )
+                {
+                    "token0": self._web3.to_checksum_address(token0),
+                    "token1": self._web3.to_checksum_address(token1),
+                    "fee": fee,
+                    "tickLower": params.tick_lower,
+                    "tickUpper": params.tick_upper,
+                    "amount0Desired": amounts[0],
+                    "amount1Desired": amounts[1],
+                    "amount0Min": amounts_min[0],
+                    "amount1Min": amounts_min[1],
+                    "recipient": self._account.address,
+                    "deadline": deadline,
+                }
             )
         )
 
@@ -598,13 +596,12 @@ class _AMMPoolHandler:
         max_uint128 = (1 << 128) - 1
         return self._send_tx(
             npm.functions.collect(
-                # CollectParams as a tuple in ABI order (craft() needs a tuple).
-                (
-                    position_id,
-                    self._account.address,
-                    max_uint128,
-                    max_uint128,
-                )
+                {
+                    "tokenId": position_id,
+                    "recipient": self._account.address,
+                    "amount0Max": max_uint128,
+                    "amount1Max": max_uint128,
+                }
             )
         )
 
@@ -643,15 +640,14 @@ class _AMMPoolHandler:
         deadline = self._now() + 600
         return self._send_tx(
             npm.functions.increaseLiquidity(
-                # IncreaseLiquidityParams as a tuple in ABI order (craft() needs it).
-                (
-                    position_id,
-                    amounts[0],
-                    amounts[1],
-                    amounts_min[0],
-                    amounts_min[1],
-                    deadline,
-                )
+                {
+                    "tokenId": position_id,
+                    "amount0Desired": amounts[0],
+                    "amount1Desired": amounts[1],
+                    "amount0Min": amounts_min[0],
+                    "amount1Min": amounts_min[1],
+                    "deadline": deadline,
+                }
             )
         )
 

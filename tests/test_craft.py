@@ -105,7 +105,9 @@ class TestCraft:
         pd._erc20 = MagicMock(return_value=erc20)
         pd._token_ref = MagicMock(return_value=("0xTOKEN", 6))
         fn = erc20.functions.approve.return_value
+        # both the low-level encoder and the encode_abi fallback fail
         fn._encode_transaction_data.side_effect = ValueError("bad abi")
+        fn.w3.eth.contract.return_value.encode_abi.side_effect = ValueError("bad abi")
 
         with pytest.raises(TransactionFailed):
             pd.craft(lambda: pd.approve("dUSD", "0xSPENDER", Decimal("5")))
@@ -170,3 +172,47 @@ class TestCraft:
         assert PrimeDelta._as_unsigned(
             {"from": "0xA", "to": "0xB", "chainId": 2028}
         ) == {"from": "0xA", "to": "0xB", "value": 0, "data": "0x", "chainId": 2028}
+
+
+def test_encode_calldata_encodes_a_dict_struct():
+    # The central fix: craft() must ABI-encode a struct passed as a dict (the
+    # readable form used at the call sites). The low-level encoder rejects it;
+    # _encode_calldata (encode_abi) aligns the dict to its ABI tuple.
+    from web3 import Web3
+
+    from primedelta.primedelta import _encode_calldata
+
+    abi = [
+        {
+            "type": "function",
+            "name": "f",
+            "stateMutability": "nonpayable",
+            "outputs": [],
+            "inputs": [
+                {
+                    "type": "tuple",
+                    "name": "p",
+                    "components": [
+                        {"type": "string", "name": "symbol"},
+                        {"type": "uint256", "name": "amount"},
+                        {"type": "address", "name": "account"},
+                    ],
+                },
+                {"type": "bytes", "name": "sig"},
+            ],
+        }
+    ]
+    w3 = Web3(Web3.HTTPProvider("http://localhost:0"))
+    contract = w3.eth.contract(address="0x" + "1" * 40, abi=abi)
+    account = "0x" + "2" * 40
+    fn = contract.functions.f(
+        {"symbol": "dUSD", "amount": 1_000_000, "account": account}, b"\xab"
+    )
+
+    data = _encode_calldata(fn)  # would raise if it used _encode_transaction_data
+
+    _decoded_fn, args = contract.decode_function_input(data)
+    assert args["p"]["symbol"] == "dUSD"
+    assert args["p"]["amount"] == 1_000_000
+    assert args["p"]["account"] == account
+    assert args["sig"] == b"\xab"

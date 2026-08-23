@@ -206,6 +206,28 @@ def _tx_hash_0x(tx_hash: Any) -> str:
     return "0x" + tx_hash.hex().removeprefix("0x")
 
 
+def _encode_calldata(contract_function: ContractFunction) -> str:
+    """ABI-encode a call's calldata, tolerating a struct passed as a dict.
+
+    The low-level `ContractFunction._encode_transaction_data()` rejects a struct
+    given as a dict (its TupleEncoder needs a tuple), which is exactly the shape
+    `craft()` has to encode offline. Try it first (it covers positional args and
+    is what the broadcast path uses); on failure, fall back to `encode_abi`,
+    which aligns a dict to its ABI tuple by component name — so call sites keep
+    readable dict structs and crafting still works.
+    """
+    try:
+        return contract_function._encode_transaction_data()
+    except Exception:
+        contract = contract_function.w3.eth.contract(
+            address=contract_function.address, abi=contract_function.contract_abi
+        )
+        return contract.encode_abi(
+            abi_element_identifier=contract_function.fn_name,
+            args=contract_function.args,
+        )
+
+
 class PrimeDelta:
     def __init__(
         self,
@@ -978,7 +1000,7 @@ class PrimeDelta:
         fn_name = getattr(contract_function, "fn_name", None) or "<unknown>"
         to_address = getattr(contract_function, "address", None)
         try:
-            calldata = contract_function._encode_transaction_data()
+            calldata = _encode_calldata(contract_function)
         except Exception:
             calldata = None
         if self._signer.fills_gas_and_nonce or self._crafting is not None:
