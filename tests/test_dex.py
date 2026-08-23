@@ -1245,6 +1245,27 @@ class TestClaimWithdrawals:
         assert struct == ("dUSD", 1000000, _USER_ADDRESS, int("0xbfbb", 16))
         assert sig == bytes.fromhex("ab" * 65)
 
+    def test_claim_digital_identity_uses_mint_signed_voucher(self):
+        from primedelta.types import AccountStatus, DigitalIdentitySignature
+
+        pd, did = self._pd()
+        pd._primedelta_client.get_account_status.return_value = AccountStatus.VERIFIED
+        pd._primedelta_client.create_digital_identity_signature.return_value = (
+            DigitalIdentitySignature(
+                signature="ab" * 65, nonce="0abc", data="11" * 32, is_pro=1
+            )
+        )
+
+        assert pd.claim_digital_identity() == "0xTX"
+        struct, sig = did.functions.mint.call_args.args
+        assert struct == (
+            _USER_ADDRESS,
+            int.from_bytes(bytes.fromhex("0abc"), "big"),
+            1,
+            bytes.fromhex("11" * 32),
+        )
+        assert sig == bytes.fromhex("ab" * 65)
+
     def test_claim_stock_withdrawal_uses_mintStocks_signed_voucher(self):
         from primedelta.types import ClaimableWithdrawal, WithdrawalSignature
 
