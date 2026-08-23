@@ -453,15 +453,27 @@ class TestAMMHandlerLiquidity:
         )
         handler.add_liquidity(params)
 
-        mint_args = contract.functions.mint.call_args.args[0]
-        assert mint_args["token0"] == _STABLECOIN_ADDRESS
-        assert mint_args["token1"] == _AAPL_TOKEN
-        assert mint_args["fee"] == 3000
-        assert mint_args["amount0Desired"] == 400 * 10**6
-        assert mint_args["amount1Desired"] == 2 * 10**18
-        assert mint_args["amount0Min"] == 390 * 10**6
-        assert mint_args["amount1Min"] == int(Decimal("1.9") * 10**18)
-        assert mint_args["recipient"] == _USER_ADDRESS
+        (
+            token0,
+            token1,
+            fee,
+            _tick_lower,
+            _tick_upper,
+            amount0_desired,
+            amount1_desired,
+            amount0_min,
+            amount1_min,
+            recipient,
+            _deadline,
+        ) = contract.functions.mint.call_args.args[0]
+        assert token0 == _STABLECOIN_ADDRESS
+        assert token1 == _AAPL_TOKEN
+        assert fee == 3000
+        assert amount0_desired == 400 * 10**6
+        assert amount1_desired == 2 * 10**18
+        assert amount0_min == 390 * 10**6
+        assert amount1_min == int(Decimal("1.9") * 10**18)
+        assert recipient == _USER_ADDRESS
 
     def test_add_liquidity_orders_tokens_correctly_when_stock_is_token0(self):
         handler, web3, contract, send_tx = self._setup(
@@ -478,9 +490,11 @@ class TestAMMHandlerLiquidity:
         )
         handler.add_liquidity(params)
 
-        mint_args = contract.functions.mint.call_args.args[0]
-        assert mint_args["amount0Desired"] == 2 * 10**18
-        assert mint_args["amount1Desired"] == 400 * 10**6
+        _, _, _, _, _, amount0_desired, amount1_desired, *_ = (
+            contract.functions.mint.call_args.args[0]
+        )
+        assert amount0_desired == 2 * 10**18
+        assert amount1_desired == 400 * 10**6
 
     def test_remove_liquidity_uses_multicall(self):
         handler, web3, contract, send_tx = self._setup()
@@ -549,10 +563,12 @@ class TestAMMHandlerLiquidity:
     def test_collect_fees_calls_collect(self):
         handler, web3, contract, send_tx = self._setup()
         handler.collect_fees(99)
-        collect_args = contract.functions.collect.call_args.args[0]
-        assert collect_args["tokenId"] == 99
-        assert collect_args["recipient"] == _USER_ADDRESS
-        assert collect_args["amount0Max"] == (1 << 128) - 1
+        token_id, recipient, amount0_max, _amount1_max = (
+            contract.functions.collect.call_args.args[0]
+        )
+        assert token_id == 99
+        assert recipient == _USER_ADDRESS
+        assert amount0_max == (1 << 128) - 1
 
     def test_amm_raises_when_npm_not_configured(self):
         web3 = _make_web3_mock()
@@ -580,12 +596,19 @@ class TestAMMHandlerLiquidity:
             amount_stock_min=Decimal("1.9"),
             amount_stablecoin_min=Decimal("390"),
         )
-        args = contract.functions.increaseLiquidity.call_args.args[0]
-        assert args["tokenId"] == 42
-        assert args["amount0Desired"] == 400 * 10**6
-        assert args["amount1Desired"] == 2 * 10**18
-        assert args["amount0Min"] == 390 * 10**6
-        assert args["amount1Min"] == int(Decimal("1.9") * 10**18)
+        (
+            token_id,
+            amount0_desired,
+            amount1_desired,
+            amount0_min,
+            amount1_min,
+            _deadline,
+        ) = contract.functions.increaseLiquidity.call_args.args[0]
+        assert token_id == 42
+        assert amount0_desired == 400 * 10**6
+        assert amount1_desired == 2 * 10**18
+        assert amount0_min == 390 * 10**6
+        assert amount1_min == int(Decimal("1.9") * 10**18)
         # token0 approved for amount0 then token1 for amount1, in order, both to
         # the NPM. Ordered (not set) so a swapped amount0/amount1 pairing fails.
         assert [c.args for c in contract.functions.approve.call_args_list] == [
@@ -601,9 +624,11 @@ class TestAMMHandlerLiquidity:
         handler.increase_liquidity(
             42, amount_stock=Decimal("2"), amount_stablecoin=Decimal("400")
         )
-        args = contract.functions.increaseLiquidity.call_args.args[0]
-        assert args["amount0Desired"] == 2 * 10**18
-        assert args["amount1Desired"] == 400 * 10**6
+        _, amount0_desired, amount1_desired, *_ = (
+            contract.functions.increaseLiquidity.call_args.args[0]
+        )
+        assert amount0_desired == 2 * 10**18
+        assert amount1_desired == 400 * 10**6
 
     def test_burn_position_multicalls_decrease_collect_burn(self):
         handler, web3, contract, send_tx = self._setup()
