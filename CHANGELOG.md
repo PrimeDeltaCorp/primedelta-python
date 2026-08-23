@@ -7,14 +7,15 @@ semantic versioning once published.
 ## [Unreleased]
 
 ### Fixed
-- **`craft()` now works for AMM liquidity provision.** `add_liquidity`,
-  `increase_liquidity`, and `collect_fees` passed their V3 position-manager
-  struct (`mint` / `increaseLiquidity` / `collect`) as a Python dict. That
-  encodes fine when broadcasting but `craft()`'s offline encoder needs a tuple,
-  so crafting those actions raised "could not encode calldata". The structs are
-  now passed as tuples in ABI order (verified by decoding the calldata), which
-  works for both the broadcast and craft paths and leaves the broadcast result
-  unchanged.
+- **`craft()` now works for every action that passes a struct.** Calls that
+  pass a Solidity struct as a dict — LP `mint` / `increaseLiquidity` / `collect`,
+  and factory `burnStablecoin` / `mintStablecoin` / `burnStocks` / `mintStocks`
+  and DigitalIdentity `mint` (deposits, withdrawal claims, identity mint) —
+  encode fine when broadcasting but `craft()`'s low-level offline encoder rejects
+  a dict, so crafting them raised "could not encode calldata". Fixed centrally:
+  the craft encode path now falls back to `Contract.encode_abi`, which aligns a
+  dict to its ABI tuple. Call sites keep their readable dict structs; the
+  broadcast path is unchanged.
 
 ### Added
 - **Non-custodial crafting** — `craft(action)` runs an on-chain action (swap,
