@@ -493,3 +493,34 @@ class TestTransportLayer:
         assert kwargs["params"] == {"size": 100}
         assert "X-CSRFToken" not in kwargs["headers"]
         session.get.assert_not_called()
+
+
+class TestTimeoutSession:
+    def _session(self):
+        from primedelta.primedelta_client import _HTTP_TIMEOUT, _TimeoutSession
+
+        return _TimeoutSession(), _HTTP_TIMEOUT
+
+    def test_applies_default_timeout(self):
+        from unittest.mock import patch
+
+        s, default = self._session()
+        with patch("requests.Session.request", return_value=MagicMock()) as sup:
+            s.get("http://x")
+        assert sup.call_args.kwargs["timeout"] == default
+
+    def test_exempts_streaming_requests(self):
+        from unittest.mock import patch
+
+        s, _ = self._session()
+        with patch("requests.Session.request", return_value=MagicMock()) as sup:
+            s.get("http://x", stream=True)
+        assert sup.call_args.kwargs.get("timeout") is None
+
+    def test_explicit_timeout_wins(self):
+        from unittest.mock import patch
+
+        s, _ = self._session()
+        with patch("requests.Session.request", return_value=MagicMock()) as sup:
+            s.post("http://x", timeout=5)
+        assert sup.call_args.kwargs["timeout"] == 5
