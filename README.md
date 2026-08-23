@@ -35,7 +35,11 @@ tx = primedelta.swap_exact_input(
 
 > Oracle-priced stocks (e.g. `AAPL`) trade only in US market hours; the SDK
 > classifies instruments via `instrument_kind(symbol)` and raises `MarketClosed`
-> when the signed price is unavailable. Agents: see [AGENTS.md](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/AGENTS.md).
+> when the signed price is unavailable.
+
+## For autonomous agents
+
+If an AI agent operates this SDK to trade, read [**AGENTS.md**](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/AGENTS.md) — the operating handbook: capability map, the mandatory safe pattern (quote → min-out → market-hours check → send), and the fair-use / anti-abuse policy. Background + readiness analysis: [docs/agentic-trading-research.md](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/docs/agentic-trading-research.md).
 
 ## Mint platform examples
 
