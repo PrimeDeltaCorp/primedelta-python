@@ -7,6 +7,14 @@ semantic versioning once published.
 ## [Unreleased]
 
 ### Fixed
+- **`craft()` now works for deposits, withdrawal claims, and DID mint.** The
+  factory `burnStablecoin` / `mintStablecoin` / `burnStocks` / `mintStocks`
+  structs and the DigitalIdentity `mint` struct were passed as dicts, which
+  `craft()`'s offline encoder rejects (it needs a tuple). They are now passed as
+  tuples in ABI order (verified by decoding the calldata), so
+  `deposit_stablecoin` / `deposit_stock_token` / `claim_stablecoin_withdrawal` /
+  `claim_stock_withdrawal` / `claim_digital_identity` are craftable. DID `isPro`
+  is coerced to `int` (it is a uint256 in the ABI). Broadcast is unchanged.
 - **`craft()` now works for AMM liquidity provision.** `add_liquidity`,
   `increase_liquidity`, and `collect_fees` passed their V3 position-manager
   struct (`mint` / `increaseLiquidity` / `collect`) as a Python dict. That

@@ -393,12 +393,15 @@ class PrimeDelta:
         )
         return self._build_and_send_transaction(
             digital_identity_contract.functions.mint(
-                {
-                    "account": self._signer.address,
-                    "nonce": int.from_bytes(bytes.fromhex(signature.nonce), "big"),
-                    "isPro": signature.is_pro,
-                    "data": bytes.fromhex(signature.data),
-                },
+                # struct as a tuple in ABI order (account, nonce, isPro, data).
+                # isPro is a uint256 in the ABI: coerce the bool so craft()'s
+                # strict offline encoder accepts it (broadcast coerces on its own).
+                (
+                    self._signer.address,
+                    int.from_bytes(bytes.fromhex(signature.nonce), "big"),
+                    int(signature.is_pro),
+                    bytes.fromhex(signature.data),
+                ),
                 bytes.fromhex(signature.signature),
             )
         )
@@ -443,12 +446,14 @@ class PrimeDelta:
         )
         return self._build_and_send_transaction(
             factory_contract.functions.burnStablecoin(
-                {
-                    "symbol": "dUSD",
-                    "amount": int(signature.amount),
-                    "account": self._signer.address,
-                    "nonce": int(signature.nonce, 16),
-                },
+                # struct as a tuple in ABI order (symbol, amount, account, nonce)
+                # — a dict works for broadcast but craft()'s encoder needs a tuple.
+                (
+                    "dUSD",
+                    int(signature.amount),
+                    self._signer.address,
+                    int(signature.nonce, 16),
+                ),
                 bytes.fromhex(signature.signature.removeprefix("0x")),
             )
         )
@@ -479,12 +484,13 @@ class PrimeDelta:
         )
         return self._build_and_send_transaction(
             factory_contract.functions.mintStablecoin(
-                {
-                    "symbol": withdrawal.asset_type,
-                    "amount": int(signature.amount),
-                    "account": self._signer.address,
-                    "nonce": int(signature.nonce, 16),
-                },
+                # struct as a tuple in ABI order (symbol, amount, account, nonce).
+                (
+                    withdrawal.asset_type,
+                    int(signature.amount),
+                    self._signer.address,
+                    int(signature.nonce, 16),
+                ),
                 bytes.fromhex(signature.signature.removeprefix("0x")),
             )
         )
@@ -506,12 +512,13 @@ class PrimeDelta:
         )
         return self._build_and_send_transaction(
             factory_contract.functions.burnStocks(
-                {
-                    "symbol": stock_symbol,
-                    "amount": int(signature.amount),
-                    "account": self._signer.address,
-                    "nonce": int(signature.nonce, 16),
-                },
+                # struct as a tuple in ABI order (symbol, amount, account, nonce).
+                (
+                    stock_symbol,
+                    int(signature.amount),
+                    self._signer.address,
+                    int(signature.nonce, 16),
+                ),
                 bytes.fromhex(signature.signature),
             )
         )
@@ -545,12 +552,13 @@ class PrimeDelta:
         )
         return self._build_and_send_transaction(
             factory_contract.functions.mintStocks(
-                {
-                    "symbol": withdrawal.asset_type,
-                    "amount": int(signature.amount),
-                    "account": self._signer.address,
-                    "nonce": int(signature.nonce, 16),
-                },
+                # struct as a tuple in ABI order (symbol, amount, account, nonce).
+                (
+                    withdrawal.asset_type,
+                    int(signature.amount),
+                    self._signer.address,
+                    int(signature.nonce, 16),
+                ),
                 bytes.fromhex(signature.signature.removeprefix("0x")),
             )
         )

@@ -1242,12 +1242,7 @@ class TestClaimWithdrawals:
 
         assert pd.claim_stablecoin_withdrawal(3) == "0xTX"
         struct, sig = factory.functions.mintStablecoin.call_args.args
-        assert struct == {
-            "symbol": "dUSD",
-            "amount": 1000000,
-            "account": _USER_ADDRESS,
-            "nonce": int("0xbfbb", 16),
-        }
+        assert struct == ("dUSD", 1000000, _USER_ADDRESS, int("0xbfbb", 16))
         assert sig == bytes.fromhex("ab" * 65)
 
     def test_claim_stock_withdrawal_uses_mintStocks_signed_voucher(self):
@@ -1263,12 +1258,7 @@ class TestClaimWithdrawals:
 
         assert pd.claim_stock_withdrawal(7) == "0xTX"
         struct, sig = factory.functions.mintStocks.call_args.args
-        assert struct == {
-            "symbol": "AAPL",
-            "amount": 5000000000000000000,
-            "account": _USER_ADDRESS,
-            "nonce": 16,
-        }
+        assert struct == ("AAPL", 5000000000000000000, _USER_ADDRESS, 16)
         assert sig == bytes.fromhex("cd" * 65)
 
     def test_deposit_stock_token_uses_signed_amount_and_parses_odd_nonce(self):
@@ -1283,9 +1273,11 @@ class TestClaimWithdrawals:
         )
 
         pd.deposit_stock_token("AAPL", 1)
-        struct, _ = factory.functions.burnStocks.call_args.args
-        assert struct["nonce"] == int("0xabc", 16)
-        assert struct["amount"] == 3000000000000000000
+        _symbol, amount, _account, nonce = factory.functions.burnStocks.call_args.args[
+            0
+        ]
+        assert nonce == int("0xabc", 16)
+        assert amount == 3000000000000000000
 
     def test_deposit_stablecoin_uses_burnStablecoin_signed_voucher(self):
         from primedelta.types import DepositStocksSignature
@@ -1298,12 +1290,7 @@ class TestClaimWithdrawals:
 
         assert pd.deposit_stablecoin(1) == "0xTX"
         struct, sig = factory.functions.burnStablecoin.call_args.args
-        assert struct == {
-            "symbol": "dUSD",
-            "amount": 1000000,
-            "account": _USER_ADDRESS,
-            "nonce": int("0xcd", 16),
-        }
+        assert struct == ("dUSD", 1000000, _USER_ADDRESS, int("0xcd", 16))
         assert sig == bytes.fromhex("ab" * 65)
 
     def test_deposit_stablecoin_requires_did(self):
