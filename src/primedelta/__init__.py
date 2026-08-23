@@ -15,6 +15,7 @@ from .dex.params import (
 )
 from .primedelta import (
     AccountNotVerified,
+    CannotCraft,
     DigitalIdentityAlreadyClaimed,
     NotEnoughFunds,
     PrimeDelta,

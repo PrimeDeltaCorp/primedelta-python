@@ -79,6 +79,15 @@ class WdelNotConfigured(Exception):
     pass
 
 
+class CannotCraft(Exception):
+    """Raised when a backend REST action (limit/market order, withdrawal
+    request, order cancel) is invoked inside `craft`. Those actions do not
+    produce an on-chain transaction the SDK can capture, so crafting cannot
+    intercept them — calling one would execute it for real."""
+
+    pass
+
+
 class TransactionFailed(Exception):
     """A transaction submitted by the SDK reverted or failed to mine.
 
@@ -265,6 +274,18 @@ class PrimeDelta:
             "chainId": tx["chainId"],
         }
 
+    def _reject_backend_action_while_crafting(self, op: str) -> None:
+        # These actions submit through the REST backend, not the on-chain send
+        # path, so craft() cannot capture them — calling one under craft() would
+        # execute it for real. Fail loudly instead of silently acting.
+        if self._crafting is not None:
+            raise CannotCraft(
+                f"{op} is a backend action, not an on-chain transaction, so "
+                "craft() cannot capture it (it would execute for real). Call it "
+                "directly, outside craft(). craft() covers on-chain actions: "
+                "swap, LP, transfer, approve, deposit, claim."
+            )
+
     def craft(self, action: Callable[[], Any]) -> list[dict[str, Any]]:
         """Run a trading ``action`` WITHOUT broadcasting and return the unsigned
         transaction(s) it would have sent, for an external wallet to sign.
@@ -290,6 +311,12 @@ class PrimeDelta:
         addresses, allowances, signed prices, deadlines). For oracle-priced
         instruments the signed price and deadline baked into the calldata expire
         — sign and broadcast promptly.
+
+        Scope: ``craft`` captures ON-CHAIN transactions — swap, LP, native
+        transfer, token approve, and custodial deposit/claim (all go through the
+        signed send path). Backend REST actions (limit/market orders, withdrawal
+        requests, order cancels) produce no on-chain tx here and raise
+        ``CannotCraft`` under ``craft`` rather than silently executing for real.
 
         Not thread-safe: crafting toggles an instance-level flag, so do not share
         one client across threads while a ``craft`` is in flight — a concurrent
@@ -405,6 +432,7 @@ class PrimeDelta:
         )
 
     def request_stablecoin_withdrawal(self, amount: Decimal) -> int:
+        self._reject_backend_action_while_crafting("request_stablecoin_withdrawal")
         account_status = self._primedelta_client.get_account_status()
         if account_status not in [AccountStatus.VERIFIED, AccountStatus.DID_MINTED]:
             raise AccountNotVerified()
@@ -467,6 +495,7 @@ class PrimeDelta:
         )
 
     def request_stock_withdrawal(self, stock_symbol: str, amount: int) -> int:
+        self._reject_backend_action_while_crafting("request_stock_withdrawal")
         account_status = self._primedelta_client.get_account_status()
         if account_status != AccountStatus.DID_MINTED:
             raise AccountNotVerified()
@@ -635,6 +664,7 @@ class PrimeDelta:
         price_limit: Decimal,
         date_of_cancellation: Optional[date] = None,
     ) -> int:
+        self._reject_backend_action_while_crafting("send_limit_order")
         try:
             return self._primedelta_client.send_limit_order(
                 amount=amount,
@@ -649,6 +679,7 @@ class PrimeDelta:
             raise
 
     def send_sell_market_order(self, stock_symbol: str, amount: int) -> int:
+        self._reject_backend_action_while_crafting("send_sell_market_order")
         try:
             return self._primedelta_client.send_sell_market_order(
                 amount=amount,
@@ -660,6 +691,7 @@ class PrimeDelta:
             raise
 
     def cancel_order(self, order_id: int) -> None:
+        self._reject_backend_action_while_crafting("cancel_order")
         return self._primedelta_client.cancel_order(order_id)
 
     def get_order_status(self, order_id: int) -> OrderStatus:
@@ -1083,6 +1115,7 @@ class PrimeDelta:
         return self._primedelta_client.bank_details()
 
     def request_fiat_withdrawal(self, amount: Decimal) -> int:
+        self._reject_backend_action_while_crafting("request_fiat_withdrawal")
         try:
             return self._primedelta_client.request_fiat_withdrawal(amount)
         except APIError as exc:

@@ -3,8 +3,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from primedelta import PrimeDelta
+from primedelta import CannotCraft, PrimeDelta
 from primedelta.primedelta import TransactionFailed
+from primedelta.types import OrderSide
 
 
 def _pd():
@@ -128,6 +129,42 @@ class TestCraft:
         pd = _pd()
         with pytest.raises(RuntimeError, match="nested"):
             pd.craft(lambda: pd.craft(lambda: None))
+
+    def test_craft_rejects_backend_rest_actions(self):
+        # Orders / withdrawal requests / cancels go through the REST backend, not
+        # the on-chain send path, so craft() cannot capture them. They must raise
+        # CannotCraft (never silently execute) and never touch the backend.
+        pd = _pd()
+        pd._primedelta_client = MagicMock()
+        actions = [
+            (
+                "send_limit_order",
+                lambda: pd.send_limit_order(OrderSide.BUY, "AAPL", 1, Decimal("100")),
+            ),
+            ("send_sell_market_order", lambda: pd.send_sell_market_order("AAPL", 1)),
+            ("cancel_order", lambda: pd.cancel_order(7)),
+            (
+                "request_fiat_withdrawal",
+                lambda: pd.request_fiat_withdrawal(Decimal("1")),
+            ),
+            (
+                "request_stablecoin_withdrawal",
+                lambda: pd.request_stablecoin_withdrawal(Decimal("1")),
+            ),
+        ]
+        for name, action in actions:
+            with pytest.raises(CannotCraft):
+                pd.craft(action)
+            getattr(pd._primedelta_client, name).assert_not_called()
+            assert pd._crafting is None  # flag reset after the rejection
+
+    def test_backend_action_still_works_outside_craft(self):
+        # the guard must only bite while crafting — a direct call passes through
+        pd = _pd()
+        pd._primedelta_client = MagicMock()
+        pd._primedelta_client.send_sell_market_order.return_value = 42
+        assert pd.send_sell_market_order("AAPL", 1) == 42
+        pd._primedelta_client.send_sell_market_order.assert_called_once()
 
     def test_as_unsigned_normalises_value_and_data(self):
         assert PrimeDelta._as_unsigned(
