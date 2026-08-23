@@ -17,8 +17,10 @@ from .primedelta import (
     AccountNotVerified,
     CannotCraft,
     DigitalIdentityAlreadyClaimed,
+    MarketClosed,
     NotEnoughFunds,
     PrimeDelta,
+    TradingHalted,
     TransactionFailed,
     WdelNotConfigured,
 )

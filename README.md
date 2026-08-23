@@ -22,14 +22,20 @@ primedelta = PrimeDelta(
 )
 primedelta.login()
 
-# Spend 10 dUSD buying AAPL on the DEX.
+# Buy AMMT1 with 10 dUSD on the 24/7 AMM pool. Quote first, then derive a real
+# min_amount_out from a slippage budget — never pass Decimal("0") in production.
+quote = primedelta.quote_swap("AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("10"))
 tx = primedelta.swap_exact_input(
-    "AAPL",
+    "AMMT1",
     SwapSide.STABLECOIN_TO_STOCK,
     amount_in=Decimal("10"),
-    min_amount_out=Decimal("0"),
+    min_amount_out=primedelta.min_out_from_quote(quote, slippage_bps=100),  # 1%
 )
 ```
+
+> Oracle-priced stocks (e.g. `AAPL`) trade only in US market hours; the SDK
+> classifies instruments via `instrument_kind(symbol)` and raises `MarketClosed`
+> when the signed price is unavailable. Agents: see [AGENTS.md](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/AGENTS.md).
 
 ## Mint platform examples
 

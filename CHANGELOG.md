@@ -32,6 +32,10 @@ semantic versioning once published.
 - **Multi-network** — bundled `testnet` config (chain 7357), verified on-chain;
   the config generator now handles both deployment schemas.
 - **Typed** — ships `py.typed`.
+- **Agent safety rails** — `MarketClosed` (raised when an oracle swap reverts on
+  a stale/absent signed price; a `TransactionFailed` subclass), `instrument_kind`
+  (`"amm"` 24/7 vs `"oracle"` market-hours), `min_out_from_quote(quote, slippage_bps)`,
+  and a `halt()`/`resume()`/`is_halted` kill switch with a per-instance send lock.
 
 ### Testing
 - Client transport unit coverage (CSRF/cookie, 204/empty-body, error mapping,
