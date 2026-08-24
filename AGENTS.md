@@ -13,6 +13,8 @@ Two surfaces, one client object:
 
 One identity = one `Signer` = one wallet = one DID. Everything you do is attributable to that DID.
 
+**Two ways to send.** With a signing key / `Signer`, the trade methods below **sign and broadcast** and return a tx hash. If you must **not** hold a fund-moving key, wrap any on-chain action in `pd.craft(...)`: it runs the action *without broadcasting* and returns the unsigned transaction(s) `{from, to, value, data, chainId}` (gas & nonce omitted) for the user's own wallet (MetaMask / hardware) to review and sign. `craft` covers **on-chain** actions only — swap, LP, approve, wrap/unwrap, native transfer, custodial deposit/claim; backend REST actions (limit/market orders, withdrawal *requests*, order cancels) are not on-chain transactions and raise `CannotCraft`. An MCP server — [`primedelta-mcp`](https://github.com/PrimeDeltaCorp/primedelta-mcp) — exposes this whole surface (reads + non-custodial `craft_*` tools) to MCP clients that can't `import primedelta`; a login key stays out-of-band and is used only for SIWE auth, never to sign a fund-moving tx.
+
 ## 2. Fast start
 Install (Python ≥ 3.10):
 ```bash
@@ -53,6 +55,15 @@ got = pd.get_onchain_stock_balance("AMMT1")             # bypasses backend index
 ```
 `swap_exact_input` requires `login()` **and** a minted DID (`DID_MINTED`). If you only have `VERIFIED`, call `pd.claim_digital_identity()` first. KYC happens in the web app — `pd.verification_url()`.
 
+**Non-custodial variant.** To hand the same swap to an external wallet instead of broadcasting it, wrap it in `craft`:
+```python
+txs = pd.craft(lambda: pd.swap_exact_input(
+    "AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("10"), min_out))
+# txs == [{from,to,value,data,chainId}, ...] — e.g. [approve, swap], in send order.
+# gas/nonce are left for the signing wallet. Sign promptly: oracle-lane calldata
+# embeds a signed price + deadline that expire.
+```
+
 ## 3. Capability map
 | Area | Methods |
 |---|---|
@@ -61,6 +72,7 @@ got = pd.get_onchain_stock_balance("AMMT1")             # bypasses backend index
 | **Swaps (dUSD↔token)** | `swap_exact_input` · `swap_exact_output` with `SwapSide` |
 | **Cross-dex (token↔token)** | `swap_token_to_token_exact_input` · `swap_token_to_token_exact_output` |
 | **Native DEL** | `wrap_del` · `unwrap_del` · `send_del` · `get_native_del_balance` |
+| **Non-custodial crafting** | `craft(action)` → unsigned tx(s) for an external wallet to sign; on-chain actions only (backend REST actions raise `CannotCraft`) |
 | **Quoting (read-only, AMM only)** | `quote_swap` (V3 Quoter) · `spot_price` (slot0) |
 | **AMM (V3) liquidity** | `add_liquidity(AMMAddLiquidity)` · `increase_liquidity` · `remove_liquidity(AMMRemoveLiquidity)` · `collect_fees` · `burn_position` · `preview_fees` · `lp_positions` · `lp_position` |
 | **Price-feed liquidity** | `add_liquidity(PriceFeedAddLiquidity)` · `remove_liquidity(PriceFeedRemoveLiquidity)` |
@@ -91,7 +103,7 @@ Signers: `LocalAccountSigner` (raw key / keystore / mnemonic), `KmsSigner` (AWS 
 
 **4.6 Error handling.** Catch explicitly:
 - `TransactionFailed` — on-chain revert / failed mine. Attributes `.reason` (decoded `Error(string)`/`Panic`), `.tx_hash`, `.to`, `.data` (replay with `cast call`), `.trace`. Selector `0x19abf40e` = stale/absent oracle price → market closed.
-- `AccountNotVerified` (DID/KYC gate), `NotEnoughFunds` (`INSUFFICIENT_FUNDS`), `NotLoggedIn` (re-`login()`), and config gaps `WdelNotConfigured` / `PoolNotFound` / `RouterNotConfigured` / `QuoterNotConfigured` / `PositionManagerNotConfigured` — not transient. Do not blind-retry a deterministic revert.
+- `AccountNotVerified` (DID/KYC gate), `NotEnoughFunds` (`INSUFFICIENT_FUNDS`), `NotLoggedIn` (re-`login()`), `CannotCraft` (a backend REST action was wrapped in `craft` — it can't be crafted; call it directly or don't craft it), and config gaps `WdelNotConfigured` / `PoolNotFound` / `RouterNotConfigured` / `QuoterNotConfigured` / `PositionManagerNotConfigured` — not transient. Do not blind-retry a deterministic revert.
 
 **4.7 Idempotency.** Methods return a **tx hash** or a **server-side id** (`order_id`, `withdrawal_id`). The SDK does **not** dedupe backend requests — before retrying a call that may have partially succeeded, check state first (`get_order_status`, `open_orders`, `claimable_withdrawals`, `get_onchain_*_balance`). Persist submitted hashes/ids; reconcile on restart. Deposits/withdrawals are two-phase (`request_*` → `claim_*`) — treat the id as the idempotency key.
 
