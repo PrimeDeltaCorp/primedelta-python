@@ -56,6 +56,11 @@ from primedelta.types import (
 # `craft` ignore it in favour of the captured unsigned-tx list.
 _CRAFT_SENTINEL = "0x" + "0" * 64
 
+# JSON-RPC request timeout (seconds). web3 v7's HTTPProvider already defaults to
+# 30s; pin it explicitly so a future web3 default change can't silently let a
+# hung node stall a caller/task.
+_RPC_TIMEOUT = 30
+
 
 class NotEnoughFunds(Exception):
     pass
@@ -245,7 +250,11 @@ class PrimeDelta:
                 raise ValueError("Provide either private_key or signer")
             signer = LocalAccountSigner.from_key(private_key)
         self._signer: Signer = signer
-        self._web3 = Web3(Web3.HTTPProvider(web3_provider_url))
+        self._web3 = Web3(
+            Web3.HTTPProvider(
+                web3_provider_url, request_kwargs={"timeout": _RPC_TIMEOUT}
+            )
+        )
         # Besu IBFT / Clique chains pack signer info into a 241-byte extraData
         # field; web3.py's default response formatter rejects anything > 32B.
         # Injecting the PoA middleware is a no-op on non-PoA chains.

@@ -35,6 +35,28 @@ from primedelta.types import (
 
 _STABLECOIN_SYMBOL = "dUSD"
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# Default per-request timeout (seconds) so a hung/slow backend can never stall
+# the caller indefinitely. Long-lived SSE streams (stream=True) are exempt.
+_HTTP_TIMEOUT = 30.0
+
+
+class _TimeoutSession(requests.Session):
+    """A `requests.Session` that applies a default timeout to every request.
+
+    All of `get`/`post`/`request`/`delete` funnel through `request`, so this
+    covers every call site. Streaming requests (`stream=True`, i.e. the SSE
+    price feeds) are left untouched — a read timeout would kill a long-lived
+    stream. A per-call `timeout=` still overrides the default.
+    """
+
+    def __init__(self, timeout: float = _HTTP_TIMEOUT) -> None:
+        super().__init__()
+        self._timeout = timeout
+
+    def request(self, *args: Any, **kwargs: Any) -> requests.Response:
+        if not kwargs.get("stream"):
+            kwargs.setdefault("timeout", self._timeout)
+        return super().request(*args, **kwargs)
 
 
 class NotLoggedIn(Exception):
@@ -57,7 +79,7 @@ class UserSignedMessageVerificationError(Exception):
 
 class PrimeDeltaClient:
     def __init__(self, base_url: Optional[str] = None) -> None:
-        self._session = requests.Session()
+        self._session = _TimeoutSession()
         self._csrf_token: Optional[str] = None
         # Falls back to the module default so direct `PrimeDeltaClient()` use
         # (and tests that patch PRIMEDELTA_BASE_URL) keep working.
@@ -521,6 +543,7 @@ class PrimeDeltaClient:
             response = requests.get(
                 f"{PYTH_HERMES_BASE_URL}/v2/price_feeds",
                 params={"query": symbol, "asset_type": "equity"},
+                timeout=_HTTP_TIMEOUT,
             )
             response.raise_for_status()
             feeds = response.json()

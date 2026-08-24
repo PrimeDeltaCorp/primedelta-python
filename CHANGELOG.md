@@ -6,6 +6,13 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+### Changed
+- **Network calls now time out.** Every backend HTTP request (via a
+  `requests.Session` subclass) and every JSON-RPC call (web3 `HTTPProvider`)
+  carries a default 30s timeout, so a hung node or backend can no longer stall a
+  caller or a background task indefinitely. Long-lived SSE price streams are
+  exempt, and a per-call `timeout=` still overrides.
+
 ### Fixed
 - **`craft()` now works for every action that passes a struct.** Calls that
   pass a Solidity struct as a dict — LP `mint` / `increaseLiquidity` / `collect`,
