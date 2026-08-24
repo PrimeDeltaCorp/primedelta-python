@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # Python deps (web3/requests/siwe/… and the pinned lint/test tools). Grouped
+  # into one PR/week to avoid spam.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      python:
+        patterns: ["*"]
+  # Keep the CI + release workflow actions current.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
