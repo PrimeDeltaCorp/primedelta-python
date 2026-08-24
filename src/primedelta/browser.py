@@ -274,6 +274,13 @@ class RemoteBrowserSigner:
         chain: Optional[dict[str, Any]] = None,
         timeout: float = 180.0,
     ) -> None:
+        parsed = urlparse(base_url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme != "https" and host not in ("localhost", "127.0.0.1", "::1"):
+            raise ValueError(
+                "base_url must be an https:// origin (the state token is a bearer "
+                "capability); a localhost origin is allowed only for testing"
+            )
         self._chain = chain
         self._bridge = _RemoteBridge(base_url, deliver, timeout)
         self._address: Optional[str] = None

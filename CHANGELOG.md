@@ -15,7 +15,9 @@ semantic versioning once published.
   `GET /sign?state` → `render_page` and `POST /result?state` → `resolve`. The URL
   carries only the opaque token — the tx/message stays server-side — and no
   fund-moving key lives on the server (the user's wallet signs, MetaMask
-  extension included).
+  extension included). Because that token is a bearer capability, `base_url`
+  must be an `https://` origin (a `localhost` origin is allowed only for
+  testing).
 
 ### Changed
 - **Network calls now time out.** Every backend HTTP request (via a

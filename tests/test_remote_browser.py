@@ -114,11 +114,30 @@ class TestRemoteBrowserSigner:
 
     def test_delivered_url_is_hosted_and_carries_only_the_token(self):
         urls = []
-        _signer(lambda c: (ADDR, None), capture=urls).address
-        assert len(urls) == 1
-        assert urls[0].startswith(f"{BASE}/sign?state=")
-        # the opaque token only — never the tx/message
-        assert "tx" not in urls[0] and "message" not in urls[0]
+
+        def responder(config):
+            if config["op"] == "connect":
+                return ADDR, None
+            return "0xSIG", None
+
+        # exercise a signing op too (not just connect) so a regression that
+        # appended the message to the URL would fail here.
+        _signer(responder, capture=urls).sign_message("super-secret-siwe-body")
+        assert len(urls) == 2  # connect + personal_sign
+        for url in urls:
+            assert url.startswith(f"{BASE}/sign?state=")
+            # the opaque token only — never the tx/message body
+            assert "tx" not in url
+            assert "message" not in url
+            assert "secret" not in url
+
+    def test_requires_https_or_localhost_base_url(self):
+        with pytest.raises(ValueError):
+            RemoteBrowserSigner(
+                base_url="http://signer.example", deliver=lambda u: None
+            )
+        # localhost over http is allowed for local testing
+        RemoteBrowserSigner(base_url="http://127.0.0.1:8080", deliver=lambda u: None)
 
     def test_wallet_error_raises(self):
         with pytest.raises(BrowserSignerError):
