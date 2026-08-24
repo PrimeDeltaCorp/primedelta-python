@@ -1,4 +1,4 @@
-from .browser import BrowserSigner
+from .browser import BrowserSigner, RemoteBrowserSigner
 from .dex.handlers import (
     PoolNotFound,
     PositionManagerNotConfigured,

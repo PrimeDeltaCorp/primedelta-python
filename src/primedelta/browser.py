@@ -195,3 +195,120 @@ class BrowserSigner:
             "chainId": hex(transaction["chainId"]),
         }
         return HexBytes(self._run("send", {"tx": tx}))
+
+
+class _RemoteBridge:
+    """Like `_LoopbackBridge` but for a HOSTED origin: the wallet page is served
+    by the hosting app (not a per-op 127.0.0.1 server). A pending operation is
+    parked under a one-time state token; the hosting app renders it (GET /sign)
+    and delivers the result (POST /result -> `resolve`). Thread-safe; supports
+    concurrent users, each on their own token."""
+
+    def __init__(
+        self, base_url: str, deliver: Callable[[str], None], timeout: float
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._deliver = deliver
+        self._timeout = timeout
+        self._pending: dict[str, dict[str, Any]] = {}
+        self._lock = threading.Lock()
+
+    def request(self, op: str, params: dict[str, Any]) -> Any:
+        state = secrets.token_urlsafe(32)
+        event = threading.Event()
+        with self._lock:
+            self._pending[state] = {"op": op, "params": params, "event": event}
+        try:
+            self._deliver(f"{self._base_url}/sign?state={state}")
+            if not event.wait(self._timeout):
+                raise BrowserSignerError("timed out waiting for the wallet")
+            with self._lock:
+                payload = self._pending[state].get("result") or {}
+        finally:
+            with self._lock:
+                self._pending.pop(state, None)
+        if payload.get("error"):
+            raise BrowserSignerError(payload["error"])
+        return payload.get("value")
+
+    def render(self, state: str) -> str:
+        with self._lock:
+            entry = self._pending.get(state)
+        if entry is None:
+            raise BrowserSignerError("unknown or expired state")
+        return _render_page(entry["op"], entry["params"], state)
+
+    def resolve(
+        self, state: str, value: Any = None, error: Optional[str] = None
+    ) -> bool:
+        with self._lock:
+            entry = self._pending.get(state)
+            if entry is None:
+                return False
+            entry["result"] = {"value": value, "error": error}
+            entry["event"].set()
+        return True
+
+
+class RemoteBrowserSigner:
+    """Sign through the user's own browser wallet reached at a HOSTED HTTPS
+    origin — for a hosted/remote MCP that can't open the user's *local* browser.
+
+    It reuses `BrowserSigner`'s one-shot page and one-time state token, but the
+    hosting app serves the page from ``base_url`` and decides how to send the
+    user there via the ``deliver`` callback (e.g. an MCP url-mode elicitation).
+    The hosting app must:
+      - serve ``GET /sign?state=<token>`` -> :meth:`render_page`
+      - serve ``POST /result?state=<token>`` -> :meth:`resolve`
+    The URL carries only the opaque token; the tx/message stays server-side.
+    Non-custodial: no fund-moving key lives here — the user's wallet signs.
+    """
+
+    fills_gas_and_nonce = True
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        deliver: Callable[[str], None],
+        chain: Optional[dict[str, Any]] = None,
+        timeout: float = 180.0,
+    ) -> None:
+        self._chain = chain
+        self._bridge = _RemoteBridge(base_url, deliver, timeout)
+        self._address: Optional[str] = None
+
+    def _run(self, op: str, params: dict[str, Any]) -> Any:
+        return self._bridge.request(op, {**params, "chain": self._chain})
+
+    @property
+    def address(self) -> str:
+        if self._address is None:
+            self._address = self._run("connect", {})
+        return self._address
+
+    def sign_message(self, message: str) -> str:
+        return self._run("personal_sign", {"message": message, "address": self.address})
+
+    def submit_transaction(self, web3: Any, transaction: dict[str, Any]) -> Any:
+        tx = {
+            "from": transaction["from"],
+            "to": transaction["to"],
+            "value": hex(transaction.get("value", 0)),
+            "data": transaction.get("data") or "0x",
+            "chainId": hex(transaction["chainId"]),
+        }
+        return HexBytes(self._run("send", {"tx": tx}))
+
+    # --- hosting-app hooks -------------------------------------------------
+    def render_page(self, state: str) -> str:
+        """HTML for the pending op behind ``state`` (serve at GET /sign?state=)."""
+        return self._bridge.render(state)
+
+    def resolve(
+        self, state: str, value: Any = None, error: Optional[str] = None
+    ) -> bool:
+        """Deliver the wallet's result for ``state`` and unblock the waiting call
+        (call from POST /result?state=). Returns False for an unknown/expired
+        token."""
+        return self._bridge.resolve(state, value, error)
