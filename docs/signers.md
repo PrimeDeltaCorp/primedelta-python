@@ -104,6 +104,41 @@ a one-time state token, serves a single result then shuts down, and times out
 library); this bridge covers the same "plug in my wallet" intent. For automation,
 use `MockBrowserSigner` (signs locally with a dev key on the same wallet path).
 
+## Hosted browser wallet (remote app)
+
+`BrowserSigner` opens the user's *local* browser, so it only works where the SDK
+and the user share a machine. For a **hosted** app — an MCP server or web backend
+that can't reach the user's local browser — `RemoteBrowserSigner` serves the same
+one-shot wallet page from a public HTTPS origin instead. It keeps the wallet
+non-custodial (the user's own MetaMask/EIP-6963 wallet signs; no key on the
+server) and reuses `BrowserSigner`'s page, state token, and tx shape.
+
+The hosting app owns transport. `RemoteBrowserSigner` parks each pending
+operation under a one-time `state` token and calls your `deliver(url)` callback
+with `{base_url}/sign?state=<token>` (e.g. surfaced to the user through an MCP
+url-mode elicitation). You wire two routes back to the signer:
+
+```python
+from primedelta import RemoteBrowserSigner
+
+signer = RemoteBrowserSigner(
+    base_url="https://signer.example",   # must be https:// (a localhost origin is allowed only for testing)
+    deliver=send_url_to_user,            # hand the /sign?state=… URL to the user
+    chain={"chainId": "0x7ec", "chainName": "PrimeDelta Dev",
+           "rpcUrls": [RPC],
+           "nativeCurrency": {"name": "DEL", "symbol": "DEL", "decimals": 18}},
+)
+
+# GET  /sign?state=<token>   -> return signer.render_page(state)   (the wallet HTML)
+# POST /result?state=<token> -> signer.resolve(state, value, error)  (unblocks the call)
+```
+
+The delivered URL carries **only** the opaque token — the transaction/message
+stays server-side and is surfaced only by `render_page`. The token is a bearer
+capability, so `base_url` must be `https://` (a `localhost` origin is permitted
+for tests). `render_page`/`resolve` are thread-safe and each pending call has its
+own token, so one server can serve many concurrent users.
+
 ## Keys that never leave the HSM
 
 `KmsSigner` keeps an AWS KMS-managed secp256k1 key inside the HSM and only sends
