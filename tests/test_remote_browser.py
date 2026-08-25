@@ -122,14 +122,18 @@ class TestRemoteBrowserSigner:
 
         # exercise a signing op too (not just connect) so a regression that
         # appended the message to the URL would fail here.
-        _signer(responder, capture=urls).sign_message("super-secret-siwe-body")
+        secret = "super-secret-siwe-body"
+        _signer(responder, capture=urls).sign_message(secret)
         assert len(urls) == 2  # connect + personal_sign
         for url in urls:
-            assert url.startswith(f"{BASE}/sign?state=")
-            # the opaque token only — never the tx/message body
-            assert "tx" not in url
-            assert "message" not in url
-            assert "secret" not in url
+            parsed = urlparse(url)
+            assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == f"{BASE}/sign"
+            # the query is exactly the opaque state token — no tx/message params.
+            # (substring-checking the raw URL is wrong: the random token can itself
+            # contain "tx".)
+            assert set(parse_qs(parsed.query)) == {"state"}
+            # and the signed payload never leaks into the URL
+            assert secret not in url
 
     def test_requires_https_or_localhost_base_url(self):
         with pytest.raises(ValueError):
