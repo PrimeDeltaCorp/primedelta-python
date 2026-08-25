@@ -6,6 +6,19 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+### Added
+- **`RemoteBrowserSigner`** — non-custodial signing for a HOSTED/remote app (an
+  MCP server that can't open the user's *local* browser). It reuses
+  `BrowserSigner`'s one-shot wallet page and one-time state token, but the
+  hosting app serves the page from a public HTTPS origin and delivers the URL via
+  a `deliver` callback (e.g. an MCP url-mode elicitation); the app wires
+  `GET /sign?state` → `render_page` and `POST /result?state` → `resolve`. The URL
+  carries only the opaque token — the tx/message stays server-side — and no
+  fund-moving key lives on the server (the user's wallet signs, MetaMask
+  extension included). Because that token is a bearer capability, `base_url`
+  must be an `https://` origin (a `localhost` origin is allowed only for
+  testing).
+
 ### Changed
 - **Network calls now time out.** Every backend HTTP request (via a
   `requests.Session` subclass) and every JSON-RPC call (web3 `HTTPProvider`)
