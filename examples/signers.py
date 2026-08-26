@@ -14,7 +14,7 @@ from primedelta import (
     PrimeDelta,
 )
 
-RPC = os.environ.get("PRIMEDELTA_PROVIDER_URL", "https://besu-dev.primedelta.io")
+RPC = os.environ.get("PRIMEDELTA_PROVIDER_URL", "https://besu.dev.primedelta.io")
 
 
 # 1. Raw private key (dev / scripts). `private_key=` is a thin wrapper for this.
@@ -67,7 +67,7 @@ def on_testnet() -> PrimeDelta:
     signer = LocalAccountSigner.from_key(os.environ["PRIMEDELTA_TEST_PRIVATE_KEY"])
     return PrimeDelta(
         signer=signer,
-        web3_provider_url="https://chain-testnet.primedelta.io",
+        web3_provider_url="https://chain.testnet.primedelta.io",
         network="testnet",
     )
 

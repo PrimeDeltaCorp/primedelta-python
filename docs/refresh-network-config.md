@@ -52,7 +52,7 @@ too (and the drift test will catch a selector mismatch).
    endpoint shapes, and asserts every bundled ABI's selectors are present in the
    deployed bytecode:
    ```bash
-   PRIMEDELTA_PROVIDER_URL=https://besu-dev.primedelta.io \
+   PRIMEDELTA_PROVIDER_URL=https://besu.dev.primedelta.io \
    PRIMEDELTA_TEST_PRIVATE_KEY=0x... \
    pytest tests/integration/test_contract_drift.py -m integration
    ```

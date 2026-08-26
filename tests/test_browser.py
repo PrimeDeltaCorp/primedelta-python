@@ -110,7 +110,7 @@ class TestBrowserSigner:
         chain = {
             "chainId": "0x7ec",
             "chainName": "PrimeDelta Dev",
-            "rpcUrls": ["https://besu-dev.primedelta.io"],
+            "rpcUrls": ["https://besu.dev.primedelta.io"],
             "nativeCurrency": {"name": "DEL", "symbol": "DEL", "decimals": 18},
         }
         seen = {}
