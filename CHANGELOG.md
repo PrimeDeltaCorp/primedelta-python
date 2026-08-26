@@ -6,6 +6,16 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+### Fixed
+- **Bundled endpoints follow the new hostname scheme.** The infra moved dev/test
+  hosts from a `-dev` / `-testnet` suffix to a `.dev` / `.testnet` sub-domain
+  (and mainnet to bare, dropping `-mainnet`), so `PrimeDelta(network="dev")`
+  without an env override was defaulting to a now-dead backend host. The
+  per-network defaults in `resolve_endpoints` are updated to
+  `api.dev` / `mint.dev`, `api.testnet` / `mint.testnet`, and bare
+  `api.primedelta.io` / `mint.primedelta.io`; docs and examples follow. Env
+  overrides (`PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL`) are unaffected.
+
 ### Added
 - **`RemoteBrowserSigner`** — non-custodial signing for a HOSTED/remote app (an
   MCP server that can't open the user's *local* browser). It reuses

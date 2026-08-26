@@ -9,10 +9,10 @@ SIWE_MESSAGE: str = (
 USDC_ASSET_TYPE: str = "USDC"
 
 PRIMEDELTA_BASE_URL: str = os.getenv(
-    "PRIMEDELTA_BASE_URL", "https://api-dev.primedelta.io"
+    "PRIMEDELTA_BASE_URL", "https://api.dev.primedelta.io"
 )
 PRIMEDELTA_APP_URL: str = os.getenv(
-    "PRIMEDELTA_APP_URL", "https://mint-dev.primedelta.io"
+    "PRIMEDELTA_APP_URL", "https://mint.dev.primedelta.io"
 )
 SIWE_URI: str = PRIMEDELTA_APP_URL
 # Backend may strip the port (e.g. accepts "localhost" not "localhost:5173").
@@ -27,14 +27,14 @@ SIWE_DOMAIN: str = os.getenv(
 # (they are process-global) — that keeps the local-stack / integration-harness
 # contract that already drives everything through PRIMEDELTA_BASE_URL/APP_URL.
 _NETWORK_ENDPOINTS: dict[str, tuple[str, str]] = {
-    "dev": ("https://api-dev.primedelta.io", "https://mint-dev.primedelta.io"),
+    "dev": ("https://api.dev.primedelta.io", "https://mint.dev.primedelta.io"),
     "testnet": (
-        "https://api-testnet.primedelta.io",
-        "https://mint-testnet.primedelta.io",
+        "https://api.testnet.primedelta.io",
+        "https://mint.testnet.primedelta.io",
     ),
     "mainnet": (
-        "https://api-mainnet.primedelta.io",
-        "https://mint-mainnet.primedelta.io",
+        "https://api.primedelta.io",
+        "https://mint.primedelta.io",
     ),
 }
 

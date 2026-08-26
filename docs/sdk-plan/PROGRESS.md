@@ -25,7 +25,7 @@
   `twine check`s on a `v*` tag and publishes via OIDC once the license is chosen,
   a PyPI Trusted Publisher is configured, and the `PYPI_PUBLISH_ENABLED` repo
   variable is set to `true`. See `RELEASING.md`.
-- **mainnet.json:** intentionally NOT shipped. The public `chain-mainnet.primedelta.io`
+- **mainnet.json:** intentionally NOT shipped. The public `chain.primedelta.io`
   RPC serves a **re-genesised** chain 4109 (block ~16k on 2026-08-20, well below the
   deployment's `initial_block` 27352) where every documented mainnet address has
   zero bytecode — i.e. the 2026-07-13 deploy is on an abandoned chain state. Needs
@@ -72,11 +72,11 @@ race). Build the wallet tx from raw calldata/to/value instead when `BrowserSigne
 Reproduced every break on live dev, fixed them, and proved the core with the SDK itself.
 
 **Root causes found (live-verified):**
-1. **SIWE domain wrong** (new, recon missed it). SDK signed `domain=app-dev.primedelta.io`;
-   dev backend `SIWE_DOMAIN=mint-dev.primedelta.io,dex-dev...,validator-dev...,localhost:5173`.
+1. **SIWE domain wrong** (new, recon missed it). SDK signed `domain=app.dev.primedelta.io`;
+   dev backend `SIWE_DOMAIN=mint.dev.primedelta.io,dex-dev...,validator-dev...,localhost:5173`.
    Off the allowlist → backend forces `domains[0]` → `DomainMismatch` → `MESSAGE_VERIFICATION_ERROR`
    (400) on `/users/verify/` for BOTH sig formats. This blocked login before the token/cookie issue
-   even mattered. Fix: `settings.PRIMEDELTA_APP_URL` default → `https://mint-dev.primedelta.io`
+   even mattered. Fix: `settings.PRIMEDELTA_APP_URL` default → `https://mint.dev.primedelta.io`
    (Phase 5 makes SIWE domain per-network).
 2. **Auth = cookie `dclex_auth` + CSRF** (confirmed). `/users/verify/` → 204, sets HttpOnly
    `dclex_auth`. Authed calls read the cookie; `Authorization: Token/Bearer` ignored. Unsafe methods

@@ -18,22 +18,22 @@ class TestResolveEndpoints:
     def test_dev_defaults(self, monkeypatch):
         self._clear(monkeypatch)
         ep = resolve_endpoints("dev")
-        assert ep.base_url == "https://api-dev.primedelta.io"
-        assert ep.app_url == "https://mint-dev.primedelta.io"
-        assert ep.siwe_domain == "mint-dev.primedelta.io"
-        assert ep.siwe_uri == "https://mint-dev.primedelta.io"
+        assert ep.base_url == "https://api.dev.primedelta.io"
+        assert ep.app_url == "https://mint.dev.primedelta.io"
+        assert ep.siwe_domain == "mint.dev.primedelta.io"
+        assert ep.siwe_uri == "https://mint.dev.primedelta.io"
 
     def test_testnet_defaults(self, monkeypatch):
         self._clear(monkeypatch)
         ep = resolve_endpoints("testnet")
-        assert ep.base_url == "https://api-testnet.primedelta.io"
-        assert ep.siwe_domain == "mint-testnet.primedelta.io"
+        assert ep.base_url == "https://api.testnet.primedelta.io"
+        assert ep.siwe_domain == "mint.testnet.primedelta.io"
 
     def test_mainnet_defaults(self, monkeypatch):
         self._clear(monkeypatch)
         ep = resolve_endpoints("mainnet")
-        assert ep.base_url == "https://api-mainnet.primedelta.io"
-        assert ep.siwe_domain == "mint-mainnet.primedelta.io"
+        assert ep.base_url == "https://api.primedelta.io"
+        assert ep.siwe_domain == "mint.primedelta.io"
 
     def test_env_overrides_win(self, monkeypatch):
         self._clear(monkeypatch)
@@ -93,12 +93,12 @@ class TestLoginDomainPerNetwork:
         # A SIWE message begins with "<domain> wants you to sign in ...", so the
         # first token IS the domain. Compare it by equality (not `in`/startswith,
         # which pin the URI line too and trip CodeQL's url-substring rule).
-        assert captured["msg"].split()[0] == "mint-dev.primedelta.io"
+        assert captured["msg"].split()[0] == "mint.dev.primedelta.io"
 
     def test_testnet_login_signs_testnet_domain(self, monkeypatch):
         pd, captured = self._pd("testnet", monkeypatch)
         pd.login()
-        assert captured["msg"].split()[0] == "mint-testnet.primedelta.io"
+        assert captured["msg"].split()[0] == "mint.testnet.primedelta.io"
         # chain id in the SIWE message follows the network config (7357).
         assert "Chain ID: 7357" in captured["msg"]
 
@@ -111,4 +111,4 @@ class TestLoginDomainPerNetwork:
                 web3_provider_url="http://x",
                 network="testnet",
             )
-        assert pd._primedelta_client._base_url == "https://api-testnet.primedelta.io"
+        assert pd._primedelta_client._base_url == "https://api.testnet.primedelta.io"
