@@ -7,6 +7,11 @@ semantic versioning once published.
 ## [Unreleased]
 
 ### Fixed
+- **Fresh installs no longer break on `abnf` 2.9.0.** `siwe==4.4.0` builds an
+  ABNF grammar that redefines the `ALPHA` core rule; `abnf` 2.9.0 (released Aug
+  2026) turned that from a warning into a fatal `GrammarError`, so a clean
+  `pip install` of the SDK failed at `import primedelta`. Pin the transitive dep
+  to `abnf<2.9` (2.8.3 works) until `siwe` ships a compatible grammar.
 - **Bundled endpoints follow the new hostname scheme.** The infra moved dev/test
   hosts from a `-dev` / `-testnet` suffix to a `.dev` / `.testnet` sub-domain
   (and mainnet to bare, dropping `-mainnet`), so `PrimeDelta(network="dev")`
