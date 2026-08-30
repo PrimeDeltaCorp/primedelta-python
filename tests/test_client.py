@@ -211,6 +211,10 @@ class TestAuditFixes:
             ("RESUBMISSION_REQUESTED", AccountStatus.RESUBMISSION_REQUESTED),
             ("REJECTED_FINAL", AccountStatus.REJECTED_FINAL),
             ("INVALID", AccountStatus.INVALID),
+            (
+                "AWAITING_MAIN_CONFIRMATION",
+                AccountStatus.AWAITING_MAIN_CONFIRMATION,
+            ),
         ]:
             session.request.return_value = _Resp(200, {"status": value})
             assert client.get_account_status() == expected

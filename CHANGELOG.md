@@ -22,6 +22,11 @@ semantic versioning once published.
   overrides (`PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL`) are unaffected.
 
 ### Added
+- **`AccountStatus.AWAITING_MAIN_CONFIRMATION`** — the backend now reports this
+  status for an AI subaccount that has registered but not yet been confirmed by
+  its main account. Parsing it no longer raises `ValueError` in
+  `get_account_status()`; the SDK treats it as not-verified, so
+  `claim_digital_identity()` raises `AccountNotVerified` until the main confirms.
 - **`RemoteBrowserSigner`** — non-custodial signing for a HOSTED/remote app (an
   MCP server that can't open the user's *local* browser). It reuses
   `BrowserSigner`'s one-shot wallet page and one-time state token, but the
