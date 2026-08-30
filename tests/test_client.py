@@ -548,6 +548,8 @@ class TestAISubaccounts:
             "agentName": "trader-bot",
             "mainWalletAddress": "0xMAIN",
         }
+        session.get.assert_any_call(client._url("/csrf-token/"))
+        assert kwargs["headers"]["X-CSRFToken"] == "tok"
 
     def test_get_pending_ai_agents_parses_the_list(self):
         from primedelta.types import PendingAIAgent
@@ -581,6 +583,8 @@ class TestAISubaccounts:
         assert method == "POST"
         assert url.endswith("/confirm-ai-agent/")
         assert kwargs["json"] == {"subWalletAddress": "0xSUB"}
+        session.get.assert_any_call(client._url("/csrf-token/"))
+        assert kwargs["headers"]["X-CSRFToken"] == "tok"
 
     def test_reject_ai_agent_posts_the_sub_wallet(self):
         client, session = _client_with_session()
@@ -594,3 +598,5 @@ class TestAISubaccounts:
         assert method == "POST"
         assert url.endswith("/reject-ai-agent/")
         assert kwargs["json"] == {"subWalletAddress": "0xSUB"}
+        session.get.assert_any_call(client._url("/csrf-token/"))
+        assert kwargs["headers"]["X-CSRFToken"] == "tok"
