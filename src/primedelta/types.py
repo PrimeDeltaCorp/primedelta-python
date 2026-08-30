@@ -18,6 +18,12 @@ class AccountStatus(Enum):
     AWAITING_MAIN_CONFIRMATION = "AWAITING_MAIN_CONFIRMATION"
 
 
+@dataclass(frozen=True)
+class PendingAIAgent:
+    sub_wallet_address: str
+    agent_name: str
+
+
 class OrderType(Enum):
     LIMIT = "LIMIT"
     MARKET = "MARKET"

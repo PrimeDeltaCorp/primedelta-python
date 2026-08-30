@@ -528,3 +528,69 @@ class TestTimeoutSession:
         with patch("requests.Session.request", return_value=MagicMock()) as sup:
             s.post("http://x", timeout=5)
         assert sup.call_args.kwargs["timeout"] == 5
+
+
+class TestAISubaccounts:
+    def test_register_ai_account_posts_agent_name_and_main(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(204)
+
+        client.register_ai_account(
+            agent_name="trader-bot", main_wallet_address="0xMAIN"
+        )
+
+        method, url = session.request.call_args.args
+        kwargs = session.request.call_args.kwargs
+        assert method == "POST"
+        assert url.endswith("/register-ai-account/")
+        assert kwargs["json"] == {
+            "agentName": "trader-bot",
+            "mainWalletAddress": "0xMAIN",
+        }
+
+    def test_get_pending_ai_agents_parses_the_list(self):
+        from primedelta.types import PendingAIAgent
+
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(
+            200,
+            [
+                {"subWalletAddress": "0xSUB1", "agentName": "bot-1"},
+                {"subWalletAddress": "0xSUB2", "agentName": "bot-2"},
+            ],
+        )
+
+        assert client.get_pending_ai_agents() == [
+            PendingAIAgent(sub_wallet_address="0xSUB1", agent_name="bot-1"),
+            PendingAIAgent(sub_wallet_address="0xSUB2", agent_name="bot-2"),
+        ]
+        method, url = session.request.call_args.args
+        assert method == "GET"
+        assert url.endswith("/pending-ai-agents/")
+
+    def test_confirm_ai_agent_posts_the_sub_wallet(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(204)
+
+        client.confirm_ai_agent(sub_wallet_address="0xSUB")
+
+        method, url = session.request.call_args.args
+        kwargs = session.request.call_args.kwargs
+        assert method == "POST"
+        assert url.endswith("/confirm-ai-agent/")
+        assert kwargs["json"] == {"subWalletAddress": "0xSUB"}
+
+    def test_reject_ai_agent_posts_the_sub_wallet(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(204)
+
+        client.reject_ai_agent(sub_wallet_address="0xSUB")
+
+        method, url = session.request.call_args.args
+        kwargs = session.request.call_args.kwargs
+        assert method == "POST"
+        assert url.endswith("/reject-ai-agent/")
+        assert kwargs["json"] == {"subWalletAddress": "0xSUB"}

@@ -22,6 +22,7 @@ from primedelta.types import (
     OrderCost,
     OrderSide,
     OrderStatus,
+    PendingAIAgent,
     Portfolio,
     PortfolioHistory,
     Position,
@@ -195,6 +196,27 @@ class PrimeDeltaClient:
 
     def get_account_status(self) -> AccountStatus:
         return AccountStatus(self._get("/verification-status/")["status"])
+
+    def register_ai_account(self, agent_name: str, main_wallet_address: str) -> None:
+        self._post(
+            "/register-ai-account/",
+            {"agentName": agent_name, "mainWalletAddress": main_wallet_address},
+        )
+
+    def get_pending_ai_agents(self) -> list[PendingAIAgent]:
+        return [
+            PendingAIAgent(
+                sub_wallet_address=item["subWalletAddress"],
+                agent_name=item["agentName"],
+            )
+            for item in self._get("/pending-ai-agents/")
+        ]
+
+    def confirm_ai_agent(self, sub_wallet_address: str) -> None:
+        self._post("/confirm-ai-agent/", {"subWalletAddress": sub_wallet_address})
+
+    def reject_ai_agent(self, sub_wallet_address: str) -> None:
+        self._post("/reject-ai-agent/", {"subWalletAddress": sub_wallet_address})
 
     def get_pending_transfers(self, page: int, size: int) -> list[Transfer]:
         response = self._get("/pending-transfers/", {"page": page, "size": size})
