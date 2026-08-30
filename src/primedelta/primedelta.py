@@ -44,6 +44,7 @@ from primedelta.types import (
     OrderCost,
     OrderSide,
     OrderStatus,
+    PendingAIAgent,
     Portfolio,
     PortfolioHistory,
     Price,
@@ -436,6 +437,26 @@ class PrimeDelta:
 
     def get_account_status(self) -> AccountStatus:
         return self._primedelta_client.get_account_status()
+
+    def register_ai_account(self, agent_name: str, main_wallet_address: str) -> None:
+        """Register the logged-in wallet as an AI subaccount of ``main_wallet_address``.
+
+        Call this from the SUBACCOUNT's session (a fresh wallet); the main
+        account must then confirm it before the subaccount becomes active.
+        """
+        self._primedelta_client.register_ai_account(agent_name, main_wallet_address)
+
+    def get_pending_ai_agents(self) -> list[PendingAIAgent]:
+        """List AI subaccounts awaiting this (main) account's confirmation."""
+        return self._primedelta_client.get_pending_ai_agents()
+
+    def confirm_ai_agent(self, sub_wallet_address: str) -> None:
+        """Confirm a pending AI subaccount registered under this main account."""
+        self._primedelta_client.confirm_ai_agent(sub_wallet_address)
+
+    def reject_ai_agent(self, sub_wallet_address: str) -> None:
+        """Reject a pending AI subaccount registered under this main account."""
+        self._primedelta_client.reject_ai_agent(sub_wallet_address)
 
     def verification_url(self) -> str:
         """Return the URL of the web page where the user completes KYC.

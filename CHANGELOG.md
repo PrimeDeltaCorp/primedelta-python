@@ -22,6 +22,13 @@ semantic versioning once published.
   overrides (`PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL`) are unaffected.
 
 ### Added
+- **AI-subaccount management** — four client/facade methods for the AI-account
+  flow (blockchain#192). `register_ai_account(agent_name, main_wallet_address)`
+  is called from the SUBACCOUNT's session (a fresh wallet) to request linking
+  under a main; `get_pending_ai_agents()`, `confirm_ai_agent(sub_wallet_address)`
+  and `reject_ai_agent(sub_wallet_address)` are called from the MAIN's session to
+  list and act on pending requests. A subaccount only becomes active once its
+  main confirms it. Returns the new `PendingAIAgent` dataclass.
 - **`AccountStatus.AWAITING_MAIN_CONFIRMATION`** — the backend now reports this
   status for an AI subaccount that has registered but not yet been confirmed by
   its main account. Parsing it no longer raises `ValueError` in
