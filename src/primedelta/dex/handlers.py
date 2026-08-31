@@ -42,6 +42,25 @@ def _call_view(fn_name: str, call_fn: Callable[[], Any]) -> Any:
         raise TransactionFailed(fn_name, _decode_revert(e)) from e
 
 
+# Symbol->address and stock->pool are IMMUTABLE topology (a token/pool address
+# never changes for a deployed network), so we memoize them per (chain_id, key).
+# This turns the on-chain `allStockTokens()` scan for AMM-only tokens
+# (AMMT1/AMMT2/WDEL, ~45 `symbol()` reads) into a one-time cost instead of paying
+# it on every quote/spot/swap — and makes those calls robust to the dev gateway
+# occasionally serving an inconsistent read that would otherwise spuriously raise
+# PoolNotFound. Only successful resolutions are cached (a miss retries next call).
+_STOCK_ADDR_CACHE: dict[tuple[int, str], str] = {}
+_POOL_ADDR_CACHE: dict[tuple[int, str], str] = {}
+
+
+def _clear_resolution_cache() -> None:
+    """Drop the memoized symbol->address / stock->pool resolutions. Addresses are
+    immutable per network, so this is only needed after a redeploy in the same
+    process (or between tests)."""
+    _STOCK_ADDR_CACHE.clear()
+    _POOL_ADDR_CACHE.clear()
+
+
 def _resolve_stock_token(web3: Web3, contracts: "Contracts", symbol: str) -> str:
     """Resolve a stock symbol to its on-chain token address.
 
@@ -49,10 +68,15 @@ def _resolve_stock_token(web3: Web3, contracts: "Contracts", symbol: str) -> str
     to enumerating `Router.allStockTokens()` on-chain so AMM-only tokens that
     aren't synced to the backend DB (AMMT1/AMMT2/WDEL) still resolve. This
     mirrors how the DEX frontend (primedelta-dex/src/registry.ts) discovers
-    tokens.
+    tokens. The resolved address is memoized (immutable per network).
     """
+    cache_key = (contracts.chain_id, symbol)
+    cached = _STOCK_ADDR_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     pool = contracts.pools.get(symbol)
     if pool is not None:
+        _STOCK_ADDR_CACHE[cache_key] = pool.stock_token_address
         return pool.stock_token_address
     router_ref = contracts.core.dex_router
     if router_ref is None:
@@ -60,6 +84,7 @@ def _resolve_stock_token(web3: Web3, contracts: "Contracts", symbol: str) -> str
     addr = _resolve_via_router(web3, contracts, router_ref, symbol)
     if addr is None:
         raise PoolNotFound(symbol)
+    _STOCK_ADDR_CACHE[cache_key] = addr
     return addr
 
 
@@ -107,6 +132,10 @@ class QuoterNotConfigured(Exception):
 def _lookup_amm_pool_address(
     web3: Web3, contracts: "Contracts", stock_token_addr: str
 ) -> str:
+    cache_key = (contracts.chain_id, stock_token_addr.lower())
+    cached = _POOL_ADDR_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     npm_ref = contracts.core.position_manager
     if npm_ref is None:
         raise PositionManagerNotConfigured()
@@ -131,6 +160,7 @@ def _lookup_amm_pool_address(
     )
     if int(pool_addr, 16) == 0:
         raise PoolNotFound(f"no AMM pool registered for {stock_token_addr}")
+    _POOL_ADDR_CACHE[cache_key] = pool_addr
     return pool_addr
 
 

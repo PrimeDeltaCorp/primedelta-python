@@ -6,6 +6,18 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+### Changed
+- **Faster `spot_price` / `quote_swap` / swaps on AMM-only tokens.** Resolving an
+  AMM-only symbol (AMMT1/AMMT2/WDEL) enumerated `Router.allStockTokens()` and read
+  every token's `symbol()` on-chain on EVERY call (~45 reads), and web3 re-fetched
+  `eth_chainId` before ~every call — so on a remote RPC a single `spot_price` was
+  ~150 round-trips (~15 s). The immutable symbol->address / stock->pool resolution
+  is now memoized per network, and `eth_chainId` is cached at the provider. Repeat
+  calls drop from ~15 s to ~0.2 s; the first (cold) call ~halves. Live price
+  (`slot0`) is still read fresh every call — only immutable plumbing is cached.
+  Memoizing on success also stops a flaky gateway read from spuriously raising
+  `PoolNotFound` once a symbol has resolved.
+
 ### Fixed
 - **Fresh installs no longer break on `abnf` 2.9.0.** `siwe==4.4.0` builds an
   ABNF grammar that redefines the `ALPHA` core rule; `abnf` 2.9.0 (released Aug

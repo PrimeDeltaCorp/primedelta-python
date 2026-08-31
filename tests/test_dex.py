@@ -25,6 +25,7 @@ from primedelta.dex.handlers import (
     QuoterNotConfigured,
     RouterNotConfigured,
     _AMMPoolHandler,
+    _clear_resolution_cache,
     _DclexPoolHandler,
     _QuoteHandler,
     _resolve_stock_token,
@@ -32,6 +33,16 @@ from primedelta.dex.handlers import (
 )
 from primedelta.primedelta import _decode_revert
 from primedelta.types import AccountStatus
+
+
+@pytest.fixture(autouse=True)
+def _reset_resolution_cache():
+    # Resolution is memoized module-globally; clear it so tests don't leak a
+    # cached (chain_id, symbol) -> address across cases.
+    _clear_resolution_cache()
+    yield
+    _clear_resolution_cache()
+
 
 _USER_ADDRESS = "0x" + "B" * 40
 _STABLECOIN_ADDRESS = "0x" + "1" * 40
@@ -1016,6 +1027,29 @@ class TestResolveStockToken:
 
         addr = _resolve_stock_token(web3, _contracts(), "AMMT1")
         assert addr == ammt1_addr
+
+    def test_router_resolution_is_memoized(self):
+        web3 = _make_web3_mock()
+        ammt1_addr = "0x" + "7" * 40
+
+        def make_contract(address, abi):
+            contract = MagicMock()
+            if address == _ROUTER_ADDRESS:
+                contract.functions.allStockTokens.return_value.call.return_value = [
+                    ammt1_addr
+                ]
+            elif address == ammt1_addr:
+                contract.functions.symbol.return_value.call.return_value = "AMMT1"
+            return contract
+
+        web3.eth.contract.side_effect = make_contract
+        contracts = _contracts()
+        first = _resolve_stock_token(web3, contracts, "AMMT1")
+        calls_after_first = web3.eth.contract.call_count
+        second = _resolve_stock_token(web3, contracts, "AMMT1")
+        assert first == second == ammt1_addr
+        # the second resolution is served from cache — no new on-chain scan.
+        assert web3.eth.contract.call_count == calls_after_first
 
     def test_raises_pool_not_found_when_router_unconfigured_and_symbol_missing(self):
         web3 = _make_web3_mock()
