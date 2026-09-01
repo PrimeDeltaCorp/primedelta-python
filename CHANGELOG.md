@@ -6,6 +6,19 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+### Fixed
+- **`import primedelta` is quiet.** `siwe` builds an ABNF grammar that redefines
+  RFC-5234 core rules (ALPHA/DIGIT/LF/HEXDIG), which `abnf` printed as four
+  `GrammarWarning`s on every first import — harmless but noisy. Suppressed around
+  the single `siwe` import.
+- **Transient backend blips no longer crash the caller.** The HTTP session now
+  retries IDEMPOTENT requests (GET/HEAD/OPTIONS) over a dropped/stale-keep-alive
+  connection, a read-timeout, or a momentary 5xx, so a blip reconnects instead of
+  surfacing a raw `requests` traceback (POST/PUT/PATCH/DELETE are never retried).
+  Transport failures that survive the retries, and 5xx responses, now raise a
+  typed `BackendUnavailable` (distinct from `NotLoggedIn`/`AuthorizationError`/
+  `APIError`) so a caller or the MCP layer can back off cleanly.
+
 ### Changed
 - **Faster `spot_price` / `quote_swap` / swaps on AMM-only tokens.** Resolving an
   AMM-only symbol (AMMT1/AMMT2/WDEL) enumerated `Router.allStockTokens()` and read

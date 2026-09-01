@@ -5,7 +5,9 @@ from typing import Any, Iterator, Optional
 from urllib.parse import urlsplit
 
 import requests
+from requests.adapters import HTTPAdapter
 from sseclient import SSEClient
+from urllib3.util.retry import Retry
 
 from primedelta.settings import PRIMEDELTA_BASE_URL, PYTH_HERMES_BASE_URL
 from primedelta.types import (
@@ -53,6 +55,24 @@ class _TimeoutSession(requests.Session):
     def __init__(self, timeout: float = _HTTP_TIMEOUT) -> None:
         super().__init__()
         self._timeout = timeout
+        # Retry IDEMPOTENT requests over transient transport failures — a stale
+        # keep-alive connection the server already closed (RemoteDisconnected),
+        # a dropped connection, or a momentary 5xx/read-timeout — so a blip
+        # opens a fresh connection and succeeds instead of surfacing a raw
+        # traceback. POST/PUT/PATCH/DELETE are NOT retried (could double-submit).
+        retry = Retry(
+            total=2,
+            connect=2,
+            read=2,
+            status=2,
+            backoff_factor=0.3,
+            status_forcelist=(500, 502, 503, 504),
+            allowed_methods=frozenset({"GET", "HEAD", "OPTIONS"}),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        self.mount("https://", adapter)
+        self.mount("http://", adapter)
 
     def request(self, *args: Any, **kwargs: Any) -> requests.Response:
         if not kwargs.get("stream"):
@@ -78,6 +98,16 @@ class UserSignedMessageVerificationError(Exception):
     pass
 
 
+class BackendUnavailable(Exception):
+    """The backend could not be reached, or errored transiently — a dropped
+    connection, a timeout that survived the automatic retries, or a 5xx. Kept
+    distinct from `NotLoggedIn` / `AuthorizationError` / `APIError` so a caller
+    (or the MCP layer) can back off and retry rather than crash on a raw
+    `requests` traceback."""
+
+    pass
+
+
 class PrimeDeltaClient:
     def __init__(self, base_url: Optional[str] = None) -> None:
         self._session = _TimeoutSession()
@@ -93,9 +123,25 @@ class PrimeDeltaClient:
         parts = urlsplit(self._base_url)
         return f"{parts.scheme}://{parts.netloc}"
 
+    def _session_get(self, url: str, **kwargs: Any) -> requests.Response:
+        """A plain session GET (for endpoints that read the response directly),
+        with transport failures mapped to the typed `BackendUnavailable` like
+        `_request`. The session's retry adapter still handles transient blips
+        first — this only types the error that survives the retries."""
+        try:
+            response = self._session.get(url, **kwargs)
+        except (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+        ) as exc:
+            raise BackendUnavailable(str(exc)) from exc
+        if response.status_code >= 500:
+            raise BackendUnavailable(f"backend returned HTTP {response.status_code}")
+        return response
+
     def _ensure_csrf_token(self) -> str:
         if self._csrf_token is None:
-            response = self._session.get(self._url("/csrf-token/"))
+            response = self._session_get(self._url("/csrf-token/"))
             response.raise_for_status()
             self._csrf_token = response.json()["csrfToken"]
         return self._csrf_token
@@ -115,14 +161,20 @@ class PrimeDeltaClient:
             headers["X-CSRFToken"] = self._ensure_csrf_token()
             headers["Origin"] = origin
             headers["Referer"] = origin + "/"
-        return self._session.request(
-            method,
-            self._url(endpoint),
-            params=params,
-            data=data,
-            json=json_body,
-            headers=headers,
-        )
+        try:
+            return self._session.request(
+                method,
+                self._url(endpoint),
+                params=params,
+                data=data,
+                json=json_body,
+                headers=headers,
+            )
+        except (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+        ) as exc:
+            raise BackendUnavailable(str(exc)) from exc
 
     @staticmethod
     def _error_code(response: requests.Response) -> Optional[str]:
@@ -139,6 +191,8 @@ class PrimeDeltaClient:
         return Decimal(value) if value is not None else None
 
     def _handle(self, response: requests.Response) -> Any:
+        if response.status_code >= 500:
+            raise BackendUnavailable(f"backend returned HTTP {response.status_code}")
         if response.status_code in (400, 404):
             code = self._error_code(response)
             if code or response.status_code == 400:
@@ -169,7 +223,7 @@ class PrimeDeltaClient:
         return self._unsafe("DELETE", endpoint)
 
     def get_nonce(self) -> str:
-        response = self._session.get(self._url("/users/nonce/"))
+        response = self._session_get(self._url("/users/nonce/"))
         response.raise_for_status()
         return response.json()["nonce"]
 
@@ -421,7 +475,7 @@ class PrimeDeltaClient:
         return response["orderId"]
 
     def stocks(self) -> dict[str, Stock]:
-        response = self._session.get(self._url("/stocks/"), params={"size": 100})
+        response = self._session_get(self._url("/stocks/"), params={"size": 100})
         response.raise_for_status()
         stocks_data = response.json()["items"]
         return {
@@ -453,7 +507,7 @@ class PrimeDeltaClient:
             )
 
     def is_market_open(self) -> bool:
-        response = self._session.get(self._url("/market-status/"))
+        response = self._session_get(self._url("/market-status/"))
         response.raise_for_status()
         return response.json()["isMarketOpen"]
 

@@ -1,11 +1,20 @@
 import threading
+import warnings
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable, Iterator, Optional, cast
 
 from eth_abi import decode as abi_decode
-from siwe import SiweMessage
+
+with warnings.catch_warnings():
+    # `siwe` builds an ABNF grammar that redefines RFC-5234 core rules
+    # (ALPHA/DIGIT/LF/HEXDIG), which `abnf` emits as a GrammarWarning while the
+    # grammar is compiled at import — harmless noise that spams every caller's
+    # first `import primedelta`. Suppress just those during this one import.
+    warnings.filterwarnings("ignore", message=r"rule '.*' redefines")
+    from siwe import SiweMessage
+
 from web3 import Web3
 from web3.contract.contract import ContractFunction
 from web3.exceptions import ContractLogicError

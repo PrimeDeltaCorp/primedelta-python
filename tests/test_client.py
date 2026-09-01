@@ -7,9 +7,11 @@ import requests
 from primedelta.primedelta_client import (
     APIError,
     AuthorizationError,
+    BackendUnavailable,
     NotLoggedIn,
     PrimeDeltaClient,
     UserSignedMessageVerificationError,
+    _TimeoutSession,
 )
 from primedelta.types import OrderSide
 
@@ -600,3 +602,46 @@ class TestAISubaccounts:
         assert kwargs["json"] == {"subWalletAddress": "0xSUB"}
         session.get.assert_any_call(client._url("/csrf-token/"))
         assert kwargs["headers"]["X-CSRFToken"] == "tok"
+
+
+class TestTransportRobustness:
+    def test_connection_error_becomes_backend_unavailable(self):
+        client, session = _client_with_session()
+        session.request.side_effect = requests.exceptions.ConnectionError("aborted")
+        with pytest.raises(BackendUnavailable):
+            client._get("/portfolio/")
+
+    def test_read_timeout_becomes_backend_unavailable(self):
+        client, session = _client_with_session()
+        session.request.side_effect = requests.exceptions.ReadTimeout("slow")
+        with pytest.raises(BackendUnavailable):
+            client._get("/portfolio/")
+
+    def test_5xx_becomes_backend_unavailable(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(502)
+        with pytest.raises(BackendUnavailable):
+            client._get("/portfolio/")
+
+    def test_session_get_5xx_becomes_backend_unavailable(self):
+        # the direct-GET helpers (nonce/csrf/stocks/market-status) also type a
+        # persistent 5xx, matching _handle and the PR's guarantee.
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(503)
+        with pytest.raises(BackendUnavailable):
+            client.get_nonce()
+
+    def test_session_get_transport_error_becomes_backend_unavailable(self):
+        client, session = _client_with_session()
+        session.get.side_effect = requests.exceptions.ConnectionError("nope")
+        with pytest.raises(BackendUnavailable):
+            client.get_nonce()
+
+    def test_retry_adapter_retries_idempotent_gets_only(self):
+        session = _TimeoutSession()
+        retry = session.get_adapter("https://x/").max_retries
+        assert retry.total == 2
+        assert "GET" in retry.allowed_methods
+        # never auto-retry a POST/PUT/PATCH/DELETE — could double-submit
+        assert "POST" not in retry.allowed_methods
+        assert 502 in retry.status_forcelist
