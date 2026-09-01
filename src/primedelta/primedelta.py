@@ -63,6 +63,27 @@ _CRAFT_SENTINEL = "0x" + "0" * 64
 _RPC_TIMEOUT = 30
 
 
+def _install_chain_id_cache(web3: Any) -> None:
+    """Cache `eth_chainId` at the provider. web3 re-requests the (immutable)
+    chain id before ~every call; on a remote RPC that ~doubles round-trips. Only
+    a successful response is cached, so a transient error still re-requests."""
+    provider = web3.provider
+    original = provider.make_request
+    store: dict[str, Any] = {}
+
+    def make_request(method: str, params: Any) -> Any:
+        if method == "eth_chainId":
+            resp = store.get("resp")
+            if resp is None:
+                resp = original(method, params)
+                if isinstance(resp, dict) and resp.get("result") is not None:
+                    store["resp"] = resp
+            return resp
+        return original(method, params)
+
+    provider.make_request = make_request
+
+
 class NotEnoughFunds(Exception):
     pass
 
@@ -260,6 +281,10 @@ class PrimeDelta:
         # field; web3.py's default response formatter rejects anything > 32B.
         # Injecting the PoA middleware is a no-op on non-PoA chains.
         self._web3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+        # `eth_chainId` is immutable, but web3 re-requests it before ~every call,
+        # roughly doubling round-trips on a remote RPC. Cache it at the provider
+        # so a read costs one round-trip, not three.
+        _install_chain_id_cache(self._web3)
         # Backend + SIWE endpoints follow the network (env vars override).
         self._endpoints = resolve_endpoints(network)
         self._primedelta_client = PrimeDeltaClient(base_url=self._endpoints.base_url)

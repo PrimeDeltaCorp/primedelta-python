@@ -277,3 +277,58 @@ class TestAgentSafetyRails:
                 side_effect=PoolNotFound("no amm"),
             ):
                 assert pd.instrument_kind("AAPL") == "oracle"
+
+
+class TestChainIdCache:
+    """`_install_chain_id_cache` caches the immutable eth_chainId at the provider
+    (one round-trip instead of one per call), passes other methods straight
+    through, and never caches an error response."""
+
+    def _wrap(self, responses):
+        from primedelta.primedelta import _install_chain_id_cache
+
+        calls = []
+
+        class _Provider:
+            def make_request(self, method, params):
+                calls.append(method)
+                return responses(method, len(calls))
+
+        class _Web3:
+            def __init__(self) -> None:
+                self.provider = _Provider()
+
+        w3 = _Web3()
+        _install_chain_id_cache(w3)
+        return w3, calls
+
+    def test_caches_chain_id_and_passes_other_methods_through(self):
+        def responses(method, n):
+            if method == "eth_chainId":
+                return {"jsonrpc": "2.0", "id": n, "result": "0x7ec"}
+            return {"jsonrpc": "2.0", "id": n, "result": "0x1"}
+
+        w3, calls = self._wrap(responses)
+        r1 = w3.provider.make_request("eth_chainId", [])
+        r2 = w3.provider.make_request("eth_chainId", [])
+        assert r1["result"] == r2["result"] == "0x7ec"
+        assert calls.count("eth_chainId") == 1  # second served from cache
+        w3.provider.make_request("eth_blockNumber", [])
+        w3.provider.make_request("eth_blockNumber", [])
+        assert calls.count("eth_blockNumber") == 2  # never cached
+
+    def test_does_not_cache_an_error_response(self):
+        seq = [
+            {"jsonrpc": "2.0", "id": 1, "error": {"code": -1, "message": "boom"}},
+            {"jsonrpc": "2.0", "id": 2, "result": "0x7ec"},
+        ]
+
+        def responses(method, n):
+            return seq[n - 1]
+
+        w3, calls = self._wrap(responses)
+        first = w3.provider.make_request("eth_chainId", [])
+        assert "error" in first  # not cached
+        second = w3.provider.make_request("eth_chainId", [])
+        assert second["result"] == "0x7ec"  # re-requested, now succeeds + caches
+        assert calls.count("eth_chainId") == 2
