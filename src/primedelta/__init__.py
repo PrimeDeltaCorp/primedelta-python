@@ -24,6 +24,10 @@ from .primedelta import (
     TransactionFailed,
     WdelNotConfigured,
 )
-from .primedelta_client import NotLoggedIn, UserSignedMessageVerificationError
+from .primedelta_client import (
+    BackendUnavailable,
+    NotLoggedIn,
+    UserSignedMessageVerificationError,
+)
 from .signer import KmsSigner, LocalAccountSigner, MockBrowserSigner, Signer
 from .types import *
