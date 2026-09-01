@@ -1,8 +1,10 @@
+import json
 import threading
 import warnings
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from importlib import resources
 from typing import Any, Callable, Iterator, Optional, cast
 
 from eth_abi import decode as abi_decode
@@ -187,6 +189,43 @@ _PANIC_SELECTOR = "0x4e487b71"
 # FIOracle.StalePrice() — oracle price stale/absent (market likely closed).
 _STALE_PRICE_SELECTOR = "0x19abf40e"
 
+_CUSTOM_ERROR_SELECTORS: Optional[dict[str, tuple[str, list[str]]]] = None
+
+
+def _canonical_abi_type(component: dict[str, Any]) -> str:
+    type_ = component["type"]
+    if type_.startswith("tuple"):
+        inner = ",".join(
+            _canonical_abi_type(c) for c in component.get("components", [])
+        )
+        return f"({inner}){type_[len('tuple'):]}"
+    return type_
+
+
+def _custom_error_selectors() -> dict[str, tuple[str, list[str]]]:
+    global _CUSTOM_ERROR_SELECTORS
+    if _CUSTOM_ERROR_SELECTORS is None:
+        registry: dict[str, tuple[str, list[str]]] = {}
+        for entry in resources.files("primedelta.networks.abis").iterdir():
+            if not entry.name.endswith(".json"):
+                continue
+            try:
+                data = json.loads(entry.read_text())
+            except (OSError, ValueError):
+                continue
+            abi = data.get("abi") if isinstance(data, dict) else data
+            if not isinstance(abi, list):
+                continue
+            for item in abi:
+                if not (isinstance(item, dict) and item.get("type") == "error"):
+                    continue
+                types = [_canonical_abi_type(c) for c in item.get("inputs", [])]
+                signature = f"{item['name']}({','.join(types)})"
+                selector = Web3.to_hex(Web3.keccak(text=signature)[:4])
+                registry.setdefault(selector, (item["name"], types))
+        _CUSTOM_ERROR_SELECTORS = registry
+    return _CUSTOM_ERROR_SELECTORS
+
 
 def _decode_revert(err: Exception) -> str:
     """Best-effort extraction of a human-readable revert reason."""
@@ -206,6 +245,16 @@ def _decode_revert(err: Exception) -> str:
                 pass
         if data.startswith(_STALE_PRICE_SELECTOR):
             return "StalePrice() (oracle price stale or absent — market likely closed)"
+        entry = _custom_error_selectors().get(data[:10].lower())
+        if entry is not None:
+            name, types = entry
+            if not types:
+                return f"{name}()"
+            try:
+                values = abi_decode(types, bytes.fromhex(data[10:]))
+                return f"{name}({', '.join(repr(v) for v in values)})"
+            except Exception:
+                return f"{name}(...)"
         return f"raw_data={data}"
     message = getattr(err, "message", None)
     return message or str(err) or "no reason given"
