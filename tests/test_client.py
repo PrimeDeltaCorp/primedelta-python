@@ -703,3 +703,25 @@ class TestAutoRelogin:
 
         assert client._post("/x/", {"a": 1}) == {"done": True}
         assert calls == [1]
+
+    def test_signed_price_updates_relogins_on_401(self):
+        client, session = _client_with_session()
+        session.request.side_effect = [
+            _Resp(401),
+            _Resp(200, [{"signature": "0xabcd"}]),
+        ]
+        calls = []
+        client.set_relogin(lambda: calls.append(1))
+
+        assert client.get_signed_price_updates(["AAPL"]) == [bytes.fromhex("abcd")]
+        assert calls == [1]
+        assert session.request.call_count == 2
+
+    def test_digital_identity_id_relogins_on_401(self):
+        client, session = _client_with_session()
+        session.request.side_effect = [_Resp(401), _Resp(200, {"tokenId": 7})]
+        calls = []
+        client.set_relogin(lambda: calls.append(1))
+
+        assert client.digital_identity_id() == 7
+        assert calls == [1]

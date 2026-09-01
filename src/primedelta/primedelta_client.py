@@ -213,20 +213,31 @@ class PrimeDeltaClient:
             return {}
         return response.json()
 
-    def _with_relogin(self, send: Callable[[], requests.Response]) -> Any:
+    def _send_with_relogin(
+        self, send: Callable[[], requests.Response]
+    ) -> requests.Response:
         # A 401 rejects the request before it executes, so re-running `send`
-        # after re-authenticating never double-submits a mutation. Retry once.
-        try:
-            return self._handle(send())
-        except NotLoggedIn:
-            if self._relogin is None or self._relogging_in:
-                raise
+        # after re-authenticating never double-submits a mutation. Retry once,
+        # returning the raw response so callers with custom body handling
+        # (signed prices, DID) get keep-alive too. Best-effort single-flight:
+        # a concurrent sibling that races the relogin window is not retried
+        # (the SDK is single-instance-serial by design).
+        response = send()
+        if (
+            response.status_code == 401
+            and self._relogin is not None
+            and not self._relogging_in
+        ):
             self._relogging_in = True
             try:
                 self._relogin()
             finally:
                 self._relogging_in = False
-            return self._handle(send())
+            response = send()
+        return response
+
+    def _with_relogin(self, send: Callable[[], requests.Response]) -> Any:
+        return self._handle(self._send_with_relogin(send))
 
     def _get(self, endpoint: str, params: Optional[dict[str, Any]] = None) -> Any:
         return self._with_relogin(lambda: self._request("GET", endpoint, params=params))
@@ -609,7 +620,9 @@ class PrimeDeltaClient:
         )
 
     def digital_identity_id(self) -> Optional[int]:
-        response = self._request("GET", "/digital-identity/")
+        response = self._send_with_relogin(
+            lambda: self._request("GET", "/digital-identity/")
+        )
         if response.status_code == 404:
             return None
         return self._handle(response)["tokenId"]
@@ -617,8 +630,10 @@ class PrimeDeltaClient:
     def get_signed_price_updates(self, symbols: list[str]) -> list[bytes]:
         if not symbols:
             return []
-        response = self._request(
-            "GET", "/signed-prices/", params={"symbols": ",".join(symbols)}
+        response = self._send_with_relogin(
+            lambda: self._request(
+                "GET", "/signed-prices/", params={"symbols": ",".join(symbols)}
+            )
         )
         if response.status_code == 401:
             raise NotLoggedIn()
