@@ -645,3 +645,61 @@ class TestTransportRobustness:
         # never auto-retry a POST/PUT/PATCH/DELETE — could double-submit
         assert "POST" not in retry.allowed_methods
         assert 502 in retry.status_forcelist
+
+
+class TestAutoRelogin:
+    def test_retries_get_once_after_relogin_on_401(self):
+        client, session = _client_with_session()
+        session.request.side_effect = [_Resp(401), _Resp(200, {"ok": True})]
+        calls = []
+        client.set_relogin(lambda: calls.append(1))
+
+        assert client._get("/me/") == {"ok": True}
+        assert calls == [1]
+        assert session.request.call_count == 2
+
+    def test_no_relogin_when_not_armed(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(401)
+
+        with pytest.raises(NotLoggedIn):
+            client._get("/me/")
+        assert session.request.call_count == 1
+
+    def test_relogin_fires_at_most_once(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(401)  # stays unauthorized
+        calls = []
+        client.set_relogin(lambda: calls.append(1))
+
+        with pytest.raises(NotLoggedIn):
+            client._get("/me/")
+        assert calls == [1]  # one relogin, then give up
+        assert session.request.call_count == 2
+
+    def test_reentrancy_guard_blocks_nested_relogin(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(401)
+        calls = []
+
+        def relogin():
+            calls.append(1)
+            # a call made *during* relogin must not trigger another relogin
+            with pytest.raises(NotLoggedIn):
+                client._get("/inner/")
+
+        client.set_relogin(relogin)
+        with pytest.raises(NotLoggedIn):
+            client._get("/outer/")
+        assert calls == [1]
+
+    def test_relogin_retries_unsafe_post_after_401(self):
+        client, session = _client_with_session()
+        session.request.side_effect = [_Resp(401), _Resp(200, {"done": True})]
+        # csrf token is fetched via session.get on the first unsafe call
+        session.get.return_value = _Resp(200, {"csrfToken": "t"})
+        calls = []
+        client.set_relogin(lambda: calls.append(1))
+
+        assert client._post("/x/", {"a": 1}) == {"done": True}
+        assert calls == [1]

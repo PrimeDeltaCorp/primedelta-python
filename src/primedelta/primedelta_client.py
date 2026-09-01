@@ -1,7 +1,7 @@
 import json
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 from urllib.parse import urlsplit
 
 import requests
@@ -115,6 +115,13 @@ class PrimeDeltaClient:
         # Falls back to the module default so direct `PrimeDeltaClient()` use
         # (and tests that patch PRIMEDELTA_BASE_URL) keep working.
         self._base_url = base_url if base_url is not None else PRIMEDELTA_BASE_URL
+        # Armed by the facade after a first successful login when auto-relogin is
+        # on: on a 401 the client re-runs this once and retries (see _with_relogin).
+        self._relogin: Optional[Callable[[], None]] = None
+        self._relogging_in = False
+
+    def set_relogin(self, callback: Optional[Callable[[], None]]) -> None:
+        self._relogin = callback
 
     def _url(self, endpoint: str) -> str:
         return f"{self._base_url}{endpoint}"
@@ -206,15 +213,33 @@ class PrimeDeltaClient:
             return {}
         return response.json()
 
+    def _with_relogin(self, send: Callable[[], requests.Response]) -> Any:
+        # A 401 rejects the request before it executes, so re-running `send`
+        # after re-authenticating never double-submits a mutation. Retry once.
+        try:
+            return self._handle(send())
+        except NotLoggedIn:
+            if self._relogin is None or self._relogging_in:
+                raise
+            self._relogging_in = True
+            try:
+                self._relogin()
+            finally:
+                self._relogging_in = False
+            return self._handle(send())
+
     def _get(self, endpoint: str, params: Optional[dict[str, Any]] = None) -> Any:
-        return self._handle(self._request("GET", endpoint, params=params))
+        return self._with_relogin(lambda: self._request("GET", endpoint, params=params))
 
     def _unsafe(self, method: str, endpoint: str, **kwargs: Any) -> Any:
-        response = self._request(method, endpoint, **kwargs)
-        if response.status_code == 403 and self._csrf_token is not None:
-            self._csrf_token = None
+        def send() -> requests.Response:
             response = self._request(method, endpoint, **kwargs)
-        return self._handle(response)
+            if response.status_code == 403 and self._csrf_token is not None:
+                self._csrf_token = None
+                response = self._request(method, endpoint, **kwargs)
+            return response
+
+        return self._with_relogin(send)
 
     def _post(self, endpoint: str, json_body: dict[str, Any]) -> Any:
         return self._unsafe("POST", endpoint, json_body=json_body)

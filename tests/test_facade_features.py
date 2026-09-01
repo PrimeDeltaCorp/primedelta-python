@@ -367,3 +367,30 @@ class TestChainIdCache:
         second = w3.provider.make_request("eth_chainId", [])
         assert second["result"] == "0x7ec"  # re-requested, now succeeds + caches
         assert calls.count("eth_chainId") == 2
+
+
+class TestAutoRelogin:
+    def test_login_arms_relogin_by_default(self):
+        pd = _pd()
+        pd._primedelta_client.get_nonce.return_value = "abcd1234"
+        pd.login()
+        pd._primedelta_client.login.assert_called_once()
+        pd._primedelta_client.set_relogin.assert_called_once_with(pd.login)
+
+    def test_logout_disarms_relogin(self):
+        pd = _pd()
+        pd.logout()
+        pd._primedelta_client.set_relogin.assert_called_once_with(None)
+
+    def test_auto_relogin_off_does_not_arm(self):
+        with patch("primedelta.primedelta.Web3"):
+            pd = PrimeDelta(
+                private_key="0x" + "1" * 64,
+                web3_provider_url="http://x",
+                auto_relogin=False,
+            )
+        pd._primedelta_client = MagicMock()
+        pd._primedelta_client.get_nonce.return_value = "abcd1234"
+        pd.login()
+        pd._primedelta_client.login.assert_called_once()
+        pd._primedelta_client.set_relogin.assert_not_called()

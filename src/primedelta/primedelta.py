@@ -320,6 +320,7 @@ class PrimeDelta:
         web3_provider_url: Optional[str] = None,
         network: str = "dev",
         signer: Optional[Signer] = None,
+        auto_relogin: bool = True,
     ) -> None:
         if web3_provider_url is None:
             raise ValueError("web3_provider_url is required")
@@ -346,6 +347,9 @@ class PrimeDelta:
         # Backend + SIWE endpoints follow the network (env vars override).
         self._endpoints = resolve_endpoints(network)
         self._primedelta_client = PrimeDeltaClient(base_url=self._endpoints.base_url)
+        # Keep-alive: after a first successful login, transparently re-run it on a
+        # backend 401 (session expiry) and retry the call once. Armed in login().
+        self._auto_relogin = auto_relogin
         # Contracts come from the SDK's bundled `networks/<name>.json` — not
         # from the backend. Pin addresses by editing that file.
         from primedelta import networks
@@ -479,6 +483,8 @@ class PrimeDelta:
         ).prepare_message()
         signature = self._signer.sign_message(message)
         self._primedelta_client.login(message=message, signature=signature, nonce=nonce)
+        if self._auto_relogin:
+            self._primedelta_client.set_relogin(self.login)
 
     def logged_in(self) -> bool:
         try:
@@ -488,6 +494,9 @@ class PrimeDelta:
         return True
 
     def logout(self) -> None:
+        # Disarm keep-alive first, else the logout call's own auth or the next
+        # authed call would silently re-login and undo the logout.
+        self._primedelta_client.set_relogin(None)
         self._primedelta_client.logout()
 
     def claim_digital_identity(self) -> str:
