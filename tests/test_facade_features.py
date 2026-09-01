@@ -204,6 +204,41 @@ class TestAgentSafetyRails:
         reason = _decode_revert(ContractLogicError("reverted", data="0x19abf40e"))
         assert "StalePrice" in reason
 
+    def test_decode_revert_names_custom_router_error(self):
+        from web3.exceptions import ContractLogicError
+
+        from primedelta.primedelta import _decode_revert
+
+        # 0x2503df6d == DclexRouter__NoLiquidity() — the thin-pool revert
+        reason = _decode_revert(ContractLogicError("reverted", data="0x2503df6d"))
+        assert reason == "DclexRouter__NoLiquidity()"
+        assert "raw_data" not in reason
+
+    def test_decode_revert_decodes_custom_error_args(self):
+        from eth_abi import encode as abi_encode
+        from web3.exceptions import ContractLogicError
+
+        from primedelta.primedelta import _decode_revert
+
+        # 0x24775e06 == SafeCastOverflowedUintToInt(uint256)
+        data = "0x24775e06" + abi_encode(["uint256"], [5]).hex()
+        reason = _decode_revert(ContractLogicError("reverted", data=data))
+        assert reason == "SafeCastOverflowedUintToInt(5)"
+
+    def test_decode_revert_unknown_selector_stays_raw(self):
+        from web3.exceptions import ContractLogicError
+
+        from primedelta.primedelta import _decode_revert
+
+        reason = _decode_revert(ContractLogicError("reverted", data="0xdeadbeef"))
+        assert reason == "raw_data=0xdeadbeef"
+
+    def test_custom_error_registry_includes_router_no_liquidity(self):
+        from primedelta.primedelta import _custom_error_selectors
+
+        registry = _custom_error_selectors()
+        assert registry["0x2503df6d"] == ("DclexRouter__NoLiquidity", [])
+
     def _tx_pd(self):
         pd = _pd()
         pd._signer = MagicMock()

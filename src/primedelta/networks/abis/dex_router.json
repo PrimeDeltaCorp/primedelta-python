@@ -651,5 +651,91 @@
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "DclexRouter__FeeTierNotAllowedForType",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DclexRouter__InvalidCallback",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DclexRouter__InvalidFeeTier",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DclexRouter__NoLiquidity",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DclexRouter__NotAContract",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DclexRouter__OracleMismatch",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DclexRouter__PoolMismatch",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DclexRouter__PoolTypeMismatch",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DclexRouter__PoolsStillRegistered",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DclexRouter__RenounceDisabled",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DclexRouter__SameToken",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DclexRouter__StablecoinNotAllowed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DclexRouter__UnexpectedCallback",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DclexRouter__ZeroAddress",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ReentrancyGuardReentrantCall",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "SafeCastOverflowedUintToInt",
+    "inputs": [
+      {
+        "name": "value",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   }
 ]
