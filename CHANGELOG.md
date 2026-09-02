@@ -7,6 +7,15 @@ semantic versioning once published.
 ## [Unreleased]
 
 ### Fixed
+- **Browser-wallet login was broken by an address-checksum mismatch.**
+  `BrowserSigner`/`RemoteBrowserSigner` returned the wallet's address verbatim
+  (wallets hand it back lowercased), and `login()` feeds it to `SiweMessage`,
+  which requires EIP-55 — so every browser login raised `ValidationError: address
+  must be in EIP-55 format`. The signers now checksum the address.
+- **BrowserSigner now prints the wallet URL** (stderr) before opening the
+  browser, so a user whose default browser has no wallet (e.g. Safari without
+  MetaMask → `No EIP-1193 wallet found`) can paste it into the right one, and a
+  retry is copy-pasteable; the auto-open is best-effort and no longer the only path.
 - **`import primedelta` is quiet.** `siwe` builds an ABNF grammar that redefines
   RFC-5234 core rules (ALPHA/DIGIT/LF/HEXDIG), which `abnf` printed as four
   `GrammarWarning`s on every first import — harmless but noisy. Suppressed around

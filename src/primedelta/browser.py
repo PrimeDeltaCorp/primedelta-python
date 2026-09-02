@@ -1,11 +1,13 @@
 import json
 import secrets
+import sys
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
+from eth_utils import to_checksum_address
 from hexbytes import HexBytes
 
 
@@ -169,7 +171,20 @@ class BrowserSigner:
         self._address: Optional[str] = None
 
     def _open(self, url: str) -> None:
-        webbrowser.open(url)
+        # Always surface the URL so a user whose default browser has no wallet
+        # (e.g. Safari without MetaMask) can paste it into the right one, and so
+        # a retry after an error is copy-pasteable. Then best-effort auto-open.
+        print(
+            "\nPrimeDelta wallet: approve in a browser signed into your wallet "
+            "(MetaMask / Rabby / …). If the wrong browser opened or it has no "
+            f"wallet, paste this URL into the right one:\n  {url}\n",
+            file=sys.stderr,
+            flush=True,
+        )
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
 
     def _run(self, op: str, params: dict[str, Any]) -> Any:
         params = {**params, "chain": self._chain}
@@ -180,7 +195,8 @@ class BrowserSigner:
     @property
     def address(self) -> str:
         if self._address is None:
-            self._address = self._run("connect", {})
+            # Wallets return the address lowercased; SIWE requires EIP-55.
+            self._address = to_checksum_address(self._run("connect", {}))
         return self._address
 
     def sign_message(self, message: str) -> str:
@@ -291,7 +307,8 @@ class RemoteBrowserSigner:
     @property
     def address(self) -> str:
         if self._address is None:
-            self._address = self._run("connect", {})
+            # Wallets return the address lowercased; SIWE requires EIP-55.
+            self._address = to_checksum_address(self._run("connect", {}))
         return self._address
 
     def sign_message(self, message: str) -> str:
