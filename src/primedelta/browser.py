@@ -183,8 +183,14 @@ class BrowserSigner:
         )
         try:
             webbrowser.open(url)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Auto-open is best-effort; the URL was printed above to paste by hand.
+            print(
+                f"PrimeDelta: couldn't auto-open a browser ({exc}) — "
+                "use the URL above.",
+                file=sys.stderr,
+                flush=True,
+            )
 
     def _run(self, op: str, params: dict[str, Any]) -> Any:
         params = {**params, "chain": self._chain}
