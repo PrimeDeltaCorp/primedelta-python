@@ -67,6 +67,10 @@ class TestRemoteBrowserSigner:
         assert signer.address == ADDR
         assert ops == ["connect"]
 
+    def test_address_checksummed_when_wallet_returns_lowercase(self):
+        # SIWE requires EIP-55; wallets return lowercase.
+        assert _signer(lambda c: (ADDR.lower(), None)).address == ADDR
+
     def test_sign_message_uses_personal_sign(self):
         seen = {}
 
