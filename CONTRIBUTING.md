@@ -28,7 +28,7 @@ Coverage is gated at **85%** (`[tool.coverage.report] fail_under`).
 Integration tests hit a live backend + chain and **self-skip** without credentials. To run them against dev, export:
 
 ```bash
-export PRIMEDELTA_PROVIDER_URL=https://besu-dev.primedelta.io
+export PRIMEDELTA_PROVIDER_URL=https://besu.dev.primedelta.io
 export PRIMEDELTA_TEST_PRIVATE_KEY=0x...        # a funded, VERIFIED_MINTED wallet
 pytest tests/integration -m integration
 ```
