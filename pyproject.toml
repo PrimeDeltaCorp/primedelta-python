@@ -25,7 +25,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed",
 ]
-dependencies = ["web3==7.15.0", "siwe==4.4.0", "abnf<2.9", "requests==2.33.0", "sseclient==0.0.27"]
+dependencies = ["web3==7.16.0", "siwe==4.4.0", "abnf<2.10", "requests==2.34.2", "sseclient==0.0.27"]
 
 [project.optional-dependencies]
 kms = ["boto3>=1.26"]
@@ -36,7 +36,7 @@ Issues = "https://github.com/PrimeDeltaCorp/primedelta-python/issues"
 
 [dependency-groups]
 dev = ["pytest>=8.0.0", "pytest-cov>=5.0.0", "python-dotenv>=1.0.0"]
-lint = ["black==26.3.1", "isort==7.0.0", "mypy==1.10.0"]
+lint = ["black==26.5.1", "isort==9.0.1", "mypy==2.3.1"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
