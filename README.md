@@ -84,7 +84,7 @@ A `Signer` is the whole wallet dependency (`address`, `sign_message`, submit-a-t
 
 ## Networks
 
-Addresses and ABIs ship inside the package under [`networks/`](https://github.com/PrimeDeltaCorp/primedelta-python/tree/main/src/primedelta/networks/). Pass `network="dev"` (default) or `network="testnet"` to `PrimeDelta(...)` — the backend base URL and SIWE signing domain follow the network automatically (no extra env). `PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL` env vars still override for local stacks. To pin a different deployment, edit the network's JSON file — see [refreshing the network config after a redeploy](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/docs/refresh-network-config.md).
+Addresses and ABIs ship inside the package under [`networks/`](https://github.com/PrimeDeltaCorp/primedelta-python/tree/main/src/primedelta/networks/). Pass `network="dev"` (default) or `network="testnet"` to `PrimeDelta(...)` — the backend base URL and SIWE signing domain follow the network automatically (no extra env). `PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL` env vars still override for local stacks. To pin a different deployment, edit the network's JSON file.
 
 ## Development
 
