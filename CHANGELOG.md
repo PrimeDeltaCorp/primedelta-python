@@ -7,6 +7,12 @@ semantic versioning once published.
 ## [Unreleased]
 
 ### Fixed
+- **Re-login no longer 403s (missing Referer/CSRF on the login POST).**
+  `login()` posted to `/users/verify/` directly, without the Origin/Referer/
+  `X-CSRFToken` headers every other write sends. The first login (anonymous, no
+  cookies) passed, but any subsequent `login()` — once a session + csrftoken
+  cookie exist — failed Django's HTTPS CSRF Referer check with
+  `403 CSRF Failed: Referer checking failed`. Login now sends the same headers.
 - **Browser-wallet login was broken by an address-checksum mismatch.**
   `BrowserSigner`/`RemoteBrowserSigner` returned the wallet's address verbatim
   (wallets hand it back lowercased), and `login()` feeds it to `SiweMessage`,
