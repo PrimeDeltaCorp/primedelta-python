@@ -264,9 +264,19 @@ class PrimeDeltaClient:
         return response.json()["nonce"]
 
     def login(self, message: str, signature: str, nonce: str) -> None:
+        # Send the same Origin/Referer/CSRF headers as every other unsafe write
+        # (login does NOT go through _request). Without them a re-login — once a
+        # session + csrftoken cookie already exist — fails Django's HTTPS CSRF
+        # Referer check with 403 ("CSRF Failed: Referer checking failed").
+        origin = self._origin()
         response = self._session.post(
             self._url("/users/verify/"),
             data={"message": message, "signature": signature, "nonce": nonce},
+            headers={
+                "X-CSRFToken": self._ensure_csrf_token(),
+                "Origin": origin,
+                "Referer": origin + "/",
+            },
         )
         if response.status_code == 400:
             if self._error_code(response) == "MESSAGE_VERIFICATION_ERROR":

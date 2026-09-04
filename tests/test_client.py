@@ -48,8 +48,12 @@ def _client_with_session():
 
 
 class TestLogin:
-    def test_verify_posted_without_csrf_and_no_token_stored(self):
+    def test_verify_posts_with_csrf_origin_referer(self):
+        # login() must carry the same CSRF/Origin/Referer as any unsafe write —
+        # else a re-login (once a session + csrftoken cookie already exist)
+        # fails Django's HTTPS CSRF Referer check with 403.
         client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
         session.post.return_value = _Resp(204)
 
         client.login(message="m", signature="s", nonce="n")
@@ -58,14 +62,16 @@ class TestLogin:
         args, kwargs = session.post.call_args
         assert args[0].endswith("/users/verify/")
         assert kwargs["data"] == {"message": "m", "signature": "s", "nonce": "n"}
-        assert "headers" not in kwargs or "X-CSRFToken" not in (
-            kwargs.get("headers") or {}
-        )
-        session.get.assert_not_called()
-        assert client._csrf_token is None
+        headers = kwargs["headers"]
+        assert headers["X-CSRFToken"] == "tok"
+        assert headers["Origin"] == client._origin()
+        assert headers["Referer"] == client._origin() + "/"
+        session.get.assert_any_call(client._url("/csrf-token/"))
+        assert client._csrf_token is None  # reset after login
 
     def test_raises_on_message_verification_error(self):
         client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
         session.post.return_value = _Resp(
             400, {"errorCode": "MESSAGE_VERIFICATION_ERROR"}
         )
