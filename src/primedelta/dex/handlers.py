@@ -42,6 +42,26 @@ def _call_view(fn_name: str, call_fn: Callable[[], Any]) -> Any:
         raise TransactionFailed(fn_name, _decode_revert(e)) from e
 
 
+def _approve_if_insufficient(
+    web3: Web3,
+    send_tx: Callable[..., str],
+    token: Any,
+    owner: str,
+    spender: str,
+    amount: int,
+) -> None:
+    spender = web3.to_checksum_address(spender)
+    current = _call_view(
+        "ERC20.allowance",
+        lambda: token.functions.allowance(
+            web3.to_checksum_address(owner), spender
+        ).call(),
+    )
+    if current >= amount:
+        return
+    send_tx(token.functions.approve(spender, amount))
+
+
 # Symbol->address and stock->pool are IMMUTABLE topology (a token/pool address
 # never changes for a deployed network), so we memoize them per (chain_id, key).
 # This turns the on-chain `allStockTokens()` scan for AMM-only tokens
@@ -400,17 +420,25 @@ class _RouterSwapHandler:
         )
 
     def _approve(self, token_ref: ContractRef, spender: str, amount: int) -> None:
-        token = self._contract(token_ref)
-        self._send_tx(
-            token.functions.approve(self._web3.to_checksum_address(spender), amount)
+        _approve_if_insufficient(
+            self._web3,
+            self._send_tx,
+            self._contract(token_ref),
+            self._account.address,
+            spender,
+            amount,
         )
 
     def _approve_stock(
         self, stock_token_address: str, spender: str, amount: int
     ) -> None:
-        token = self._erc20_at(stock_token_address)
-        self._send_tx(
-            token.functions.approve(self._web3.to_checksum_address(spender), amount)
+        _approve_if_insufficient(
+            self._web3,
+            self._send_tx,
+            self._erc20_at(stock_token_address),
+            self._account.address,
+            spender,
+            amount,
         )
 
     def _erc20_at(self, address: str) -> Any:
@@ -808,8 +836,13 @@ class _AMMPoolHandler:
             address=self._web3.to_checksum_address(token_address),
             abi=_require_pool_abi(self._contracts_provider(), "erc20"),
         )
-        self._send_tx(
-            token.functions.approve(self._web3.to_checksum_address(spender), amount)
+        _approve_if_insufficient(
+            self._web3,
+            self._send_tx,
+            token,
+            self._account.address,
+            spender,
+            amount,
         )
 
 
