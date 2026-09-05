@@ -12,8 +12,20 @@ semantic versioning once published.
   signature) and returns a `SwapSimulation` (expected output, slippage-bounded
   `min_amount_out` ready to pass to `swap_exact_input`, spot price, pool fee
   tier). AMM pools only, like `quote_swap`.
+- **`tx_status(tx_hash)` — look up a transaction's mined receipt.** Returns a
+  `TxStatus` (succeeded / block number / gas used), or None if it is not yet
+  mined. For polling a hash you hold (e.g. one broadcast externally after
+  `craft`, or returned by a prior send).
 
 ### Fixed
+- **On-chain reads now reflect this client's own writes (read-after-write).**
+  `get_onchain_stablecoin_balance` / `get_onchain_stock_balance` /
+  `get_native_del_balance` and the swap/LP allowance-skip decision are pinned to
+  the block that included this client's last send, so an eventually-consistent
+  RPC replica can no longer answer with pre-write state — e.g. skipping an
+  approve that a just-consumed allowance actually needs (which reverted the next
+  swap), or reporting a pre-swap balance. A replica lagging that block is retried,
+  then falls back to `latest`.
 - **Browser-wallet login was broken by an address-checksum mismatch.**
   `BrowserSigner`/`RemoteBrowserSigner` returned the wallet's address verbatim
   (wallets hand it back lowercased), and `login()` feeds it to `SiweMessage`,

@@ -62,6 +62,7 @@ from primedelta.types import (
     Price,
     Stock,
     Transfer,
+    TxStatus,
 )
 
 # Placeholder "tx hash" returned by the send path while crafting (see `craft`).
@@ -73,6 +74,13 @@ _CRAFT_SENTINEL = "0x" + "0" * 64
 # 30s; pin it explicitly so a future web3 default change can't silently let a
 # hung node stall a caller/task.
 _RPC_TIMEOUT = 30
+
+# Read-after-write: after a send, reads are pinned to the block that included
+# our write so an eventually-consistent RPC replica can't serve pre-write state.
+# A replica that hasn't caught up to that block yet is retried, then we fall back
+# to "latest" rather than fail the read.
+_READ_RETRIES = 3
+_READ_BACKOFF = 0.3
 
 
 def _install_chain_id_cache(web3: Any) -> None:
@@ -368,6 +376,9 @@ class PrimeDelta:
         # (one signer, one in-flight tx — the nonce manager is not concurrent).
         self._halted = False
         self._tx_lock = threading.Lock()
+        # Highest block that included a send from this client — reads pin to it so
+        # a lagging RPC replica can't serve pre-write state (see `_fresh_block`).
+        self._last_write_block = 0
         self._dclex_handler = _DclexPoolHandler(
             web3=self._web3,
             account=self._signer,
@@ -379,6 +390,7 @@ class PrimeDelta:
             account=self._signer,
             contracts_provider=self._get_contracts,
             send_tx=self._build_and_send_transaction,
+            read_block=self._fresh_block,
         )
         self._router_swapper = _RouterSwapHandler(
             web3=self._web3,
@@ -386,6 +398,7 @@ class PrimeDelta:
             contracts_provider=self._get_contracts,
             signed_prices_fetcher=self._primedelta_client.get_signed_price_updates,
             send_tx=self._build_and_send_transaction,
+            read_block=self._fresh_block,
         )
         self._quote_handler = _QuoteHandler(
             web3=self._web3,
@@ -748,6 +761,43 @@ class PrimeDelta:
                 return stock_item.total_owned
         return Decimal(0)
 
+    def _note_write(self, receipt: Any) -> None:
+        block = receipt.get("blockNumber")
+        if block is not None:
+            self._last_write_block = max(self._last_write_block, block)
+
+    def _fresh_block(self) -> Any:
+        """Block identifier for reads that must reflect this client's own writes.
+
+        Pins to the latest block at or after our last send, so an eventually-
+        consistent RPC replica can't answer a read with pre-write state.
+        ``"latest"`` until this client has sent anything (nothing of ours to be
+        stale about yet)."""
+        if self._last_write_block == 0:
+            return "latest"
+        try:
+            latest = int(self._web3.eth.block_number)
+        except Exception:
+            latest = 0
+        return max(self._last_write_block, latest)
+
+    def _read_at_fresh_block(self, read_fn: Callable[[Any], Any]) -> Any:
+        import time
+
+        block = self._fresh_block()
+        if block == "latest":
+            return read_fn("latest")
+        for attempt in range(_READ_RETRIES - 1):
+            try:
+                return read_fn(block)
+            except Exception:
+                time.sleep(_READ_BACKOFF * (attempt + 1))
+        try:
+            return read_fn(block)
+        except Exception:
+            # Replica never caught up to our block; a stale read beats no read.
+            return read_fn("latest")
+
     def get_onchain_stablecoin_balance(self) -> Decimal:
         """Read stablecoin balance from chain (bypasses backend indexer lag)."""
         stablecoin = self._get_contracts().core.stablecoin
@@ -755,7 +805,11 @@ class PrimeDelta:
             address=self._web3.to_checksum_address(stablecoin.address),
             abi=stablecoin.abi,
         )
-        raw = token.functions.balanceOf(self._signer.address).call()
+        raw = self._read_at_fresh_block(
+            lambda block: token.functions.balanceOf(self._signer.address).call(
+                block_identifier=block
+            )
+        )
         return Decimal(raw) / Decimal(10**6)
 
     def get_onchain_stock_balance(self, symbol: str) -> Decimal:
@@ -771,15 +825,44 @@ class PrimeDelta:
             address=self._web3.to_checksum_address(stock_addr),
             abi=_require_pool_abi(contracts, "erc20"),
         )
-        raw = token.functions.balanceOf(self._signer.address).call()
+        raw = self._read_at_fresh_block(
+            lambda block: token.functions.balanceOf(self._signer.address).call(
+                block_identifier=block
+            )
+        )
         return Decimal(raw) / Decimal(10**18)
 
     def get_native_del_balance(self) -> Decimal:
         """Read native DEL balance from chain."""
-        raw = self._web3.eth.get_balance(
-            self._web3.to_checksum_address(self._signer.address)
+        raw = self._read_at_fresh_block(
+            lambda block: self._web3.eth.get_balance(
+                self._web3.to_checksum_address(self._signer.address),
+                block_identifier=block,
+            )
         )
         return Decimal(raw) / Decimal(10**18)
+
+    def tx_status(self, tx_hash: str) -> Optional[TxStatus]:
+        """Look up the mined receipt for a transaction hash.
+
+        Returns None if the tx is not yet mined / unknown to the node.
+        ``succeeded`` is False for a reverted (status 0) transaction. The send
+        methods already block on the receipt and raise on failure, so this is
+        for polling a hash you hold (e.g. one broadcast externally after
+        ``craft``, or a hash returned by a prior send)."""
+        from eth_typing import HexStr
+        from web3.exceptions import TransactionNotFound
+
+        try:
+            receipt = self._web3.eth.get_transaction_receipt(cast(HexStr, tx_hash))
+        except TransactionNotFound:
+            return None
+        return TxStatus(
+            tx_hash=tx_hash,
+            succeeded=receipt["status"] == 1,
+            block_number=receipt["blockNumber"],
+            gas_used=receipt["gasUsed"],
+        )
 
     def wrap_del(self, amount: Decimal) -> str:
         """Wrap native DEL → WDEL by sending msg.value to `WDEL.deposit()`.
@@ -1216,6 +1299,7 @@ class PrimeDelta:
                 data=calldata,
                 trace=trace,
             )
+        self._note_write(receipt)
         return _tx_hash_0x(tx_hash)
 
     def _build_and_send_value_transaction(self, to: str, value: int) -> str:
@@ -1246,6 +1330,7 @@ class PrimeDelta:
             raise TransactionFailed(
                 "transfer", "reverted", tx_hash=_tx_hash_0x(tx_hash), to=to
             )
+        self._note_write(receipt)
         return _tx_hash_0x(tx_hash)
 
     def _reserve_nonce(self) -> int:

@@ -32,7 +32,7 @@ from primedelta.dex.handlers import (
     _resolve_stock_token,
     _RouterSwapHandler,
 )
-from primedelta.primedelta import _decode_revert
+from primedelta.primedelta import _READ_RETRIES, _decode_revert
 from primedelta.types import AccountStatus
 
 
@@ -182,6 +182,30 @@ class TestRouterSwapHandler:
             100 * 10**6,
             1_700_000_000 + 600,
             [b""],
+        )
+
+    def test_approve_reads_allowance_at_the_provided_fresh_block(self):
+        web3 = _make_web3_mock()
+        send_tx = MagicMock(return_value="0xTX")
+        contract = web3.eth.contract.return_value
+        contract.functions.allowance.return_value.call.return_value = 0
+        handler = _RouterSwapHandler(
+            web3=web3,
+            account=_make_account(),
+            contracts_provider=lambda: _contracts(),
+            signed_prices_fetcher=lambda symbols: [b""],
+            send_tx=send_tx,
+            read_block=lambda: 777,
+        )
+
+        handler.swap_exact_input(
+            "AAPL", SwapSide.STABLECOIN_TO_STOCK, Decimal("100"), Decimal("0.5")
+        )
+
+        # The skip decision is read pinned to the facade's freshness block, not
+        # "latest", so a lagging replica can't skip a needed approve.
+        contract.functions.allowance.return_value.call.assert_called_once_with(
+            block_identifier=777
         )
 
     def test_swap_skips_approve_when_allowance_already_sufficient(self):
@@ -1322,6 +1346,109 @@ class TestDecodeRevert:
 
         err = ContractLogicError("explicit message")
         assert "explicit message" in _decode_revert(err)
+
+
+class TestReadAfterWrite:
+    def _pd(self) -> PrimeDelta:
+        pd = _make_primedelta()
+        pd._web3 = MagicMock()
+        pd._web3.to_checksum_address.side_effect = lambda a: a
+        pd._signer = MagicMock()
+        pd._signer.address = _USER_ADDRESS
+        pd._signer.fills_gas_and_nonce = False
+        return pd
+
+    def test_fresh_block_is_latest_before_any_write(self):
+        pd = self._pd()
+        assert pd._last_write_block == 0
+        assert pd._fresh_block() == "latest"
+
+    def test_send_records_write_block(self):
+        pd = self._pd()
+        pd._web3.eth.gas_price = 10**9
+        pd._web3.eth.get_transaction_count.return_value = 0
+        pd._web3.eth.wait_for_transaction_receipt.return_value = {
+            "status": 1,
+            "blockNumber": 500,
+        }
+        sent = MagicMock()
+        sent.hex.return_value = "0xabc"
+        pd._signer.submit_transaction.return_value = sent
+        fn = MagicMock()
+        fn.fn_name = "buyExactInput"
+        fn.build_transaction.return_value = {"to": "0x0"}
+
+        pd._build_and_send_transaction(fn)
+        assert pd._last_write_block == 500
+
+    def test_fresh_block_pins_to_write_when_replica_lags_else_advances(self):
+        pd = self._pd()
+        pd._last_write_block = 500
+        pd._web3.eth.block_number = 498  # replica behind our own write
+        assert pd._fresh_block() == 500
+        pd._web3.eth.block_number = 505  # chain has moved on
+        assert pd._fresh_block() == 505
+
+    def test_read_at_fresh_block_uses_latest_before_write(self):
+        pd = self._pd()
+        seen = []
+        pd._read_at_fresh_block(lambda block: seen.append(block))
+        assert seen == ["latest"]
+
+    def test_read_at_fresh_block_pins_and_retries_then_falls_back(self):
+        pd = self._pd()
+        pd._last_write_block = 300
+        pd._web3.eth.block_number = 300
+        seen = []
+
+        def read_fn(block):
+            seen.append(block)
+            if block != "latest":
+                raise Exception("block not available on this replica")
+            return 7
+
+        with patch("time.sleep"):
+            assert pd._read_at_fresh_block(read_fn) == 7
+        assert seen.count(300) == _READ_RETRIES  # all pinned attempts tried
+        assert seen[-1] == "latest"  # then a stale fallback beats no read
+
+    def test_tx_status_succeeded(self):
+        pd = self._pd()
+        pd._web3.eth.get_transaction_receipt.return_value = {
+            "status": 1,
+            "blockNumber": 12,
+            "gasUsed": 21_000,
+        }
+        st = pd.tx_status("0xabc")
+        assert st is not None
+        assert (st.tx_hash, st.succeeded, st.block_number, st.gas_used) == (
+            "0xabc",
+            True,
+            12,
+            21_000,
+        )
+
+    def test_tx_status_reverted_is_not_succeeded(self):
+        pd = self._pd()
+        pd._web3.eth.get_transaction_receipt.return_value = {
+            "status": 0,
+            "blockNumber": 12,
+            "gasUsed": 999,
+        }
+        result = pd.tx_status("0xabc")
+        assert result is not None and result.succeeded is False
+
+    def test_tx_status_none_when_not_mined(self):
+        from web3.exceptions import TransactionNotFound
+
+        pd = self._pd()
+        pd._web3.eth.get_transaction_receipt.side_effect = TransactionNotFound("x")
+        assert pd.tx_status("0xabc") is None
+
+    def test_facade_wires_fresh_block_into_swap_and_amm_handlers(self):
+        pd = _make_primedelta()
+        assert pd._router_swapper._read_block == pd._fresh_block
+        assert pd._amm_handler._read_block == pd._fresh_block
 
 
 class TestBuildAndSendTransaction:
