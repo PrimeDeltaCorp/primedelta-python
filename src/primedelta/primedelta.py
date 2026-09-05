@@ -390,7 +390,7 @@ class PrimeDelta:
             account=self._signer,
             contracts_provider=self._get_contracts,
             send_tx=self._build_and_send_transaction,
-            read_block=self._fresh_block,
+            read_fresh=self._read_at_fresh_block,
         )
         self._router_swapper = _RouterSwapHandler(
             web3=self._web3,
@@ -398,7 +398,7 @@ class PrimeDelta:
             contracts_provider=self._get_contracts,
             signed_prices_fetcher=self._primedelta_client.get_signed_price_updates,
             send_tx=self._build_and_send_transaction,
-            read_block=self._fresh_block,
+            read_fresh=self._read_at_fresh_block,
         )
         self._quote_handler = _QuoteHandler(
             web3=self._web3,

@@ -184,26 +184,27 @@ class TestRouterSwapHandler:
             [b""],
         )
 
-    def test_approve_reads_allowance_at_the_provided_fresh_block(self):
+    def test_approve_reads_allowance_through_the_fresh_read_executor(self):
         web3 = _make_web3_mock()
         send_tx = MagicMock(return_value="0xTX")
         contract = web3.eth.contract.return_value
         contract.functions.allowance.return_value.call.return_value = 0
+        # Executor stands in for PrimeDelta._read_at_fresh_block: it runs the
+        # read at a pinned block (777) — proving the allowance read is routed
+        # through the caller's retry/fallback executor, not a raw "latest" call.
         handler = _RouterSwapHandler(
             web3=web3,
             account=_make_account(),
             contracts_provider=lambda: _contracts(),
             signed_prices_fetcher=lambda symbols: [b""],
             send_tx=send_tx,
-            read_block=lambda: 777,
+            read_fresh=lambda read_fn: read_fn(777),
         )
 
         handler.swap_exact_input(
             "AAPL", SwapSide.STABLECOIN_TO_STOCK, Decimal("100"), Decimal("0.5")
         )
 
-        # The skip decision is read pinned to the facade's freshness block, not
-        # "latest", so a lagging replica can't skip a needed approve.
         contract.functions.allowance.return_value.call.assert_called_once_with(
             block_identifier=777
         )
@@ -1412,6 +1413,71 @@ class TestReadAfterWrite:
         assert seen.count(300) == _READ_RETRIES  # all pinned attempts tried
         assert seen[-1] == "latest"  # then a stale fallback beats no read
 
+    def test_read_at_fresh_block_returns_pinned_value_without_consulting_latest(self):
+        pd = self._pd()
+        pd._last_write_block = 300
+        pd._web3.eth.block_number = 300
+        seen = []
+
+        def read_fn(block):
+            seen.append(block)
+            return 42 if block == 300 else 999  # a wrong value if it fell back
+
+        assert pd._read_at_fresh_block(read_fn) == 42
+        assert seen == [300]  # one read at the pinned block; "latest" untouched
+
+    def test_value_send_records_write_block(self):
+        pd = self._pd()
+        pd._web3.eth.gas_price = 10**9
+        pd._web3.eth.get_transaction_count.return_value = 0
+        pd._web3.eth.wait_for_transaction_receipt.return_value = {
+            "status": 1,
+            "blockNumber": 700,
+        }
+        sent = MagicMock()
+        sent.hex.return_value = "0xabc"
+        pd._signer.submit_transaction.return_value = sent
+        with patch.object(pd, "_get_contracts", return_value=_contracts()):
+            pd._build_and_send_value_transaction("0xdead", 10**18)
+        assert pd._last_write_block == 700
+
+    def test_get_onchain_stablecoin_balance_reads_at_fresh_block(self):
+        pd = self._pd()
+        pd._last_write_block = 400
+        pd._web3.eth.block_number = 400
+        token = pd._web3.eth.contract.return_value
+        token.functions.balanceOf.return_value.call.return_value = 5_000_000
+        with patch.object(pd, "_get_contracts", return_value=_contracts()):
+            bal = pd.get_onchain_stablecoin_balance()
+        assert bal == Decimal("5")  # 5_000_000 / 10**6
+        token.functions.balanceOf.return_value.call.assert_called_once_with(
+            block_identifier=400
+        )
+
+    def test_get_onchain_stock_balance_reads_at_fresh_block(self):
+        pd = self._pd()
+        pd._last_write_block = 400
+        pd._web3.eth.block_number = 400
+        token = pd._web3.eth.contract.return_value
+        token.functions.balanceOf.return_value.call.return_value = 2 * 10**18
+        with patch.object(pd, "_get_contracts", return_value=_contracts()):
+            bal = pd.get_onchain_stock_balance("AAPL")
+        assert bal == Decimal("2")
+        token.functions.balanceOf.return_value.call.assert_called_once_with(
+            block_identifier=400
+        )
+
+    def test_get_native_del_balance_reads_at_fresh_block(self):
+        pd = self._pd()
+        pd._last_write_block = 400
+        pd._web3.eth.block_number = 400
+        pd._web3.eth.get_balance.return_value = 3 * 10**18
+        bal = pd.get_native_del_balance()
+        assert bal == Decimal("3")
+        pd._web3.eth.get_balance.assert_called_once_with(
+            _USER_ADDRESS, block_identifier=400
+        )
+
     def test_tx_status_succeeded(self):
         pd = self._pd()
         pd._web3.eth.get_transaction_receipt.return_value = {
@@ -1445,10 +1511,10 @@ class TestReadAfterWrite:
         pd._web3.eth.get_transaction_receipt.side_effect = TransactionNotFound("x")
         assert pd.tx_status("0xabc") is None
 
-    def test_facade_wires_fresh_block_into_swap_and_amm_handlers(self):
+    def test_facade_wires_fresh_read_executor_into_swap_and_amm_handlers(self):
         pd = _make_primedelta()
-        assert pd._router_swapper._read_block == pd._fresh_block
-        assert pd._amm_handler._read_block == pd._fresh_block
+        assert pd._router_swapper._read_fresh == pd._read_at_fresh_block
+        assert pd._amm_handler._read_fresh == pd._read_at_fresh_block
 
 
 class TestBuildAndSendTransaction:
