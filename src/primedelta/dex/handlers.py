@@ -49,13 +49,18 @@ def _approve_if_insufficient(
     owner: str,
     spender: str,
     amount: int,
+    read_fresh: Optional[Callable[[Callable[[Any], Any]], Any]] = None,
 ) -> None:
+    run_read = read_fresh or (lambda read_fn: read_fn("latest"))
     spender = web3.to_checksum_address(spender)
-    current = _call_view(
-        "ERC20.allowance",
-        lambda: token.functions.allowance(
+    # Read the allowance through the caller's fresh-read executor: pinned to a
+    # block that includes our own recent writes (a prior swap that consumed the
+    # allowance), with retry + "latest" fallback. So a stale read can't skip an
+    # approve that is actually needed, and a lagging replica can't fail the swap.
+    current = run_read(
+        lambda block: token.functions.allowance(
             web3.to_checksum_address(owner), spender
-        ).call(),
+        ).call(block_identifier=block)
     )
     if current >= amount:
         return
@@ -192,12 +197,14 @@ class _RouterSwapHandler:
         contracts_provider: Callable[[], Contracts],
         signed_prices_fetcher: Callable[[list[str]], list[bytes]],
         send_tx: Callable[..., str],
+        read_fresh: Optional[Callable[[Callable[[Any], Any]], Any]] = None,
     ) -> None:
         self._web3 = web3
         self._account = account
         self._contracts_provider = contracts_provider
         self._signed_prices_fetcher = signed_prices_fetcher
         self._send_tx = send_tx
+        self._read_fresh = read_fresh or (lambda read_fn: read_fn("latest"))
 
     def swap_exact_input(
         self,
@@ -427,6 +434,7 @@ class _RouterSwapHandler:
             self._account.address,
             spender,
             amount,
+            read_fresh=self._read_fresh,
         )
 
     def _approve_stock(
@@ -439,6 +447,7 @@ class _RouterSwapHandler:
             self._account.address,
             spender,
             amount,
+            read_fresh=self._read_fresh,
         )
 
     def _erc20_at(self, address: str) -> Any:
@@ -545,11 +554,13 @@ class _AMMPoolHandler:
         account: Any,
         contracts_provider: Callable[[], Contracts],
         send_tx: Callable[..., str],
+        read_fresh: Optional[Callable[[Callable[[Any], Any]], Any]] = None,
     ) -> None:
         self._web3 = web3
         self._account = account
         self._contracts_provider = contracts_provider
         self._send_tx = send_tx
+        self._read_fresh = read_fresh or (lambda read_fn: read_fn("latest"))
 
     def add_liquidity(self, params: AMMAddLiquidity) -> str:
         contracts = self._contracts_provider()
@@ -843,6 +854,7 @@ class _AMMPoolHandler:
             self._account.address,
             spender,
             amount,
+            read_fresh=self._read_fresh,
         )
 
 

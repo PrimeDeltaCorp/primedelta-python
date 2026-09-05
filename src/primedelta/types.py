@@ -214,3 +214,11 @@ class PortfolioHistory:
     end_value: Decimal
     change: Decimal
     change_percentage: Optional[Decimal]
+
+
+@dataclass(frozen=True)
+class TxStatus:
+    tx_hash: str
+    succeeded: bool
+    block_number: int
+    gas_used: int
