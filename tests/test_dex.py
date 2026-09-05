@@ -104,6 +104,10 @@ def _make_web3_mock() -> MagicMock:
     web3 = MagicMock()
     web3.to_checksum_address.side_effect = lambda a: a
     web3.eth.get_block.return_value = {"timestamp": 1_700_000_000}
+    # No pre-existing allowance by default, so approve helpers still fire; the
+    # allowance-skip path is set up explicitly in the tests that exercise it.
+    contract = web3.eth.contract.return_value
+    contract.functions.allowance.return_value.call.return_value = 0
     return web3
 
 
@@ -178,6 +182,60 @@ class TestRouterSwapHandler:
             1_700_000_000 + 600,
             [b""],
         )
+
+    def test_swap_skips_approve_when_allowance_already_sufficient(self):
+        web3 = _make_web3_mock()
+        send_tx = MagicMock(return_value="0xTX")
+        contract = web3.eth.contract.return_value
+        contract.functions.allowance.return_value.call.return_value = 100 * 10**6
+        handler = _RouterSwapHandler(
+            web3=web3,
+            account=_make_account(),
+            contracts_provider=lambda: _contracts(),
+            signed_prices_fetcher=lambda symbols: [b""],
+            send_tx=send_tx,
+        )
+
+        tx = handler.swap_exact_input(
+            "AAPL",
+            SwapSide.STABLECOIN_TO_STOCK,
+            amount_in=Decimal("100"),
+            min_amount_out=Decimal("0.5"),
+        )
+
+        assert tx == "0xTX"
+        # Existing allowance (100 dUSD) already covers the 100 dUSD input: no
+        # approve tx is sent, only the swap.
+        contract.functions.approve.assert_not_called()
+        assert send_tx.call_count == 1
+        contract.functions.buyExactInput.assert_called_once()
+        contract.functions.allowance.assert_called_once_with(
+            _USER_ADDRESS, _ROUTER_ADDRESS
+        )
+
+    def test_swap_approves_when_allowance_one_unit_below_amount(self):
+        web3 = _make_web3_mock()
+        send_tx = MagicMock(return_value="0xTX")
+        contract = web3.eth.contract.return_value
+        contract.functions.allowance.return_value.call.return_value = 100 * 10**6 - 1
+        handler = _RouterSwapHandler(
+            web3=web3,
+            account=_make_account(),
+            contracts_provider=lambda: _contracts(),
+            signed_prices_fetcher=lambda symbols: [b""],
+            send_tx=send_tx,
+        )
+
+        handler.swap_exact_input(
+            "AAPL",
+            SwapSide.STABLECOIN_TO_STOCK,
+            amount_in=Decimal("100"),
+            min_amount_out=Decimal("0.5"),
+        )
+
+        # One unit short of the input: the full approve is still sent, then swap.
+        contract.functions.approve.assert_called_once_with(_ROUTER_ADDRESS, 100 * 10**6)
+        assert send_tx.call_count == 2
 
     def test_swap_exact_output_stablecoin_to_stock_uses_max_in_for_approval(self):
         web3 = _make_web3_mock()
@@ -398,6 +456,23 @@ class TestDclexHandlerLiquidity:
         assert (_DCLEX_POOL, 10 * 10**18) in approve_args
         assert (_DCLEX_POOL, 20 * 10**6) in approve_args
 
+    def test_add_liquidity_reapproves_caps_even_when_allowance_is_higher(self):
+        handler, web3, contract, send_tx = self._setup()
+        # A stale, higher allowance must NOT cause a skip here: the approved cap
+        # is the pool's on-chain slippage bound and is re-set on every add.
+        contract.functions.allowance.return_value.call.return_value = 10**30
+        handler.add_liquidity(
+            PriceFeedAddLiquidity(
+                symbol="AAPL",
+                liquidity_amount=Decimal(30 * 10**18),
+                max_stock_amount=Decimal("10"),
+                max_stablecoin_amount=Decimal("20"),
+            )
+        )
+        approve_args = [a.args for a in contract.functions.approve.call_args_list]
+        assert (_DCLEX_POOL, 10 * 10**18) in approve_args
+        assert (_DCLEX_POOL, 20 * 10**6) in approve_args
+
     def test_remove_liquidity_calls_pool_remove(self):
         handler, web3, contract, send_tx = self._setup()
 
@@ -437,6 +512,7 @@ class TestAMMHandlerLiquidity:
         contract.functions.token0.return_value.call.return_value = token0
         contract.functions.token1.return_value.call.return_value = token1
         contract.functions.fee.return_value.call.return_value = fee
+        contract.functions.allowance.return_value.call.return_value = 0
         contract.encode_abi.side_effect = (
             lambda abi_element_identifier, args: f"0x{abi_element_identifier}".encode()
         )
@@ -615,6 +691,21 @@ class TestAMMHandlerLiquidity:
         args = contract.functions.increaseLiquidity.call_args.args[0]
         assert args["amount0Desired"] == 2 * 10**18
         assert args["amount1Desired"] == 400 * 10**6
+
+    def test_increase_liquidity_skips_approve_when_allowance_sufficient(self):
+        handler, web3, contract, send_tx = self._setup()
+        contract.functions.positions.return_value.call.return_value = self._position(
+            _STABLECOIN_ADDRESS, _AAPL_TOKEN
+        )
+        # Both token allowances already cover the desired amounts (max is 2e18).
+        contract.functions.allowance.return_value.call.return_value = 2 * 10**18
+        handler.increase_liquidity(
+            42, amount_stock=Decimal("2"), amount_stablecoin=Decimal("400")
+        )
+        # Both approves skipped — only the increaseLiquidity tx is sent.
+        contract.functions.approve.assert_not_called()
+        assert send_tx.call_count == 1
+        contract.functions.increaseLiquidity.assert_called_once()
 
     def test_burn_position_multicalls_decrease_collect_burn(self):
         handler, web3, contract, send_tx = self._setup()
