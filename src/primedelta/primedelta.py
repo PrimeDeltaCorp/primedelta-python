@@ -39,6 +39,7 @@ from primedelta.dex.params import (
     PriceFeedRemoveLiquidity,
     RemoveLiquidityParams,
     SwapSide,
+    SwapSimulation,
 )
 from primedelta.primedelta_client import APIError, NotLoggedIn, PrimeDeltaClient
 from primedelta.settings import SIWE_MESSAGE, resolve_endpoints
@@ -1376,6 +1377,34 @@ class PrimeDelta:
 
     def spot_price(self, symbol: str) -> Decimal:
         return self._quote_handler.spot_price(symbol)
+
+    def simulate_swap(
+        self,
+        symbol: str,
+        side: SwapSide,
+        amount_in: Decimal,
+        slippage_bps: int = 100,
+    ) -> SwapSimulation:
+        """Paper-trade an exact-input swap without touching account state.
+
+        Runs entirely on static reads (the on-chain Quoter) — no allowance,
+        balance, or signature — so it returns a result even when a live trade
+        would fail (thin dev pools, market closed). Gives the expected output, a
+        slippage-bounded ``min_amount_out`` ready to pass straight to
+        ``swap_exact_input``, the current spot price, and the pool fee tier.
+        AMM pools only, like ``quote_swap``.
+        """
+        expected_out = self._quote_handler.quote_swap(symbol, side, amount_in, "input")
+        return SwapSimulation(
+            symbol=symbol,
+            side=side,
+            amount_in=amount_in,
+            expected_amount_out=expected_out,
+            min_amount_out=self.min_out_from_quote(expected_out, slippage_bps),
+            slippage_bps=slippage_bps,
+            spot_price=self._quote_handler.spot_price(symbol),
+            fee_tier=self._quote_handler.pool_fee(symbol),
+        )
 
     def allowance(self, token_symbol: str, spender: str) -> Decimal:
         address, decimals = self._token_ref(token_symbol)

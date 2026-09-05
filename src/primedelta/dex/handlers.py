@@ -882,6 +882,14 @@ class _QuoteHandler:
             return raw * scale
         return (Decimal(1) / raw) * scale
 
+    def pool_fee(self, symbol: str) -> int:
+        contracts = self._contracts_provider()
+        stock = _resolve_stock_token(self._web3, contracts, symbol)
+        pool = self._contract(
+            self._amm_pool(contracts, stock), self._pool_abi(contracts)
+        )
+        return _call_view("UniswapV3Pool.fee", lambda: pool.functions.fee().call())
+
     def _amm_pool(self, contracts: Contracts, stock_token_addr: str) -> str:
         return _lookup_amm_pool_address(self._web3, contracts, stock_token_addr)
 

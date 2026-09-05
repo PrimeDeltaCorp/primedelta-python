@@ -12,6 +12,7 @@ from .dex.params import (
     PriceFeedAddLiquidity,
     PriceFeedRemoveLiquidity,
     SwapSide,
+    SwapSimulation,
 )
 from .primedelta import (
     AccountNotVerified,
