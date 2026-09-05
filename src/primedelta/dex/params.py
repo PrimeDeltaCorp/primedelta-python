@@ -15,6 +15,18 @@ class SwapSide(str, Enum):
 
 
 @dataclass(frozen=True)
+class SwapSimulation:
+    symbol: str
+    side: SwapSide
+    amount_in: Decimal
+    expected_amount_out: Decimal
+    min_amount_out: Decimal
+    slippage_bps: int
+    spot_price: Decimal
+    fee_tier: int
+
+
+@dataclass(frozen=True)
 class PriceFeedAddLiquidity:
     symbol: str
     liquidity_amount: Decimal

@@ -11,6 +11,7 @@ from primedelta import (
     PriceFeedRemoveLiquidity,
     PrimeDelta,
     SwapSide,
+    SwapSimulation,
     TransactionFailed,
 )
 from primedelta.contracts import (
@@ -756,6 +757,13 @@ class TestQuoteHandler:
         ) + (0,) * 6
         assert Decimal("10") < handler.spot_price("AMMT1") < Decimal("11")
 
+    def test_pool_fee_reads_pool_fee(self):
+        handler, contract = self._handler(token0=_AMMT1_TOKEN)
+        # Distinct from the 3000 the _handler helper seeds (and from the natural
+        # 0.3% tier), so only an actual pool.fee() read — not a hardcode — passes.
+        contract.functions.fee.return_value.call.return_value = 500
+        assert handler.pool_fee("AMMT1") == 500
+
     def test_quote_raises_when_quoter_not_configured(self):
         handler, _ = self._handler(token0=_AMMT1_TOKEN, with_quoter=False)
         with pytest.raises(QuoterNotConfigured):
@@ -852,6 +860,66 @@ class TestDispatcher:
             )
             assert primedelta.add_liquidity(amm_params) == "0xAMM"
             mock_amm.assert_called_once_with(amm_params)
+
+
+class TestSimulateSwap:
+    def _patch_quote_handler(self, primedelta, *, quote, spot, fee):
+        return (
+            patch.object(primedelta._quote_handler, "quote_swap", return_value=quote),
+            patch.object(primedelta._quote_handler, "spot_price", return_value=spot),
+            patch.object(primedelta._quote_handler, "pool_fee", return_value=fee),
+        )
+
+    def test_composes_quote_minout_spot_and_fee(self):
+        primedelta = _make_primedelta()
+        quote_p, spot_p, fee_p = self._patch_quote_handler(
+            primedelta, quote=Decimal("0.5"), spot=Decimal("200"), fee=3000
+        )
+        with quote_p as mock_quote, spot_p as mock_spot, fee_p as mock_fee:
+            sim = primedelta.simulate_swap(
+                "AAPL", SwapSide.STABLECOIN_TO_STOCK, Decimal("100"), slippage_bps=100
+            )
+
+        assert isinstance(sim, SwapSimulation)
+        # simulate always quotes exact-input for the given amount, and reads the
+        # spot price / fee for the SAME symbol (pins all three call seams).
+        mock_quote.assert_called_once_with(
+            "AAPL", SwapSide.STABLECOIN_TO_STOCK, Decimal("100"), "input"
+        )
+        mock_spot.assert_called_once_with("AAPL")
+        mock_fee.assert_called_once_with("AAPL")
+        assert sim.symbol == "AAPL"
+        assert sim.side == SwapSide.STABLECOIN_TO_STOCK
+        assert sim.amount_in == Decimal("100")
+        assert sim.expected_amount_out == Decimal("0.5")
+        # 100 bps == 1% shaved off the quote.
+        assert sim.min_amount_out == Decimal("0.5") * (Decimal(9900) / Decimal(10000))
+        assert sim.slippage_bps == 100
+        assert sim.spot_price == Decimal("200")
+        assert sim.fee_tier == 3000
+
+    def test_wider_slippage_lowers_min_out(self):
+        primedelta = _make_primedelta()
+        quote_p, spot_p, fee_p = self._patch_quote_handler(
+            primedelta, quote=Decimal("1000"), spot=Decimal("1"), fee=3000
+        )
+        with quote_p, spot_p, fee_p:
+            tight = primedelta.simulate_swap(
+                "AAPL", SwapSide.STOCK_TO_STABLECOIN, Decimal("5"), slippage_bps=50
+            )
+            loose = primedelta.simulate_swap(
+                "AAPL", SwapSide.STOCK_TO_STABLECOIN, Decimal("5"), slippage_bps=500
+            )
+        assert tight.min_amount_out == Decimal("1000") * (
+            Decimal(9950) / Decimal(10000)
+        )
+        assert loose.min_amount_out == Decimal("1000") * (
+            Decimal(9500) / Decimal(10000)
+        )
+        assert loose.min_amount_out < tight.min_amount_out
+        # The requested bps is stored verbatim (not the default, nor amount_in).
+        assert tight.slippage_bps == 50
+        assert loose.slippage_bps == 500
 
 
 _WDEL_ADDRESS = "0x" + "9" * 40
