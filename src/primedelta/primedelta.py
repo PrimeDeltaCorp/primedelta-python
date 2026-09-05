@@ -1388,11 +1388,11 @@ class PrimeDelta:
         """Paper-trade an exact-input swap without touching account state.
 
         Runs entirely on static reads (the on-chain Quoter) — no allowance,
-        balance, or signature — so it returns a result even when a live trade
-        would fail (thin dev pools, market closed). Gives the expected output, a
-        slippage-bounded ``min_amount_out`` ready to pass straight to
-        ``swap_exact_input``, the current spot price, and the pool fee tier.
-        AMM pools only, like ``quote_swap``.
+        balance, or signature — so it returns a result before you have approved
+        or funded anything, and on thin pools where a live trade might revert.
+        Gives the expected output, a slippage-bounded ``min_amount_out`` ready to
+        pass straight to ``swap_exact_input``, the current spot price, and the
+        pool fee tier. AMM pools only, like ``quote_swap``.
         """
         expected_out = self._quote_handler.quote_swap(symbol, side, amount_in, "input")
         return SwapSimulation(
