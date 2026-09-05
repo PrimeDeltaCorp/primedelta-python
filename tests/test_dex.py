@@ -759,8 +759,10 @@ class TestQuoteHandler:
 
     def test_pool_fee_reads_pool_fee(self):
         handler, contract = self._handler(token0=_AMMT1_TOKEN)
-        contract.functions.fee.return_value.call.return_value = 3000
-        assert handler.pool_fee("AMMT1") == 3000
+        # Distinct from the 3000 the _handler helper seeds (and from the natural
+        # 0.3% tier), so only an actual pool.fee() read — not a hardcode — passes.
+        contract.functions.fee.return_value.call.return_value = 500
+        assert handler.pool_fee("AMMT1") == 500
 
     def test_quote_raises_when_quoter_not_configured(self):
         handler, _ = self._handler(token0=_AMMT1_TOKEN, with_quoter=False)
@@ -873,16 +875,19 @@ class TestSimulateSwap:
         quote_p, spot_p, fee_p = self._patch_quote_handler(
             primedelta, quote=Decimal("0.5"), spot=Decimal("200"), fee=3000
         )
-        with quote_p as mock_quote, spot_p, fee_p:
+        with quote_p as mock_quote, spot_p as mock_spot, fee_p as mock_fee:
             sim = primedelta.simulate_swap(
                 "AAPL", SwapSide.STABLECOIN_TO_STOCK, Decimal("100"), slippage_bps=100
             )
 
         assert isinstance(sim, SwapSimulation)
-        # simulate always quotes exact-input for the given amount.
+        # simulate always quotes exact-input for the given amount, and reads the
+        # spot price / fee for the SAME symbol (pins all three call seams).
         mock_quote.assert_called_once_with(
             "AAPL", SwapSide.STABLECOIN_TO_STOCK, Decimal("100"), "input"
         )
+        mock_spot.assert_called_once_with("AAPL")
+        mock_fee.assert_called_once_with("AAPL")
         assert sim.symbol == "AAPL"
         assert sim.side == SwapSide.STABLECOIN_TO_STOCK
         assert sim.amount_in == Decimal("100")
@@ -912,6 +917,9 @@ class TestSimulateSwap:
             Decimal(9500) / Decimal(10000)
         )
         assert loose.min_amount_out < tight.min_amount_out
+        # The requested bps is stored verbatim (not the default, nor amount_in).
+        assert tight.slippage_bps == 50
+        assert loose.slippage_bps == 500
 
 
 _WDEL_ADDRESS = "0x" + "9" * 40
