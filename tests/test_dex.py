@@ -237,6 +237,34 @@ class TestRouterSwapHandler:
         contract.functions.approve.assert_called_once_with(_ROUTER_ADDRESS, 100 * 10**6)
         assert send_tx.call_count == 2
 
+    def test_sell_skips_approve_when_stock_allowance_sufficient(self):
+        web3 = _make_web3_mock()
+        send_tx = MagicMock(return_value="0xTX")
+        contract = web3.eth.contract.return_value
+        contract.functions.allowance.return_value.call.return_value = 2 * 10**18
+        handler = _RouterSwapHandler(
+            web3=web3,
+            account=_make_account(),
+            contracts_provider=lambda: _contracts(),
+            signed_prices_fetcher=lambda symbols: [b""],
+            send_tx=send_tx,
+        )
+
+        handler.swap_exact_input(
+            "AAPL",
+            SwapSide.STOCK_TO_STABLECOIN,
+            amount_in=Decimal("2"),
+            min_amount_out=Decimal("100"),
+        )
+
+        # Stock allowance (2 shares) already covers the 2-share input: no approve.
+        # Pins the sell path (_approve_stock) reads allowance for (owner, router).
+        contract.functions.approve.assert_not_called()
+        assert send_tx.call_count == 1
+        contract.functions.allowance.assert_called_once_with(
+            _USER_ADDRESS, _ROUTER_ADDRESS
+        )
+
     def test_swap_exact_output_stablecoin_to_stock_uses_max_in_for_approval(self):
         web3 = _make_web3_mock()
         send_tx = MagicMock(return_value="0xTX")
@@ -706,6 +734,27 @@ class TestAMMHandlerLiquidity:
         contract.functions.approve.assert_not_called()
         assert send_tx.call_count == 1
         contract.functions.increaseLiquidity.assert_called_once()
+        # Each token's allowance is read for (owner, NPM) — pins the LP-path seam.
+        assert [c.args for c in contract.functions.allowance.call_args_list] == [
+            (_USER_ADDRESS, _NPM_ADDRESS),
+            (_USER_ADDRESS, _NPM_ADDRESS),
+        ]
+
+    def test_increase_liquidity_approves_only_the_token_below_allowance(self):
+        handler, web3, contract, send_tx = self._setup()
+        contract.functions.positions.return_value.call.return_value = self._position(
+            _STABLECOIN_ADDRESS, _AAPL_TOKEN
+        )
+        # 1e18 covers the 400e6 stablecoin leg (token0) but not the 2e18 stock leg
+        # (token1): exactly one token is approved, so per-token gating is pinned.
+        contract.functions.allowance.return_value.call.return_value = 10**18
+        handler.increase_liquidity(
+            42, amount_stock=Decimal("2"), amount_stablecoin=Decimal("400")
+        )
+        assert [c.args for c in contract.functions.approve.call_args_list] == [
+            (_NPM_ADDRESS, 2 * 10**18)
+        ]
+        assert send_tx.call_count == 2  # one approve + increaseLiquidity
 
     def test_burn_position_multicalls_decrease_collect_burn(self):
         handler, web3, contract, send_tx = self._setup()
