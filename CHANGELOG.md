@@ -6,6 +6,13 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+### Added
+- **`simulate_swap()` — a paper-trade preview of an exact-input swap.** Runs
+  entirely on static reads (the on-chain Quoter — no allowance, balance, or
+  signature) and returns a `SwapSimulation` (expected output, slippage-bounded
+  `min_amount_out` ready to pass to `swap_exact_input`, spot price, pool fee
+  tier). AMM pools only, like `quote_swap`.
+
 ### Fixed
 - **Browser-wallet login was broken by an address-checksum mismatch.**
   `BrowserSigner`/`RemoteBrowserSigner` returned the wallet's address verbatim
