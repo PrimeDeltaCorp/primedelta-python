@@ -199,3 +199,43 @@ class TestOnLoginHook:
     def test_no_hook_is_a_noop(self):
         pd = self._pd()  # on_login defaults to None
         self._run_login(pd)  # must not raise
+
+
+class TestOraclePrice:
+    def _pd(self):
+        with patch("primedelta.primedelta.Web3"):
+            return PrimeDelta(
+                private_key="0x" + "1" * 64,
+                web3_provider_url="http://localhost:8545",
+            )
+
+    def _blob(self, price, expo):
+        return (
+            b"\x00" * 32
+            + int(price).to_bytes(8, "big", signed=True)
+            + int(expo).to_bytes(4, "big", signed=True)
+            + b"\x00" * (117 - 44)
+        )
+
+    def test_decodes_price_times_ten_pow_expo(self):
+        pd = self._pd()
+        pd._primedelta_client = MagicMock()
+        pd._primedelta_client.get_signed_price_updates.return_value = [
+            self._blob(15_000_000_000, -8)
+        ]
+        assert pd.oracle_price("AAPL") == Decimal("150")
+        pd._primedelta_client.get_signed_price_updates.assert_called_once_with(["AAPL"])
+
+    def test_handles_a_different_exponent(self):
+        pd = self._pd()
+        pd._primedelta_client = MagicMock()
+        pd._primedelta_client.get_signed_price_updates.return_value = [
+            self._blob(123456, -2)
+        ]
+        assert pd.oracle_price("X") == Decimal("1234.56")
+
+    def test_none_when_no_update(self):
+        pd = self._pd()
+        pd._primedelta_client = MagicMock()
+        pd._primedelta_client.get_signed_price_updates.return_value = []
+        assert pd.oracle_price("AAPL") is None

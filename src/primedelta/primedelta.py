@@ -1485,6 +1485,27 @@ class PrimeDelta:
     def spot_price(self, symbol: str) -> Decimal:
         return self._quote_handler.spot_price(symbol)
 
+    def oracle_price(self, symbol: str) -> Optional[Decimal]:
+        """Current signed oracle USD price for an oracle (price-feed) stock —
+        the reference AAPL-class stocks lack an on-chain quote for. Decoded from
+        the same signed update the swap would submit (feedId, price:int64,
+        expo:int32, ... — FIOracle layout), so it is the price the pool values
+        against. Returns None when none is available (e.g. the market is closed).
+
+        This is a REFERENCE price, not a fee-adjusted amount-out: the oracle pool
+        applies a dynamic, reserve-dependent fee on top, so budget slippage to
+        cover it when deriving a swap's min_amount_out. Needs a logged-in session.
+        """
+        updates = self._primedelta_client.get_signed_price_updates([symbol])
+        if not updates:
+            return None
+        blob = updates[0]
+        if len(blob) < 44:  # feedId(32) + price:int64(8) + expo:int32(4)
+            return None
+        price = int.from_bytes(blob[32:40], "big", signed=True)
+        expo = int.from_bytes(blob[40:44], "big", signed=True)
+        return Decimal(price) * (Decimal(10) ** expo)
+
     def simulate_swap(
         self,
         symbol: str,

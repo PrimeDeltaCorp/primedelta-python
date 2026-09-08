@@ -7,6 +7,14 @@ semantic versioning once published.
 ## [Unreleased]
 
 ### Added
+- **`oracle_price(symbol)` — a reference USD price for oracle (price-feed)
+  stocks.** AAPL-class stocks have no on-chain quote (`quote_swap`/`spot_price`
+  are AMM-only), so an agent had to bring an out-of-band price. This decodes the
+  current signed oracle price (feedId / price / expo from the same signed update
+  a swap submits), returning `None` when none is available (e.g. market closed).
+  It is a **reference** price, not a fee-adjusted amount-out — the oracle pool
+  applies a dynamic reserve-dependent fee, so budget slippage to cover it when
+  deriving a swap's `min_amount_out`.
 - **`export_session()` / `import_session()` — persist a SIWE login.** Serialize
   the authenticated session cookies and restore them into another `PrimeDelta`
   (e.g. across process restarts) instead of re-running SIWE — useful when the
