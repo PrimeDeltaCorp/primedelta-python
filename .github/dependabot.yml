@@ -6,6 +6,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # siwe 4.4.0 breaks on abnf 2.9 (redefines core rule ALPHA); main pins abnf<2.9. Don't widen.
+      - dependency-name: "abnf"
+        versions: [">=2.9"]
     groups:
       python:
         patterns: ["*"]
