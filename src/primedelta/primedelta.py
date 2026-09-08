@@ -513,6 +513,21 @@ class PrimeDelta:
         self._primedelta_client.set_relogin(None)
         self._primedelta_client.logout()
 
+    def export_session(self) -> list[dict[str, Any]]:
+        """Serialize the authenticated session cookies so a caller can persist the
+        login (e.g. across process restarts) instead of re-running SIWE. Pair with
+        `import_session`. Returns an empty list when not logged in."""
+        return self._primedelta_client.export_session()
+
+    def import_session(self, cookies: list[dict[str, Any]]) -> None:
+        """Restore a session previously captured with `export_session`. The session
+        is not re-validated; a stale one raises `NotLoggedIn` on the next authed
+        call, which auto-relogin (when enabled) then retries. Arm auto-relogin so a
+        stale restore recovers cleanly."""
+        self._primedelta_client.import_session(cookies)
+        if self._auto_relogin:
+            self._primedelta_client.set_relogin(self.login)
+
     def claim_digital_identity(self) -> str:
         account_status = self._primedelta_client.get_account_status()
         if account_status == AccountStatus.DID_MINTED:

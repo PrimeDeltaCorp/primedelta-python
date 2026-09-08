@@ -281,6 +281,34 @@ class PrimeDeltaClient:
             self._csrf_token = None
             self._session.cookies.clear()
 
+    def export_session(self) -> list[dict[str, Any]]:
+        """Serialize the session cookies for persistence (empty if not logged in)."""
+        return [
+            {
+                "name": c.name,
+                "value": c.value,
+                "domain": c.domain,
+                "path": c.path,
+                "secure": c.secure,
+            }
+            for c in self._session.cookies
+        ]
+
+    def import_session(self, cookies: list[dict[str, Any]]) -> None:
+        """Restore cookies from `export_session`. Validity is not checked here — a
+        stale session surfaces as `NotLoggedIn` on the next call (and, when
+        auto-relogin is armed, is retried)."""
+        self._session.cookies.clear()
+        for c in cookies:
+            self._session.cookies.set(
+                c["name"],
+                c["value"],
+                domain=c.get("domain") or "",
+                path=c.get("path") or "/",
+                secure=bool(c.get("secure", False)),
+            )
+        self._csrf_token = None
+
     def me(self) -> str:
         return self._get("/me/")["address"]
 

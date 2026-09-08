@@ -136,3 +136,36 @@ class TestPortfolio:
         ):
             with pytest.raises(AccountNotVerified):
                 primedelta.portfolio()
+
+
+class TestSessionPersistence:
+    def _pd(self):
+        with patch("primedelta.primedelta.Web3"):
+            return PrimeDelta(
+                private_key="0x" + "1" * 64,
+                web3_provider_url="http://localhost:8545",
+            )
+
+    def test_export_delegates_to_client(self):
+        pd = self._pd()
+        pd._primedelta_client = MagicMock()
+        pd._primedelta_client.export_session.return_value = [{"name": "sessionid"}]
+        assert pd.export_session() == [{"name": "sessionid"}]
+        pd._primedelta_client.export_session.assert_called_once()
+
+    def test_import_delegates_and_arms_relogin_when_auto(self):
+        pd = self._pd()
+        pd._auto_relogin = True
+        pd._primedelta_client = MagicMock()
+        pd.import_session([{"name": "sessionid", "value": "a"}])
+        pd._primedelta_client.import_session.assert_called_once_with(
+            [{"name": "sessionid", "value": "a"}]
+        )
+        pd._primedelta_client.set_relogin.assert_called_once_with(pd.login)
+
+    def test_import_does_not_arm_relogin_when_auto_off(self):
+        pd = self._pd()
+        pd._auto_relogin = False
+        pd._primedelta_client = MagicMock()
+        pd.import_session([])
+        pd._primedelta_client.set_relogin.assert_not_called()
