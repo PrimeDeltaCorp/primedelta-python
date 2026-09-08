@@ -725,3 +725,37 @@ class TestAutoRelogin:
 
         assert client.digital_identity_id() == 7
         assert calls == [1]
+
+
+class TestSessionPersistence:
+    def test_export_import_round_trips_cookies_with_domain(self):
+        c1 = PrimeDeltaClient()
+        c1._session.cookies.set(
+            "sessionid", "abc", domain="api.dev.primedelta.io", path="/"
+        )
+        c1._session.cookies.set(
+            "csrftoken", "xyz", domain="api.dev.primedelta.io", path="/"
+        )
+        exported = c1.export_session()
+        assert {d["name"] for d in exported} == {"sessionid", "csrftoken"}
+
+        c2 = PrimeDeltaClient()
+        c2.import_session(exported)
+        restored = {ck.name: ck.value for ck in c2._session.cookies}
+        assert restored == {"sessionid": "abc", "csrftoken": "xyz"}
+        # the domain survives so the restored cookie attaches to backend requests
+        by_domain = {ck.name: ck.domain for ck in c2._session.cookies}
+        assert by_domain["sessionid"] == "api.dev.primedelta.io"
+
+    def test_import_clears_prior_cookies_and_resets_csrf(self):
+        c = PrimeDeltaClient()
+        c._session.cookies.set("stale", "1", domain="old", path="/")
+        c._csrf_token = "cached"
+        c.import_session(
+            [{"name": "sessionid", "value": "new", "domain": "api", "path": "/"}]
+        )
+        assert {ck.name for ck in c._session.cookies} == {"sessionid"}
+        assert c._csrf_token is None
+
+    def test_export_is_empty_without_a_session(self):
+        assert PrimeDeltaClient().export_session() == []

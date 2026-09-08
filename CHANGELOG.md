@@ -7,6 +7,16 @@ semantic versioning once published.
 ## [Unreleased]
 
 ### Added
+- **`export_session()` / `import_session()` — persist a SIWE login.** Serialize
+  the authenticated session cookies and restore them into another `PrimeDelta`
+  (e.g. across process restarts) instead of re-running SIWE — useful when the
+  login itself needs a wallet approval. `import_session` re-arms auto-relogin, so
+  a stale restore surfaces as `NotLoggedIn` and is retried transparently.
+- **`on_login` callback** on `PrimeDelta(...)` — fired after every successful
+  login, the initial one **and each auto-relogin** (which also runs `login()`).
+  Lets a caller re-persist the refreshed session without intercepting the
+  internal relogin (so a cache stays fresh instead of holding only the first
+  session).
 - **`simulate_swap()` — a paper-trade preview of an exact-input swap.** Runs
   entirely on static reads (the on-chain Quoter — no allowance, balance, or
   signature) and returns a `SwapSimulation` (expected output, slippage-bounded

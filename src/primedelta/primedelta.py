@@ -330,6 +330,7 @@ class PrimeDelta:
         network: str = "dev",
         signer: Optional[Signer] = None,
         auto_relogin: bool = True,
+        on_login: Optional[Callable[["PrimeDelta"], None]] = None,
     ) -> None:
         if web3_provider_url is None:
             raise ValueError("web3_provider_url is required")
@@ -359,6 +360,10 @@ class PrimeDelta:
         # Keep-alive: after a first successful login, transparently re-run it on a
         # backend 401 (session expiry) and retry the call once. Armed in login().
         self._auto_relogin = auto_relogin
+        # Observer fired after EVERY successful login — the initial one and each
+        # auto-relogin (which also goes through login()). Lets a caller persist the
+        # refreshed session without having to intercept the internal relogin.
+        self._on_login = on_login
         # Contracts come from the SDK's bundled `networks/<name>.json` — not
         # from the backend. Pin addresses by editing that file.
         from primedelta import networks
@@ -499,6 +504,8 @@ class PrimeDelta:
         self._primedelta_client.login(message=message, signature=signature, nonce=nonce)
         if self._auto_relogin:
             self._primedelta_client.set_relogin(self.login)
+        if self._on_login is not None:
+            self._on_login(self)
 
     def logged_in(self) -> bool:
         try:
@@ -512,6 +519,21 @@ class PrimeDelta:
         # authed call would silently re-login and undo the logout.
         self._primedelta_client.set_relogin(None)
         self._primedelta_client.logout()
+
+    def export_session(self) -> list[dict[str, Any]]:
+        """Serialize the authenticated session cookies so a caller can persist the
+        login (e.g. across process restarts) instead of re-running SIWE. Pair with
+        `import_session`. Returns an empty list when not logged in."""
+        return self._primedelta_client.export_session()
+
+    def import_session(self, cookies: list[dict[str, Any]]) -> None:
+        """Restore a session previously captured with `export_session`. The session
+        is not re-validated; a stale one raises `NotLoggedIn` on the next authed
+        call, which auto-relogin (when enabled) then retries. Arm auto-relogin so a
+        stale restore recovers cleanly."""
+        self._primedelta_client.import_session(cookies)
+        if self._auto_relogin:
+            self._primedelta_client.set_relogin(self.login)
 
     def claim_digital_identity(self) -> str:
         account_status = self._primedelta_client.get_account_status()

@@ -136,3 +136,66 @@ class TestPortfolio:
         ):
             with pytest.raises(AccountNotVerified):
                 primedelta.portfolio()
+
+
+class TestSessionPersistence:
+    def _pd(self):
+        with patch("primedelta.primedelta.Web3"):
+            return PrimeDelta(
+                private_key="0x" + "1" * 64,
+                web3_provider_url="http://localhost:8545",
+            )
+
+    def test_export_delegates_to_client(self):
+        pd = self._pd()
+        pd._primedelta_client = MagicMock()
+        pd._primedelta_client.export_session.return_value = [{"name": "sessionid"}]
+        assert pd.export_session() == [{"name": "sessionid"}]
+        pd._primedelta_client.export_session.assert_called_once()
+
+    def test_import_delegates_and_arms_relogin_when_auto(self):
+        pd = self._pd()
+        pd._auto_relogin = True
+        pd._primedelta_client = MagicMock()
+        pd.import_session([{"name": "sessionid", "value": "a"}])
+        pd._primedelta_client.import_session.assert_called_once_with(
+            [{"name": "sessionid", "value": "a"}]
+        )
+        pd._primedelta_client.set_relogin.assert_called_once_with(pd.login)
+
+    def test_import_does_not_arm_relogin_when_auto_off(self):
+        pd = self._pd()
+        pd._auto_relogin = False
+        pd._primedelta_client = MagicMock()
+        pd.import_session([])
+        pd._primedelta_client.set_relogin.assert_not_called()
+
+
+class TestOnLoginHook:
+    def _pd(self, **kw):
+        with patch("primedelta.primedelta.Web3"):
+            return PrimeDelta(
+                private_key="0x" + "1" * 64,
+                web3_provider_url="http://localhost:8545",
+                **kw,
+            )
+
+    def _run_login(self, pd):
+        pd._primedelta_client = MagicMock()
+        pd._primedelta_client.get_nonce.return_value = "n"
+        pd._get_contracts = MagicMock(return_value=MagicMock(chain_id=1))
+        pd._signer = MagicMock()
+        pd._signer.sign_message.return_value = "0xsig"
+        with patch("primedelta.primedelta.SiweMessage") as siwe:
+            siwe.return_value.prepare_message.return_value = "msg"
+            pd.login()
+
+    def test_on_login_fires_with_self_after_login(self):
+        seen = []
+        pd = self._pd(on_login=lambda p: seen.append(p))
+        self._run_login(pd)
+        assert seen == [pd]
+
+    def test_no_hook_is_a_noop(self):
+        pd = self._pd()  # on_login defaults to None
+        self._run_login(pd)  # must not raise
