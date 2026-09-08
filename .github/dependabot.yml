@@ -10,6 +10,14 @@ updates:
       # siwe 4.4.0 breaks on abnf 2.9 (redefines core rule ALPHA); main pins abnf<2.9. Don't widen.
       - dependency-name: "abnf"
         versions: [">=2.9"]
+      # web3 8 conflicts with siwe 4.4.0's pins; revisit when siwe supports web3 8.
+      - dependency-name: "web3"
+        update-types: ["version-update:semver-major"]
+      # isort 9 / mypy 2 are lint-tool majors needing a code-compliance pass; adopt deliberately, not via the weekly group.
+      - dependency-name: "isort"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "mypy"
+        update-types: ["version-update:semver-major"]
     groups:
       python:
         patterns: ["*"]
