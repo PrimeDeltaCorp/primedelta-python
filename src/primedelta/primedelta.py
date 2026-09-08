@@ -330,6 +330,7 @@ class PrimeDelta:
         network: str = "dev",
         signer: Optional[Signer] = None,
         auto_relogin: bool = True,
+        on_login: Optional[Callable[["PrimeDelta"], None]] = None,
     ) -> None:
         if web3_provider_url is None:
             raise ValueError("web3_provider_url is required")
@@ -359,6 +360,10 @@ class PrimeDelta:
         # Keep-alive: after a first successful login, transparently re-run it on a
         # backend 401 (session expiry) and retry the call once. Armed in login().
         self._auto_relogin = auto_relogin
+        # Observer fired after EVERY successful login — the initial one and each
+        # auto-relogin (which also goes through login()). Lets a caller persist the
+        # refreshed session without having to intercept the internal relogin.
+        self._on_login = on_login
         # Contracts come from the SDK's bundled `networks/<name>.json` — not
         # from the backend. Pin addresses by editing that file.
         from primedelta import networks
@@ -499,6 +504,8 @@ class PrimeDelta:
         self._primedelta_client.login(message=message, signature=signature, nonce=nonce)
         if self._auto_relogin:
             self._primedelta_client.set_relogin(self.login)
+        if self._on_login is not None:
+            self._on_login(self)
 
     def logged_in(self) -> bool:
         try:
