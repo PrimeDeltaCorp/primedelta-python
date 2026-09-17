@@ -854,6 +854,115 @@ class PrimeDelta:
         )
         return Decimal(raw) / Decimal(10**18)
 
+    def get_onchain_balances(self) -> dict[str, Decimal]:
+        """All on-chain token balances for this wallet in a SINGLE Multicall3
+        call: dUSD (6 decimals) plus every token the DEX router lists (18
+        decimals). Returns the held balances (> 0) plus dUSD. Falls back to one
+        read per token when the network has no Multicall3 configured."""
+        from primedelta.dex.handlers import _require_pool_abi
+
+        contracts = self._get_contracts()
+        web3 = self._web3
+        wallet = web3.to_checksum_address(self._signer.address)
+        stablecoin = contracts.core.stablecoin
+        erc20_abi = _require_pool_abi(contracts, "erc20")
+
+        token_addresses: list[str] = []
+        router = contracts.core.dex_router
+        if router is not None:
+            router_contract = web3.eth.contract(
+                address=web3.to_checksum_address(router.address), abi=router.abi
+            )
+            token_addresses = [
+                web3.to_checksum_address(addr)
+                for addr in self._read_at_fresh_block(
+                    lambda block: router_contract.functions.allStockTokens().call(
+                        block_identifier=block
+                    )
+                )
+            ]
+
+        multicall = contracts.core.multicall3
+        if multicall is None:
+            return self._onchain_balances_per_token(erc20_abi, token_addresses)
+
+        erc20 = web3.eth.contract(abi=erc20_abi)
+        stable = web3.eth.contract(
+            address=web3.to_checksum_address(stablecoin.address), abi=stablecoin.abi
+        )
+        calls: list[tuple[str, bool, Any]] = [
+            (
+                web3.to_checksum_address(stablecoin.address),
+                False,
+                stable.encode_abi(abi_element_identifier="balanceOf", args=[wallet]),
+            )
+        ]
+        for addr in token_addresses:
+            calls.append(
+                (
+                    addr,
+                    True,
+                    erc20.encode_abi(abi_element_identifier="balanceOf", args=[wallet]),
+                )
+            )
+            calls.append(
+                (addr, True, erc20.encode_abi(abi_element_identifier="symbol"))
+            )
+
+        mc = web3.eth.contract(
+            address=web3.to_checksum_address(multicall.address), abi=multicall.abi
+        )
+        results = self._read_at_fresh_block(
+            lambda block: mc.functions.aggregate3(calls).call(block_identifier=block)
+        )
+
+        balances: dict[str, Decimal] = {}
+        dusd_ok, dusd_data = results[0]
+        balances["dUSD"] = (
+            Decimal(int.from_bytes(bytes(dusd_data), "big")) / Decimal(10**6)
+            if dusd_ok and dusd_data
+            else Decimal(0)
+        )
+        for index, addr in enumerate(token_addresses):
+            bal_ok, bal_data = results[1 + 2 * index]
+            sym_ok, sym_data = results[2 + 2 * index]
+            if not bal_ok or not bal_data:
+                continue
+            raw = int.from_bytes(bytes(bal_data), "big")
+            if raw == 0:
+                continue
+            symbol = addr
+            if sym_ok and sym_data:
+                try:
+                    symbol = web3.codec.decode(["string"], bytes(sym_data))[0]
+                except Exception:
+                    symbol = addr
+            balances[symbol] = Decimal(raw) / Decimal(10**18)
+        return balances
+
+    def _onchain_balances_per_token(
+        self, erc20_abi: Any, token_addresses: list[str]
+    ) -> dict[str, Decimal]:
+        web3 = self._web3
+        wallet = web3.to_checksum_address(self._signer.address)
+        balances: dict[str, Decimal] = {"dUSD": self.get_onchain_stablecoin_balance()}
+        for addr in token_addresses:
+            token = web3.eth.contract(
+                address=web3.to_checksum_address(addr), abi=erc20_abi
+            )
+            raw = self._read_at_fresh_block(
+                lambda block: token.functions.balanceOf(wallet).call(
+                    block_identifier=block
+                )
+            )
+            if raw:
+                try:
+                    symbol = token.functions.symbol().call()
+                except Exception:
+                    symbol = addr
+                balances[symbol] = Decimal(raw) / Decimal(10**18)
+        return balances
+
     def get_native_del_balance(self) -> Decimal:
         """Read native DEL balance from chain."""
         raw = self._read_at_fresh_block(
