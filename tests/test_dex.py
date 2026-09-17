@@ -51,6 +51,7 @@ _VAULT_ADDRESS = "0x" + "2" * 40
 _FACTORY_ADDRESS = "0x" + "3" * 40
 _DID_ADDRESS = "0x" + "4" * 40
 _ROUTER_ADDRESS = "0x" + "5" * 40
+_MULTICALL_ADDRESS = "0x" + "9" * 40
 _NPM_ADDRESS = "0x" + "6" * 40
 _AAPL_TOKEN = "0x" + "A" * 40
 _AMMT1_TOKEN = "0x" + "7" * 40
@@ -70,6 +71,7 @@ def _contracts(
     with_npm: bool = True,
     with_amm_pools: bool = False,
     with_quoter: bool = True,
+    with_multicall: bool = False,
 ) -> Contracts:
     core = CoreContracts(
         stablecoin=_ref(_STABLECOIN_ADDRESS),
@@ -79,6 +81,7 @@ def _contracts(
         dex_router=_ref(_ROUTER_ADDRESS) if with_router else None,
         position_manager=_ref(_NPM_ADDRESS) if with_npm else None,
         quoter=_ref(_QUOTER_ADDRESS) if with_quoter else None,
+        multicall3=_ref(_MULTICALL_ADDRESS) if with_multicall else None,
     )
     pools: dict[str, StockPools] = {
         "AAPL": StockPools(symbol="AAPL", stock_token_address=_AAPL_TOKEN),
@@ -1478,6 +1481,75 @@ class TestReadAfterWrite:
             _USER_ADDRESS, block_identifier=400
         )
 
+    def test_get_onchain_balances_batches_via_multicall(self):
+        pd = self._pd()
+        pd._last_write_block = 400
+        pd._web3.eth.block_number = 400
+        token_a = "0x" + "a" * 40
+        token_b = "0x" + "c" * 40
+        by_address: dict = {}
+
+        def make_contract(*args, **kwargs):
+            address = kwargs.get("address")
+            contract = by_address.setdefault(address, MagicMock())
+            if address == _ROUTER_ADDRESS:
+                contract.functions.allStockTokens.return_value.call.return_value = [
+                    token_a,
+                    token_b,
+                ]
+            elif address == _MULTICALL_ADDRESS:
+                contract.functions.aggregate3.return_value.call.return_value = [
+                    (True, (5_000_000).to_bytes(32, "big")),  # dUSD -> 5
+                    (True, (2 * 10**18).to_bytes(32, "big")),  # token_a -> 2.0
+                    (True, b"sym-a"),  # token_a symbol
+                    (True, (0).to_bytes(32, "big")),  # token_b -> 0 (dropped)
+                    (True, b"sym-b"),
+                ]
+            return contract
+
+        pd._web3.eth.contract.side_effect = make_contract
+        pd._web3.codec.decode.return_value = ["TOKA"]
+        with patch.object(
+            pd, "_get_contracts", return_value=_contracts(with_multicall=True)
+        ):
+            balances = pd.get_onchain_balances()
+
+        assert balances == {"dUSD": Decimal("5"), "TOKA": Decimal("2")}
+        by_address[
+            _MULTICALL_ADDRESS
+        ].functions.aggregate3.return_value.call.assert_called_once_with(
+            block_identifier=400
+        )
+        pd._web3.codec.decode.assert_called_once()
+
+    def test_get_onchain_balances_falls_back_without_multicall(self):
+        pd = self._pd()
+        pd._last_write_block = 400
+        pd._web3.eth.block_number = 400
+        token_a = "0x" + "a" * 40
+
+        def make_contract(*args, **kwargs):
+            address = kwargs.get("address")
+            contract = MagicMock()
+            if address == _ROUTER_ADDRESS:
+                contract.functions.allStockTokens.return_value.call.return_value = [
+                    token_a
+                ]
+            elif address == _STABLECOIN_ADDRESS:
+                contract.functions.balanceOf.return_value.call.return_value = 5_000_000
+            elif address == token_a:
+                contract.functions.balanceOf.return_value.call.return_value = 2 * 10**18
+                contract.functions.symbol.return_value.call.return_value = "TOKA"
+            return contract
+
+        pd._web3.eth.contract.side_effect = make_contract
+        with patch.object(
+            pd, "_get_contracts", return_value=_contracts(with_multicall=False)
+        ):
+            balances = pd.get_onchain_balances()
+
+        assert balances == {"dUSD": Decimal("5"), "TOKA": Decimal("2")}
+
     def test_tx_status_succeeded(self):
         pd = self._pd()
         pd._web3.eth.get_transaction_receipt.return_value = {
@@ -1742,3 +1814,14 @@ class TestClaimWithdrawals:
         pd._primedelta_client.get_account_status.return_value = AccountStatus.VERIFIED
         with pytest.raises(AccountNotVerified):
             pd.deposit_stablecoin(1)
+
+
+def test_networks_config_wires_multicall3():
+    from primedelta import networks
+
+    dev = networks.load("dev")
+    testnet = networks.load("testnet")
+    assert dev.core.multicall3 is not None
+    assert dev.core.multicall3.address == "0x9A5cCbF013be5b4d6b906CFA6c4eAE7c493022D5"
+    assert testnet.core.multicall3 is not None
+    assert any(entry.get("name") == "aggregate3" for entry in dev.core.multicall3.abi)

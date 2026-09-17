@@ -29,6 +29,7 @@ _CORE_ABIS = {
     "oracle": "oracle.json",
     "wdel": "wdel.json",
     "quoter": "quoter.json",
+    "multicall3": "multicall3.json",
 }
 
 _POOL_ABIS = {
@@ -91,6 +92,11 @@ def load(network: str) -> Contracts:
         quoter=(
             _make_ref(core_cfg["quoter"], _CORE_ABIS["quoter"])
             if core_cfg.get("quoter")
+            else None
+        ),
+        multicall3=(
+            _make_ref(core_cfg["multicall3"], _CORE_ABIS["multicall3"])
+            if core_cfg.get("multicall3")
             else None
         ),
     )
