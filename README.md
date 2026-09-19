@@ -4,8 +4,15 @@ Official Python SDK for the [Prime Delta](https://primedelta.io) mint platform a
 
 ## Install
 
+The SDK is public but **not yet on PyPI** (a plain `pip install primedelta` is a
+fast-follow). Install from git:
+
 ```bash
-pip install primedelta
+pip install "primedelta @ git+https://github.com/PrimeDeltaCorp/primedelta-python.git"
+# AWS KMS custody adds the [kms] extra:
+#   pip install "primedelta[kms] @ git+https://github.com/PrimeDeltaCorp/primedelta-python.git"
+# from a local checkout:
+#   pip install -e .
 ```
 
 Requires Python >= 3.10.
