@@ -89,7 +89,7 @@ Signers: `LocalAccountSigner` (raw key / keystore / mnemonic), `KmsSigner` (AWS 
 ## 4. Operating rules the agent MUST follow
 
 **4.1 Market hours — oracle vs AMM.**
-- **Oracle / PRICE_FEED stocks** (real equities, e.g. `AAPL`) swap only while the **US market is open**. Each oracle swap fetches a fresh broker-signed price and submits it with the tx. Outside market hours the backend returns **no signed prices** and the pool **reverts**. Always gate oracle swaps on `pd.is_market_open()` and treat that revert as "market closed," not a bug.
+- **Oracle / PRICE_FEED stocks** (real equities, e.g. `AAPL`) trade only while the **US market is open** — and "trade" means every price-feed action, not just swaps: an oracle swap **and** `add_liquidity(PriceFeedAddLiquidity)` / `remove_liquidity(PriceFeedRemoveLiquidity)` price against the signed oracle, so all revert off-hours. Each oracle action fetches a fresh broker-signed price and submits it with the tx. Outside market hours the backend returns **no signed prices** and the pool **reverts** (`0x19abf40e` StalePrice → `MarketClosed`). Always gate oracle swaps *and* price-feed liquidity on `pd.is_market_open()` and treat that revert as "market closed," not a bug.
 - **AMM tokens** (`AMMT1`, `AMMT2`, `WDEL`) trade **24/7** — no signed price, no market-hours gate.
 - Do **not** try to obtain closed-market oracle-stock exposure by routing through AMM proxies or any other path (see §5).
 

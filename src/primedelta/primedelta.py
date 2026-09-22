@@ -181,10 +181,12 @@ class TransactionFailed(Exception):
 
 
 class MarketClosed(TransactionFailed):
-    """An oracle/price-feed swap reverted because the signed equity price was
-    stale or absent — the US market is closed (or the price was withheld).
-    A subclass of TransactionFailed, so existing handlers still catch it, but
-    agents can catch it specifically to distinguish 'market closed' from a bug.
+    """An oracle/price-feed action reverted because the signed equity price was
+    stale or absent — the US market is closed (or the price was withheld). Covers
+    any price-feed call: a swap AND price-feed add/remove liquidity, which price
+    against the same oracle. A subclass of TransactionFailed, so existing handlers
+    still catch it, but agents can catch it specifically to distinguish 'market
+    closed' from a bug.
     """
 
 
