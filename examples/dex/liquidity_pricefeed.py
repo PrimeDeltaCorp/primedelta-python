@@ -18,6 +18,12 @@ primedelta = PrimeDelta(
 )
 primedelta.login()
 
+# TSLA is an oracle stock: swaps AND price-feed liquidity price against the signed
+# oracle, so every action below reverts (StalePrice / MarketClosed) outside US
+# market hours. Gate on is_market_open(), the same check a swap needs.
+if not primedelta.is_market_open():
+    raise SystemExit("market closed — oracle price-feed liquidity is unavailable")
+
 # Acquire some TSLA so we have stock to pair with the stablecoin for LP.
 buy_tx = primedelta.swap_exact_input(
     "TSLA",
