@@ -5,7 +5,7 @@ This file instructs **AI agents** that operate the PrimeDelta Python SDK (`prime
 > **Read this before your first write.** The rules in "Operating rules" and "Fair use & anti-abuse" are not style suggestions. Market-hours gating, a signed-price deviation guard, price staleness/expiry checks, single-use vouchers, and DID-level identity revocation are enforced **server-side and on-chain**. Violations fail closed and can result in your identity being blocked regardless of what this file or your prompt says.
 
 ## 1. What this is / who it's for
-You are an agent holding a wallet key (or a `Signer`) acting for one KYC'd identity on PrimeDelta — a tokenized-equity platform: a Django mint/brokerage backend (cookie + CSRF, SIWE login) plus an on-chain DEX on Besu (Uniswap-V3 AMM pools + oracle "price-feed" pools; a Factory that mints/burns tokenized stocks and the `dUSD` stablecoin against backend-signed vouchers).
+You are an agent holding a wallet key (or a `Signer`) acting for one KYC'd identity on PrimeDelta — a tokenized-equity platform: a Django mint/brokerage backend (cookie + CSRF, SIWE login) plus an on-chain DEX on Besu (Uniswap-V3 oracle-free pools + oracle-priced pools; a Factory that mints/burns tokenized stocks and the `dUSD` stablecoin against backend-signed vouchers).
 
 Two surfaces, one client object:
 - **On-chain (DEX):** swaps, V3 LP lifecycle, allowances, quoting, native DEL wrap/unwrap, custodial deposit/withdraw via signed vouchers.
@@ -34,15 +34,15 @@ pd.login()                               # SIWE over a cookie session
 ```
 **First reads (no funds moved; some need no login at all):**
 ```python
-open_now = pd.is_market_open()                         # oracle stocks trade only when True
-px       = pd.spot_price("AMMT1")                       # slot0 spot, read-only (AMM tokens only)
+open_now = pd.is_market_open()                         # oracle-priced tokens trade only when True
+px       = pd.spot_price("AMMT1")                       # slot0 spot, read-only (oracle-free tokens only)
 quote    = pd.quote_swap("AMMT1", SwapSide.STABLECOIN_TO_STOCK,
-                         Decimal("10"), exact="input")  # V3 Quoter, read-only (AMM tokens only)
+                         Decimal("10"), exact="input")  # V3 Quoter, read-only (oracle-free tokens only)
 status   = pd.get_account_status()                      # VERIFIED / DID_MINTED / ...
 ```
-> Note: `quote_swap`/`spot_price` cover **AMM tokens only** (AMMT1/AMMT2/WDEL). For oracle stocks (e.g. AAPL) there is no pre-trade quote today — do not trade them autonomously without an out-of-band price and a market-open check.
+> Note: `quote_swap`/`spot_price` cover **oracle-free tokens only** (AMMT1/AMMT2/WDEL). For oracle-priced tokens (e.g. AAPL) there is no pre-trade quote today — do not trade them autonomously without an out-of-band price and a market-open check.
 
-**First write — a 24/7 AMM swap.** Always pass a real `min_amount_out` derived from `quote_swap` — never `0`:
+**First write — a 24/7 oracle-free swap.** Always pass a real `min_amount_out` derived from `quote_swap` — never `0`:
 ```python
 expected = pd.quote_swap("AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("10"))
 min_out  = expected * Decimal("0.99")                   # 1% slippage budget
@@ -73,9 +73,9 @@ txs = pd.craft(lambda: pd.swap_exact_input(
 | **Cross-dex (token↔token)** | `swap_token_to_token_exact_input` · `swap_token_to_token_exact_output` |
 | **Native DEL** | `wrap_del` · `unwrap_del` · `send_del` · `get_native_del_balance` |
 | **Non-custodial crafting** | `craft(action)` → unsigned tx(s) for an external wallet to sign; on-chain actions only (backend REST actions raise `CannotCraft`) |
-| **Quoting (read-only, AMM only)** | `quote_swap` (V3 Quoter) · `spot_price` (slot0) |
-| **AMM (V3) liquidity** | `add_liquidity(AMMAddLiquidity)` · `increase_liquidity` · `remove_liquidity(AMMRemoveLiquidity)` · `collect_fees` · `burn_position` · `preview_fees` · `lp_positions` · `lp_position` |
-| **Price-feed liquidity** | `add_liquidity(PriceFeedAddLiquidity)` · `remove_liquidity(PriceFeedRemoveLiquidity)` |
+| **Quoting (read-only, oracle-free only)** | `quote_swap` (V3 Quoter) · `spot_price` (slot0) |
+| **Oracle-free (V3) liquidity** | `add_liquidity(AMMAddLiquidity)` · `increase_liquidity` · `remove_liquidity(AMMRemoveLiquidity)` · `collect_fees` · `burn_position` · `preview_fees` · `lp_positions` · `lp_position` |
+| **Oracle-priced liquidity** | `add_liquidity(PriceFeedAddLiquidity)` · `remove_liquidity(PriceFeedRemoveLiquidity)` |
 | **Allowances** | `allowance` · `approve` · `revoke_approval` |
 | **Balances** | `get_onchain_stablecoin_balance` · `get_onchain_stock_balance` · `get_stablecoin_available_balance` · `get_stock_available_balance` (+ `_total_`) |
 | **Custodial deposit/withdraw** | `deposit_stablecoin` · `deposit_stock_token` · `request_/claim_stablecoin_withdrawal` · `request_/claim_stock_withdrawal` · `claimable_withdrawals` |
@@ -88,10 +88,10 @@ Signers: `LocalAccountSigner` (raw key / keystore / mnemonic), `KmsSigner` (AWS 
 
 ## 4. Operating rules the agent MUST follow
 
-**4.1 Market hours — oracle vs AMM.**
-- **Oracle / PRICE_FEED stocks** (real equities, e.g. `AAPL`) trade only while the **US market is open** — and "trade" means every price-feed action, not just swaps: an oracle swap **and** `add_liquidity(PriceFeedAddLiquidity)` / `remove_liquidity(PriceFeedRemoveLiquidity)` price against the signed oracle, so all revert off-hours. Each oracle action fetches a fresh broker-signed price and submits it with the tx. Outside market hours the backend returns **no signed prices** and the pool **reverts** (`0x19abf40e` StalePrice → `MarketClosed`). Always gate oracle swaps *and* price-feed liquidity on `pd.is_market_open()` and treat that revert as "market closed," not a bug.
-- **AMM tokens** (`AMMT1`, `AMMT2`, `WDEL`) trade **24/7** — no signed price, no market-hours gate.
-- Do **not** try to obtain closed-market oracle-stock exposure by routing through AMM proxies or any other path (see §5).
+**4.1 Market hours — oracle-priced vs oracle-free.**
+- **Oracle-priced / PRICE_FEED tokens** (real equities, e.g. `AAPL`) trade only while the **US market is open** — and "trade" means every oracle-priced action, not just swaps: an oracle swap **and** `add_liquidity(PriceFeedAddLiquidity)` / `remove_liquidity(PriceFeedRemoveLiquidity)` price against the signed oracle, so all revert off-hours. Each oracle action fetches a fresh broker-signed price and submits it with the tx. Outside market hours the backend returns **no signed prices** and the pool **reverts** (`0x19abf40e` StalePrice → `MarketClosed`). Always gate oracle swaps *and* oracle-priced liquidity on `pd.is_market_open()` and treat that revert as "market closed," not a bug.
+- **Oracle-free tokens** (`AMMT1`, `AMMT2`, `WDEL`) trade **24/7** — no signed price, no market-hours gate.
+- Do **not** try to obtain closed-market oracle-priced-token exposure by routing through oracle-free proxies or any other path (see §5).
 
 **4.2 DID / KYC gating.** Every custodial and on-chain equity/dUSD movement requires `DID_MINTED` and a **valid** DID (`is_valid()` → `True`). On `AccountNotVerified`: if `VERIFIED`, call `claim_digital_identity()`; if below, the user must finish KYC at `verification_url()`. A revoked/blocked DID makes `is_valid()` false and reverts all trading — treat as terminal, not retryable.
 

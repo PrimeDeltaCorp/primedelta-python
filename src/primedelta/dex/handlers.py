@@ -16,7 +16,7 @@ from primedelta.dex.params import (
 _STABLECOIN_DECIMALS = Decimal(10**6)
 _STOCK_DECIMALS = Decimal(10**18)
 
-# DEFAULT_FEE_TIER from DclexRouter.sol — the AMM pools are created with this.
+# DEFAULT_FEE_TIER from DclexRouter.sol — the oracle-free pools are created with this.
 _AMM_FEE_TIER = 3000
 
 
@@ -69,7 +69,7 @@ def _approve_if_insufficient(
 
 # Symbol->address and stock->pool are IMMUTABLE topology (a token/pool address
 # never changes for a deployed network), so we memoize them per (chain_id, key).
-# This turns the on-chain `allStockTokens()` scan for AMM-only tokens
+# This turns the on-chain `allStockTokens()` scan for oracle-free-only tokens
 # (AMMT1/AMMT2/WDEL, ~45 `symbol()` reads) into a one-time cost instead of paying
 # it on every quote/spot/swap — and makes those calls robust to the dev gateway
 # occasionally serving an inconsistent read that would otherwise spuriously raise
@@ -90,7 +90,7 @@ def _resolve_stock_token(web3: Web3, contracts: "Contracts", symbol: str) -> str
     """Resolve a stock symbol to its on-chain token address.
 
     Prefers the backend's `/contracts/` pools (fast dict lookup). Falls back
-    to enumerating `Router.allStockTokens()` on-chain so AMM-only tokens that
+    to enumerating `Router.allStockTokens()` on-chain so oracle-free-only tokens that
     aren't synced to the backend DB (AMMT1/AMMT2/WDEL) still resolve. This
     mirrors how the DEX frontend (primedelta-dex/src/registry.ts) discovers
     tokens. The resolved address is memoized (immutable per network).
@@ -184,7 +184,7 @@ def _lookup_amm_pool_address(
         ).call(),
     )
     if int(pool_addr, 16) == 0:
-        raise PoolNotFound(f"no AMM pool registered for {stock_token_addr}")
+        raise PoolNotFound(f"no oracle-free pool registered for {stock_token_addr}")
     _POOL_ADDR_CACHE[cache_key] = pool_addr
     return pool_addr
 
@@ -305,7 +305,7 @@ class _RouterSwapHandler:
 
         Wraps the router's `swapExactInput(inputToken, outputToken, ...)` which
         internally does input→dUSD→output. Both legs may be either custom
-        (pricefeed) or AMM pools; the router picks per-token. Pyth update data
+        (oracle-priced) or oracle-free pools; the router picks per-token. Pyth update data
         is fetched for both symbols since either side may host a custom pool.
         """
         if input_symbol == output_symbol:
@@ -518,7 +518,9 @@ class _DclexPoolHandler:
             ).call(),
         )
         if int(pool_addr, 16) == 0:
-            raise PoolNotFound(f"no DCLEX pool registered for {stock_token_addr}")
+            raise PoolNotFound(
+                f"no oracle-priced pool registered for {stock_token_addr}"
+            )
         return pool_addr
 
     def _dclex_pool(self, contracts: Contracts, pool_address: str) -> Any:
