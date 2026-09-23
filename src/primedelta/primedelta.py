@@ -181,9 +181,9 @@ class TransactionFailed(Exception):
 
 
 class MarketClosed(TransactionFailed):
-    """An oracle/price-feed action reverted because the signed equity price was
+    """An oracle-priced action reverted because the signed equity price was
     stale or absent — the US market is closed (or the price was withheld). Covers
-    any price-feed call: a swap AND price-feed add/remove liquidity, which price
+    any oracle-priced call: a swap AND oracle-priced add/remove liquidity, which price
     against the same oracle. A subclass of TransactionFailed, so existing handlers
     still catch it, but agents can catch it specifically to distinguish 'market
     closed' from a bug.
@@ -471,7 +471,7 @@ class PrimeDelta:
 
         The action still reads the chain and backend to build calldata (pool
         addresses, allowances, signed prices, deadlines). For oracle-priced
-        instruments the signed price and deadline baked into the calldata expire
+        tokens the signed price and deadline baked into the calldata expire
         — sign and broadcast promptly.
 
         Scope: ``craft`` captures ON-CHAIN transactions — swap, LP, native
@@ -1000,7 +1000,7 @@ class PrimeDelta:
     def wrap_del(self, amount: Decimal) -> str:
         """Wrap native DEL → WDEL by sending msg.value to `WDEL.deposit()`.
 
-        The resulting WDEL is an AMM ERC20 — feed it into the regular swap
+        The resulting WDEL is an oracle-free ERC20 — feed it into the regular swap
         methods using the symbol "WDEL".
         """
         wdel = self._require_wdel()
@@ -1174,8 +1174,8 @@ class PrimeDelta:
     ) -> str:
         """Trade one non-dUSD token for another (routed through dUSD on chain).
 
-        Use for AMM↔AMM, AMM↔stock, and stock↔stock swaps. For dUSD↔token
-        swaps, use `swap_exact_input` with `SwapSide`.
+        Use for oracle-free↔oracle-free, oracle-free↔stock, and stock↔stock
+        swaps. For dUSD↔token swaps, use `swap_exact_input` with `SwapSide`.
         """
         self._require_logged_in_and_did_minted()
         return self._router_swapper.swap_token_to_token_exact_input(
@@ -1240,14 +1240,14 @@ class PrimeDelta:
         return self._amm_handler.burn_position(position_id)
 
     def preview_fees(self, position_id: int) -> tuple[Decimal, Decimal]:
-        """Preview an AMM (V3) position's currently collectable amounts as
+        """Preview an oracle-free (V3) position's currently collectable amounts as
         (stock, stablecoin) in human units, via a static `collect` simulation.
         Read-only (no login) but only for positions owned by this wallet — the
         NPM gates collect on ownership, so a third party's position_id reverts."""
         return self._amm_handler.preview_fees(position_id)
 
     def lp_positions(self) -> list[int]:
-        """Return all AMM (V3) position NFT token IDs owned by the wallet."""
+        """Return all oracle-free (V3) position NFT token IDs owned by the wallet."""
         npm = self._npm_contract()
         count = npm.functions.balanceOf(self._signer.address).call()
         return [
@@ -1256,7 +1256,7 @@ class PrimeDelta:
         ]
 
     def lp_position(self, position_id: int) -> LPPosition:
-        """Read AMM (V3) position info for a given NFT token ID."""
+        """Read oracle-free (V3) position info for a given NFT token ID."""
         npm = self._npm_contract()
         p = npm.functions.positions(position_id).call()
         return LPPosition(
@@ -1500,9 +1500,9 @@ class PrimeDelta:
         return self._primedelta_client.is_market_open()
 
     def instrument_kind(self, symbol: str) -> str:
-        """Classify a tradable symbol as ``"amm"`` (a 24/7 Uniswap-V3 AMM pool)
-        or ``"oracle"`` (a price-feed pool, tradable only in US market hours).
-        Agents should gate oracle-instrument swaps on ``is_market_open()``.
+        """Classify a tradable symbol as ``"amm"`` (a 24/7 Uniswap-V3 oracle-free pool)
+        or ``"oracle"`` (an oracle-priced pool, tradable only in US market hours).
+        Agents should gate oracle-priced-token swaps on ``is_market_open()``.
         """
         from primedelta.dex.handlers import (
             PoolNotFound,
@@ -1597,13 +1597,13 @@ class PrimeDelta:
         return self._quote_handler.spot_price(symbol)
 
     def oracle_price(self, symbol: str) -> Optional[Decimal]:
-        """Current signed oracle USD price for an oracle (price-feed) stock —
+        """Current signed oracle USD price for an oracle-priced token —
         the reference AAPL-class stocks lack an on-chain quote for. Decoded from
         the same signed update the swap would submit (feedId, price:int64,
         expo:int32, ... — FIOracle layout), so it is the price the pool values
         against. Returns None when none is available (e.g. the market is closed).
 
-        This is a REFERENCE price, not a fee-adjusted amount-out: the oracle pool
+        This is a REFERENCE price, not a fee-adjusted amount-out: the oracle-priced pool
         applies a dynamic, reserve-dependent fee on top, so budget slippage to
         cover it when deriving a swap's min_amount_out. Needs a logged-in session.
         """
@@ -1631,7 +1631,7 @@ class PrimeDelta:
         or funded anything, and on thin pools where a live trade might revert.
         Gives the expected output, a slippage-bounded ``min_amount_out`` ready to
         pass straight to ``swap_exact_input``, the current spot price, and the
-        pool fee tier. AMM pools only, like ``quote_swap``.
+        pool fee tier. Oracle-free pools only, like ``quote_swap``.
         """
         expected_out = self._quote_handler.quote_swap(symbol, side, amount_in, "input")
         return SwapSimulation(

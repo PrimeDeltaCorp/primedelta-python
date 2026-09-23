@@ -1,6 +1,6 @@
 # Prime Delta Python Library
 
-Official Python SDK for the [Prime Delta](https://primedelta.io) mint platform and on-chain DEX. Wraps account/KYC/order endpoints and signs transactions for the on-chain stock factory, AMM, and price-feed pools.
+Official Python SDK for the [Prime Delta](https://primedelta.io) mint platform and on-chain DEX. Wraps account/KYC/order endpoints and signs transactions for the on-chain stock factory, oracle-free, and oracle-priced pools.
 
 ## Install
 
@@ -29,7 +29,7 @@ primedelta = PrimeDelta(
 )
 primedelta.login()
 
-# Buy AMMT1 with 10 dUSD on the 24/7 AMM pool. Quote first, then derive a real
+# Buy AMMT1 with 10 dUSD on the 24/7 oracle-free pool. Quote first, then derive a real
 # min_amount_out from a slippage budget — never pass Decimal("0") in production.
 quote = primedelta.quote_swap("AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("10"))
 tx = primedelta.swap_exact_input(
@@ -40,7 +40,7 @@ tx = primedelta.swap_exact_input(
 )
 ```
 
-> Oracle-priced stocks (e.g. `AAPL`) trade only in US market hours; the SDK
+> Oracle-priced tokens (e.g. `AAPL`) trade only in US market hours; the SDK
 > classifies instruments via `instrument_kind(symbol)` and raises `MarketClosed`
 > when the signed price is unavailable.
 
@@ -66,8 +66,8 @@ If an AI agent operates this SDK to trade, read [**AGENTS.md**](https://github.c
 The router accepts dUSD on one side (`buyExact*`/`sellExact*`) or two non-dUSD tokens routed through dUSD (`swapExact*`, 2-hop). The SDK picks the right entrypoint per call.
 
 - [dUSD ↔ stock (AAPL)](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/swap.py) — `swap_exact_input` / `swap_exact_output` with `SwapSide`
-- [dUSD ↔ AMM token (AMMT1, AMMT2)](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/swap_amm.py) — same API, AMM symbol
-- [Cross-dex token ↔ token](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/swap_cross_dex.py) — `swap_token_to_token_exact_input` / `swap_token_to_token_exact_output` for AMM↔AMM, AMM↔stock, stock↔stock
+- [dUSD ↔ oracle-free token (AMMT1, AMMT2)](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/swap_amm.py) — same API, oracle-free symbol
+- [Cross-dex token ↔ token](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/swap_cross_dex.py) — `swap_token_to_token_exact_input` / `swap_token_to_token_exact_output` for oracle-free↔oracle-free, oracle-free↔stock, stock↔stock
 - [Native DEL swaps](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/swap_native.py) — `wrap_del` / `unwrap_del` plus regular swap on WDEL
 
 > The stablecoin is **dUSD** on chain. `SwapSide.STABLECOIN_TO_STOCK` and `SwapSide.STOCK_TO_STABLECOIN` are the two single-hop directions; cross-dex swaps use the dedicated `swap_token_to_token_*` methods instead of `SwapSide`.
@@ -78,8 +78,8 @@ The router accepts dUSD on one side (`buyExact*`/`sellExact*`) or two non-dUSD t
 
 ### Liquidity
 
-- [Price-feed pool liquidity](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/liquidity_pricefeed.py) — `add_liquidity` / `remove_liquidity` with `PriceFeedAddLiquidity` / `PriceFeedRemoveLiquidity`
-- [AMM (Uniswap V3) liquidity](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/liquidity_amm.py) — concentrated-range positions via `AMMAddLiquidity` / `AMMRemoveLiquidity`
+- [Oracle-priced pool liquidity](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/liquidity_pricefeed.py) — `add_liquidity` / `remove_liquidity` with `PriceFeedAddLiquidity` / `PriceFeedRemoveLiquidity`
+- [Oracle-free (Uniswap V3) liquidity](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/liquidity_amm.py) — concentrated-range positions via `AMMAddLiquidity` / `AMMRemoveLiquidity`
 - [Full V3 position lifecycle](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/v3_lifecycle.py) — `add` → `increase_liquidity` → `preview_fees` → `burn_position`
 
 ## Signers / wallets
