@@ -66,6 +66,7 @@ class Transfer:
     symbol: str
     type: TransactionType
     status: TransferHistoryStatus
+    transfer_id: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +192,18 @@ class BankDetails:
     transit_number: Optional[str]
     institution_number: Optional[str]
     bank_address: Optional[str]
+
+
+@dataclass(frozen=True)
+class FiatWithdrawalBankAccount:
+    beneficiary_name: str
+    beneficiary_address: str
+    bank_name: str
+    account_number: str
+    transit_number: str
+    institution_number: str
+    bic: str
+    bank_address: str
 
 
 @dataclass(frozen=True)

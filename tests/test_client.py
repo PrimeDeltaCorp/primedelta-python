@@ -13,7 +13,7 @@ from primedelta.primedelta_client import (
     UserSignedMessageVerificationError,
     _TimeoutSession,
 )
-from primedelta.types import OrderSide
+from primedelta.types import FiatWithdrawalBankAccount, OrderSide, TransactionType
 
 _UNSET = object()
 
@@ -360,12 +360,73 @@ class TestAccountFeatures:
         assert details.reference_code == "REF-1"
         assert details.account_number is None
 
-    def test_request_fiat_withdrawal_returns_id(self):
+    def test_request_fiat_withdrawal_posts_bank_account_and_returns_id(self):
         client, session = _client_with_session()
         session.get.return_value = _Resp(200, {"csrfToken": "tok"})
         session.request.return_value = _Resp(200, {"withdrawalId": 12})
-        assert client.request_fiat_withdrawal(Decimal("50")) == 12
-        assert session.request.call_args.kwargs["json"] == {"amount": "50"}
+        bank_account = FiatWithdrawalBankAccount(
+            beneficiary_name="Jane Doe",
+            beneficiary_address="1 Main St, Toronto",
+            bank_name="A Bank",
+            account_number="1234567",
+            transit_number="12345",
+            institution_number="001",
+            bic="AAAACATT",
+            bank_address="2 Bay St, Toronto",
+        )
+        assert client.request_fiat_withdrawal(Decimal("50"), bank_account) == 12
+        assert session.request.call_args.kwargs["json"] == {
+            "amount": "50",
+            "beneficiaryName": "Jane Doe",
+            "beneficiaryAddress": "1 Main St, Toronto",
+            "bankName": "A Bank",
+            "accountNumber": "1234567",
+            "transitNumber": "12345",
+            "institutionNumber": "001",
+            "bic": "AAAACATT",
+            "bankAddress": "2 Bay St, Toronto",
+        }
+
+    def test_request_fiat_withdrawal_surfaces_invalid_request_code(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(
+            400, {"errorCode": "INVALID_WITHDRAWAL_REQUEST", "message": "x"}
+        )
+        bank_account = FiatWithdrawalBankAccount(*["x"] * 8)
+        with pytest.raises(APIError) as exc:
+            client.request_fiat_withdrawal(Decimal("1"), bank_account)
+        assert exc.value.error_code == "INVALID_WITHDRAWAL_REQUEST"
+
+    @pytest.mark.parametrize(
+        "item, transfer_id",
+        [
+            ({"transferId": 41}, 41),
+            ({}, None),
+        ],
+    )
+    def test_closed_transfers_parse_transfer_id(self, item, transfer_id):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(
+            200,
+            {
+                "items": [
+                    {
+                        "transactionId": "0xabc",
+                        "amount": "5.00",
+                        "symbol": "USDC",
+                        "type": "DEPOSIT",
+                        "status": "DONE",
+                        **item,
+                    }
+                ],
+                "total": 1,
+                "count": 1,
+            },
+        )
+        [transfer] = client.get_closed_transfers(1, 10)
+        assert transfer.type == TransactionType.DEPOSIT
+        assert transfer.transfer_id == transfer_id
 
     def test_limit_order_cost_parses(self):
         client, session = _client_with_session()

@@ -66,6 +66,18 @@ semantic versioning once published.
   `APIError`) so a caller or the MCP layer can back off cleanly.
 
 ### Changed
+- **Breaking: `request_fiat_withdrawal(amount, bank_account)` now takes the
+  beneficiary bank account.** The backend rejects a fiat withdrawal without the
+  eight beneficiary fields (HTTP 400), so the amount-only call could no longer
+  succeed. Pass a `FiatWithdrawalBankAccount` (beneficiary name/address, bank
+  name/address, account number, transit number, institution number, BIC). A
+  non-positive amount or a blank field raises `ValueError` before any request;
+  other backend rejections surface as `APIError` (`INVALID_WITHDRAWAL_REQUEST`
+  or `BAD_REQUEST`).
+- **`Transfer.transfer_id`** carries the backend transfer id (`None` when the
+  backend does not send it). One on-chain transaction can produce several
+  deposits, so `transaction_id` alone no longer identifies a transfer; use
+  `(type, transfer_id)`.
 - **Faster `spot_price` / `quote_swap` / swaps on AMM-only tokens.** Resolving an
   AMM-only symbol (AMMT1/AMMT2/WDEL) enumerated `Router.allStockTokens()` and read
   every token's `symbol()` on-chain on EVERY call (~45 reads), and web3 re-fetched
