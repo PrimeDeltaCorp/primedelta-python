@@ -398,6 +398,30 @@ class TestAccountFeatures:
             client.request_fiat_withdrawal(Decimal("1"), bank_account)
         assert exc.value.error_code == "INVALID_WITHDRAWAL_REQUEST"
 
+    @pytest.mark.parametrize("transfer_type", ["FIAT_DEPOSIT", "FIAT_WITHDRAWAL"])
+    def test_pending_transfers_parse_fiat_types(self, transfer_type):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(
+            200,
+            {
+                "items": [
+                    {
+                        "transferId": 3,
+                        "transactionId": "3",
+                        "amount": "10.00",
+                        "symbol": "cash",
+                        "type": transfer_type,
+                        "status": "PENDING",
+                    }
+                ],
+                "total": 1,
+                "count": 1,
+            },
+        )
+        [transfer] = client.get_pending_transfers(1, 10)
+        assert transfer.type == TransactionType(transfer_type)
+        assert transfer.transfer_id == 3
+
     @pytest.mark.parametrize(
         "item, transfer_id",
         [

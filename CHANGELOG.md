@@ -36,6 +36,10 @@ semantic versioning once published.
   `craft`, or returned by a prior send).
 
 ### Fixed
+- **`pending_transfers()` / `closed_transfers()` no longer fail on fiat
+  history.** `TransactionType` lacked `FIAT_DEPOSIT` / `FIAT_WITHDRAWAL`, so any
+  account with a fiat deposit or withdrawal raised `ValueError` for the whole
+  page.
 - **On-chain reads now reflect this client's own writes (read-after-write).**
   `get_onchain_stablecoin_balance` / `get_onchain_stock_balance` /
   `get_native_del_balance` and the swap/LP allowance-skip decision are pinned to
@@ -72,8 +76,9 @@ semantic versioning once published.
   succeed. Pass a `FiatWithdrawalBankAccount` (beneficiary name/address, bank
   name/address, account number, transit number, institution number, BIC). A
   non-positive amount or a blank field raises `ValueError` before any request;
-  other backend rejections surface as `APIError` (`INVALID_WITHDRAWAL_REQUEST`
-  or `BAD_REQUEST`).
+  other backend rejections surface as `APIError` (`INVALID_WITHDRAWAL_REQUEST`,
+  or `INVALID_REQUEST` for field validation such as more than 6 decimal places
+  or an over-long field).
 - **`Transfer.transfer_id`** carries the backend transfer id (`None` when the
   backend does not send it). One on-chain transaction can produce several
   deposits, so `transaction_id` alone no longer identifies a transfer; use

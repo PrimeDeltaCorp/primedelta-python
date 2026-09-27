@@ -32,6 +32,8 @@ class OrderType(Enum):
 class TransactionType(Enum):
     DEPOSIT = "DEPOSIT"
     WITHDRAWAL = "WITHDRAWAL"
+    FIAT_DEPOSIT = "FIAT_DEPOSIT"
+    FIAT_WITHDRAWAL = "FIAT_WITHDRAWAL"
 
 
 class DistributionType(Enum):
