@@ -90,9 +90,9 @@ the right network first — it is added if unknown:
 
 ```python
 signer = BrowserSigner(chain={
-    "chainId": "0x7ec",
-    "chainName": "PrimeDelta Dev",
-    "rpcUrls": ["https://besu.dev.primedelta.io"],
+    "chainId": "0x1cbd",
+    "chainName": "PrimeDelta Testnet",
+    "rpcUrls": ["https://chain.testnet.primedelta.io"],
     "nativeCurrency": {"name": "DEL", "symbol": "DEL", "decimals": 18},
 })
 ```
@@ -124,7 +124,7 @@ from primedelta import RemoteBrowserSigner
 signer = RemoteBrowserSigner(
     base_url="https://signer.example",   # must be https:// (a localhost origin is allowed only for testing)
     deliver=send_url_to_user,            # hand the /sign?state=… URL to the user
-    chain={"chainId": "0x7ec", "chainName": "PrimeDelta Dev",
+    chain={"chainId": "0x1cbd", "chainName": "PrimeDelta Testnet",
            "rpcUrls": [RPC],
            "nativeCurrency": {"name": "DEL", "symbol": "DEL", "decimals": 18}},
 )
