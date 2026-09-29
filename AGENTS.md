@@ -20,7 +20,7 @@ Install (Python ≥ 3.10):
 ```bash
 pip install primedelta          # add primedelta[kms] for AWS KMS signer
 ```
-Construct the client. `web3_provider_url` is **required**; `network` selects addresses/ABIs/backend URL (`"dev"` default, `"testnet"`):
+Construct the client. `web3_provider_url` is **required**; `network` selects addresses/ABIs/backend URL (e.g. `"testnet"`):
 ```python
 from decimal import Decimal
 from primedelta import PrimeDelta, SwapSide
@@ -28,7 +28,7 @@ from primedelta import PrimeDelta, SwapSide
 pd = PrimeDelta(
     private_key="0x...",                 # or signer=LocalAccountSigner/KmsSigner/BrowserSigner
     web3_provider_url="https://rpc...",  # required
-    network="dev",
+    network="testnet",
 )
 pd.login()                               # SIWE over a cookie session
 ```
