@@ -1,3 +1,4 @@
+import dataclasses
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -5,7 +6,18 @@ import pytest
 
 from primedelta import NotEnoughFunds, PrimeDelta
 from primedelta.primedelta_client import APIError
-from primedelta.types import OrderSide
+from primedelta.types import FiatWithdrawalBankAccount, OrderSide
+
+_BANK_ACCOUNT = FiatWithdrawalBankAccount(
+    beneficiary_name="Jane Doe",
+    beneficiary_address="1 Main St, Toronto",
+    bank_name="A Bank",
+    account_number="1234567",
+    transit_number="12345",
+    institution_number="001",
+    bic="AAAACATT",
+    bank_address="2 Bay St, Toronto",
+)
 
 
 def _pd():
@@ -22,13 +34,37 @@ class TestFacadeFeatures:
             "INSUFFICIENT_FUNDS"
         )
         with pytest.raises(NotEnoughFunds):
-            pd.request_fiat_withdrawal(Decimal("1"))
+            pd.request_fiat_withdrawal(Decimal("1"), _BANK_ACCOUNT)
 
     def test_request_fiat_withdrawal_reraises_other_api_errors(self):
         pd = _pd()
         pd._primedelta_client.request_fiat_withdrawal.side_effect = APIError("OTHER")
         with pytest.raises(APIError):
-            pd.request_fiat_withdrawal(Decimal("1"))
+            pd.request_fiat_withdrawal(Decimal("1"), _BANK_ACCOUNT)
+
+    def test_request_fiat_withdrawal_passes_bank_account_through(self):
+        pd = _pd()
+        pd._primedelta_client.request_fiat_withdrawal.return_value = 12
+        assert pd.request_fiat_withdrawal(Decimal("1"), _BANK_ACCOUNT) == 12
+        pd._primedelta_client.request_fiat_withdrawal.assert_called_once_with(
+            Decimal("1"), _BANK_ACCOUNT
+        )
+
+    @pytest.mark.parametrize("amount", [Decimal("0"), Decimal("-1")])
+    def test_request_fiat_withdrawal_rejects_non_positive_amount(self, amount):
+        pd = _pd()
+        with pytest.raises(ValueError, match="positive"):
+            pd.request_fiat_withdrawal(amount, _BANK_ACCOUNT)
+        pd._primedelta_client.request_fiat_withdrawal.assert_not_called()
+
+    def test_request_fiat_withdrawal_rejects_blank_bank_fields(self):
+        pd = _pd()
+        bank_account = dataclasses.replace(
+            _BANK_ACCOUNT, transit_number=" ", institution_number=""
+        )
+        with pytest.raises(ValueError, match="transit_number, institution_number"):
+            pd.request_fiat_withdrawal(Decimal("1"), bank_account)
+        pd._primedelta_client.request_fiat_withdrawal.assert_not_called()
 
     def test_limit_buy_cost_delegates_with_buy_side(self):
         pd = _pd()

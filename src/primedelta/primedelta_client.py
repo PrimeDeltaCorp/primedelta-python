@@ -19,6 +19,7 @@ from primedelta.types import (
     DigitalIdentitySignature,
     Distribution,
     DistributionType,
+    FiatWithdrawalBankAccount,
     Message,
     Order,
     OrderCost,
@@ -352,6 +353,7 @@ class PrimeDeltaClient:
             symbol=item["symbol"],
             type=TransactionType(item["type"]),
             status=TransferHistoryStatus(item["status"]),
+            transfer_id=item.get("transferId"),
         )
 
     def get_distributions(self, page: int, size: int) -> list[Distribution]:
@@ -598,8 +600,23 @@ class PrimeDeltaClient:
             bank_address=response["bankAddress"],
         )
 
-    def request_fiat_withdrawal(self, amount: Decimal) -> int:
-        response = self._post("/fiat-withdrawals/", {"amount": str(amount)})
+    def request_fiat_withdrawal(
+        self, amount: Decimal, bank_account: FiatWithdrawalBankAccount
+    ) -> int:
+        response = self._post(
+            "/fiat-withdrawals/",
+            {
+                "amount": str(amount),
+                "beneficiaryName": bank_account.beneficiary_name,
+                "beneficiaryAddress": bank_account.beneficiary_address,
+                "bankName": bank_account.bank_name,
+                "accountNumber": bank_account.account_number,
+                "transitNumber": bank_account.transit_number,
+                "institutionNumber": bank_account.institution_number,
+                "bic": bank_account.bic,
+                "bankAddress": bank_account.bank_address,
+            },
+        )
         return response["withdrawalId"]
 
     def _order_cost(self, response: dict[str, Any]) -> OrderCost:

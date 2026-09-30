@@ -5,7 +5,7 @@ import pytest
 
 from primedelta import CannotCraft, PrimeDelta
 from primedelta.primedelta import TransactionFailed
-from primedelta.types import OrderSide
+from primedelta.types import FiatWithdrawalBankAccount, OrderSide
 
 
 def _pd():
@@ -147,7 +147,9 @@ class TestCraft:
             ("cancel_order", lambda: pd.cancel_order(7)),
             (
                 "request_fiat_withdrawal",
-                lambda: pd.request_fiat_withdrawal(Decimal("1")),
+                lambda: pd.request_fiat_withdrawal(
+                    Decimal("1"), FiatWithdrawalBankAccount(*["x"] * 8)
+                ),
             ),
             (
                 "request_stablecoin_withdrawal",

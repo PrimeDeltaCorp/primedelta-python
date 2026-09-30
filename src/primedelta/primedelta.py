@@ -2,6 +2,7 @@ import json
 import threading
 import warnings
 from contextlib import contextmanager
+from dataclasses import fields
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from importlib import resources
@@ -50,6 +51,7 @@ from primedelta.types import (
     BankDetails,
     ClaimableWithdrawal,
     Distribution,
+    FiatWithdrawalBankAccount,
     LPPosition,
     Message,
     Order,
@@ -1550,10 +1552,21 @@ class PrimeDelta:
     def bank_details(self) -> BankDetails:
         return self._primedelta_client.bank_details()
 
-    def request_fiat_withdrawal(self, amount: Decimal) -> int:
+    def request_fiat_withdrawal(
+        self, amount: Decimal, bank_account: FiatWithdrawalBankAccount
+    ) -> int:
         self._reject_backend_action_while_crafting("request_fiat_withdrawal")
+        if amount <= 0:
+            raise ValueError("amount must be positive")
+        blank = [
+            field.name
+            for field in fields(bank_account)
+            if not getattr(bank_account, field.name).strip()
+        ]
+        if blank:
+            raise ValueError(f"bank_account is missing: {', '.join(blank)}")
         try:
-            return self._primedelta_client.request_fiat_withdrawal(amount)
+            return self._primedelta_client.request_fiat_withdrawal(amount, bank_account)
         except APIError as exc:
             if exc.error_code == "INSUFFICIENT_FUNDS":
                 raise NotEnoughFunds()
