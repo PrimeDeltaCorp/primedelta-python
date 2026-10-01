@@ -42,6 +42,26 @@ _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # Default per-request timeout (seconds) so a hung/slow backend can never stall
 # the caller indefinitely. Long-lived SSE streams (stream=True) are exempt.
 _HTTP_TIMEOUT = 30.0
+_STABLECOIN_DEPOSIT_DECIMALS = 2
+
+
+def _decimal_arg(value: Decimal | int, name: str) -> str:
+    if isinstance(value, bool) or not isinstance(value, (Decimal, int)):
+        raise TypeError(f"{name} must be a Decimal or int, not {type(value).__name__}")
+    number = Decimal(value)
+    if not number.is_finite() or number <= 0:
+        raise ValueError(f"{name} must be a finite number > 0, got {value}")
+    return format(number, "f")
+
+
+def _stablecoin_deposit_amount(amount: Decimal | int) -> str:
+    wire = _decimal_arg(amount, "amount")
+    if len(wire.partition(".")[2]) > _STABLECOIN_DEPOSIT_DECIMALS:
+        raise ValueError(
+            f"amount must have at most {_STABLECOIN_DEPOSIT_DECIMALS} decimal "
+            f"places (cents), got {wire}"
+        )
+    return wire
 
 
 class _TimeoutSession(requests.Session):
@@ -90,9 +110,14 @@ class AuthorizationError(Exception):
 
 
 class APIError(Exception):
-    def __init__(self, error_code: str):
+    def __init__(
+        self, error_code: str, message: Optional[str] = None, detail: Any = None
+    ):
         self.error_code = error_code
-        super().__init__(error_code)
+        self.message = message
+        self.detail = detail
+        reason = message if message is not None else detail
+        super().__init__(error_code if reason is None else f"{error_code}: {reason}")
 
 
 class UserSignedMessageVerificationError(Exception):
@@ -185,14 +210,17 @@ class PrimeDeltaClient:
             raise BackendUnavailable(str(exc)) from exc
 
     @staticmethod
-    def _error_code(response: requests.Response) -> Optional[str]:
+    def _error_body(response: requests.Response) -> dict[str, Any]:
         try:
             body = response.json()
         except ValueError:
-            return None
-        if isinstance(body, dict):
-            return body.get("errorCode") or body.get("code")
-        return None
+            return {}
+        return body if isinstance(body, dict) else {}
+
+    @staticmethod
+    def _error_code(response: requests.Response) -> Optional[str]:
+        body = PrimeDeltaClient._error_body(response)
+        return body.get("errorCode") or body.get("code")
 
     @staticmethod
     def _decimal_or_none(value: Optional[str]) -> Optional[Decimal]:
@@ -202,9 +230,12 @@ class PrimeDeltaClient:
         if response.status_code >= 500:
             raise BackendUnavailable(f"backend returned HTTP {response.status_code}")
         if response.status_code in (400, 404):
-            code = self._error_code(response)
+            body = self._error_body(response)
+            code = body.get("errorCode") or body.get("code")
             if code or response.status_code == 400:
-                raise APIError(code or "BAD_REQUEST")
+                raise APIError(
+                    code or "BAD_REQUEST", body.get("message"), body.get("detail")
+                )
         if response.status_code == 401:
             raise NotLoggedIn()
         if response.status_code == 403:
@@ -393,7 +424,8 @@ class PrimeDeltaClient:
                 order_side=OrderSide(item["actionType"]),
                 type=item["type"],
                 symbol=item["stockSymbol"],
-                quantity=int(Decimal(item["quantity"])),
+                quantity=Decimal(item["quantity"]),
+                filled_quantity=Decimal(item["filledQuantity"]),
                 price=Decimal(item["price"]),
                 status=OrderStatus.PENDING,
                 date_of_cancellation=(
@@ -413,7 +445,8 @@ class PrimeDeltaClient:
                 order_side=OrderSide(item["actionType"]),
                 type=item["type"],
                 symbol=item["stockSymbol"],
-                quantity=int(Decimal(item["quantity"])),
+                quantity=Decimal(item["quantity"]),
+                filled_quantity=Decimal(item["filledQuantity"]),
                 price=Decimal(item["price"]) if item["price"] is not None else None,
                 status=OrderStatus(item["status"]),
                 date_of_cancellation=(
@@ -426,10 +459,11 @@ class PrimeDeltaClient:
         ]
 
     def get_deposit_stocks_signature(
-        self, amount: int, symbol: str
+        self, amount: Decimal | int, symbol: str
     ) -> DepositStocksSignature:
         response = self._post(
-            "/deposit-stocks-signature/", {"amount": str(amount), "symbol": symbol}
+            "/deposit-stocks-signature/",
+            {"amount": _decimal_arg(amount, "amount"), "symbol": symbol},
         )
         return DepositStocksSignature(
             signature=response["signature"],
@@ -438,10 +472,11 @@ class PrimeDeltaClient:
         )
 
     def get_deposit_stablecoin_signature(
-        self, amount: int, symbol: str
+        self, amount: Decimal | int, symbol: str
     ) -> DepositStocksSignature:
         response = self._post(
-            "/deposit-stablecoin-signature/", {"amount": str(amount), "symbol": symbol}
+            "/deposit-stablecoin-signature/",
+            {"amount": _stablecoin_deposit_amount(amount), "symbol": symbol},
         )
         return DepositStocksSignature(
             signature=response["signature"],
@@ -456,10 +491,10 @@ class PrimeDeltaClient:
         )
         return response["withdrawalId"]
 
-    def request_stock_withdrawal(self, amount: int, asset_type: str) -> int:
+    def request_stock_withdrawal(self, amount: Decimal | int, asset_type: str) -> int:
         response = self._post(
             "/initialize-stocks-withdraw/",
-            {"amount": str(amount), "assetType": asset_type},
+            {"amount": _decimal_arg(amount, "amount"), "assetType": asset_type},
         )
         return response["withdrawalId"]
 
@@ -514,16 +549,16 @@ class PrimeDeltaClient:
 
     def send_limit_order(
         self,
-        amount: int,
+        amount: Decimal | int,
         asset_type: str,
         order_side: OrderSide,
         price_limit: Decimal,
         date_of_cancellation: Optional[date],
     ) -> int:
         request_data = {
-            "amount": str(amount),
+            "amount": _decimal_arg(amount, "amount"),
             "stockSymbol": asset_type,
-            "priceLimit": str(price_limit),
+            "priceLimit": _decimal_arg(price_limit, "price_limit"),
             "dateOfCancellation": (
                 str(date_of_cancellation) if date_of_cancellation is not None else None
             ),
@@ -533,10 +568,10 @@ class PrimeDeltaClient:
         )
         return response["orderId"]
 
-    def send_sell_market_order(self, amount: int, asset_type: str) -> int:
+    def send_sell_market_order(self, amount: Decimal | int, asset_type: str) -> int:
         response = self._post(
             "/orders/market/sell/",
-            {"amount": str(amount), "stockSymbol": asset_type},
+            {"amount": _decimal_arg(amount, "amount"), "stockSymbol": asset_type},
         )
         return response["orderId"]
 
@@ -630,17 +665,26 @@ class PrimeDeltaClient:
         )
 
     def limit_order_cost(
-        self, order_side: OrderSide, symbol: str, amount: int, price_limit: Decimal
+        self,
+        order_side: OrderSide,
+        symbol: str,
+        amount: Decimal | int,
+        price_limit: Decimal,
     ) -> OrderCost:
         response = self._get(
             f"/orders/limit/{order_side.value.lower()}/cost/",
-            {"amount": amount, "priceLimit": str(price_limit), "stockSymbol": symbol},
+            {
+                "amount": _decimal_arg(amount, "amount"),
+                "priceLimit": _decimal_arg(price_limit, "price_limit"),
+                "stockSymbol": symbol,
+            },
         )
         return self._order_cost(response)
 
-    def market_sell_cost(self, symbol: str, amount: int) -> OrderCost:
+    def market_sell_cost(self, symbol: str, amount: Decimal | int) -> OrderCost:
         response = self._get(
-            "/orders/market/sell/cost/", {"amount": amount, "stockSymbol": symbol}
+            "/orders/market/sell/cost/",
+            {"amount": _decimal_arg(amount, "amount"), "stockSymbol": symbol},
         )
         return self._order_cost(response)
 

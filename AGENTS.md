@@ -84,7 +84,7 @@ txs = pd.craft(lambda: pd.swap_exact_input(
 | **Comms / banking** | `messages` · `mark_message_read` · `bank_details` · `request_fiat_withdrawal` · `distributions` · `pending_/closed_transfers` |
 
 Signers: `LocalAccountSigner` (raw key / keystore / mnemonic), `KmsSigner` (AWS KMS), `BrowserSigner` (loopback MetaMask bridge for a local app), `RemoteBrowserSigner` (the same wallet page served from a hosted HTTPS origin, for a hosted/remote app). See `docs/signers.md`.
-> Surface asymmetries to special-case: there is **no market-BUY** (buys are limit-only or on-chain swap); `Order` has no filled/remaining field (partial fills are invisible — poll `get_order_status` for terminal state only); amount units are mixed (order/deposit stock amounts are `int` share counts; swap/LP/allowance/DEL amounts are `Decimal` human units).
+> Surface asymmetries to special-case: there is **no market-BUY** (buys are limit-only or on-chain swap); `Order.quantity` and `Order.filled_quantity` are `Decimal` (`filled_quantity` shows a partial fill in `open_orders` / `closed_orders`; `get_order_status` returns the status only); order, cost-preview and stock deposit/withdrawal amounts take `Decimal` or `int`, never `float` — the platform enforces each instrument's precision (stocks are whole shares today), so a fraction it does not allow comes back as an `APIError` whose `message`/`detail` say why; `deposit_stablecoin` takes dUSD in cents (at most 2 decimal places); swap/LP/allowance/DEL amounts are `Decimal` human units.
 
 ## 4. Operating rules the agent MUST follow
 

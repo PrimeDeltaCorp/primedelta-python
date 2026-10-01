@@ -107,7 +107,8 @@ class Order:
     order_side: OrderSide
     type: str
     symbol: str
-    quantity: int
+    quantity: Decimal
+    filled_quantity: Decimal
     status: OrderStatus
     price: Optional[Decimal]
     date_of_cancellation: Optional[date]

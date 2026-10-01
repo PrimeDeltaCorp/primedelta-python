@@ -7,6 +7,13 @@ semantic versioning once published.
 ## [Unreleased]
 
 ### Added
+- **`Order.filled_quantity`** — how much of the order has filled so far, parsed
+  from the `filledQuantity` the backend already sends on `open_orders()` /
+  `closed_orders()`. The SDK dropped it, so partial fills were invisible.
+- **`APIError.message` / `APIError.detail` keep the backend's reason.** A
+  business error's `message` and a field-validation `detail` are kept on the
+  exception and included in `str(exc)`, so a rejection such as a quantity finer
+  than the instrument allows no longer arrives as a bare `INVALID_REQUEST`.
 - **`oracle_price(symbol)` — a reference USD price for oracle (price-feed)
   stocks.** AAPL-class stocks have no on-chain quote (`quote_swap`/`spot_price`
   are AMM-only), so an agent had to bring an out-of-band price. This decodes the
@@ -70,6 +77,28 @@ semantic versioning once published.
   `APIError`) so a caller or the MCP layer can back off cleanly.
 
 ### Changed
+- **Breaking (0.2.0): `Order.quantity` is a `Decimal`, not an `int`.**
+  `open_orders()` / `closed_orders()` passed the backend's quantity through
+  `int()`, so `"0.50"` silently became `0` and `"2.75"` became `2`. Quantities
+  now keep every decimal place the backend sends. Comparisons with ints still
+  work (`Decimal("10") == 10`); code that needs an `int` (`range()`, indexing,
+  `json.dumps`) must convert explicitly.
+- **Order, cost-preview and stock custody amounts take `Decimal | int`.**
+  `send_limit_order`, `send_sell_market_order`, `limit_buy_cost`,
+  `limit_sell_cost`, `market_sell_cost`, `deposit_stock_token` and
+  `request_stock_withdrawal` check the amount (and `price_limit`) before any
+  request: a `float`, `bool` or other type raises `TypeError`; NaN, infinity and
+  values `<= 0` raise `ValueError`. Values go on the wire as plain decimal
+  strings without an exponent (`Decimal("1E+1")` is sent as `"10"`). The SDK
+  does not enforce whole shares: the platform enforces each instrument's
+  precision (stocks are whole shares today) and its rejection surfaces as an
+  `APIError` carrying the backend's reason.
+- **`deposit_stablecoin(amount)` accepts dUSD in cents.** It takes
+  `Decimal | int` with at most 2 decimal places (`Decimal("10.50")` is sent as
+  `"10.50"`); more decimal places or an amount `<= 0` raise `ValueError` before
+  any request. The burn still uses exactly the base-unit amount the backend
+  signed. A backend that only takes whole-dollar deposits rejects a fractional
+  amount with `APIError` (`INVALID_REQUEST`).
 - **Breaking: `request_fiat_withdrawal(amount, bank_account)` now takes the
   beneficiary bank account.** The backend rejects a fiat withdrawal without the
   eight beneficiary fields (HTTP 400), so the amount-only call could no longer

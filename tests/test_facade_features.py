@@ -85,6 +85,32 @@ class TestFacadeFeatures:
         pd._primedelta_client.digital_identity_id.return_value = 47
         assert pd.digital_identity_id() == 47
 
+    @pytest.mark.parametrize(
+        "call",
+        [
+            pytest.param(lambda pd, q: pd.deposit_stablecoin(q), id="dUSD"),
+            pytest.param(lambda pd, q: pd.deposit_stock_token("AAPL", q), id="deposit"),
+            pytest.param(
+                lambda pd, q: pd.request_stock_withdrawal("AAPL", q), id="withdrawal"
+            ),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "amount, error",
+        [(1.5, TypeError), (True, TypeError), (Decimal("0"), ValueError)],
+    )
+    def test_custody_amount_is_rejected_before_any_request(self, call, amount, error):
+        pd = _pd()
+        with pytest.raises(error):
+            call(pd, amount)
+        pd._primedelta_client.get_account_status.assert_not_called()
+
+    def test_deposit_stablecoin_rejects_sub_cent_amount_before_any_request(self):
+        pd = _pd()
+        with pytest.raises(ValueError, match="at most 2 decimal places"):
+            pd.deposit_stablecoin(Decimal("10.505"))
+        pd._primedelta_client.get_account_status.assert_not_called()
+
 
 class TestAllowancesAndSend:
     def _pd(self):

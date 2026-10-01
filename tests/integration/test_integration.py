@@ -200,7 +200,7 @@ class TestStockLifecycle:
     """
 
     SYMBOL = "AAPL"
-    DEPOSIT_AMOUNT = 1  # whole stock-token units (deposit_stock_token takes int)
+    DEPOSIT_AMOUNT = 1  # whole stock-token units (stocks are whole shares today)
 
     def _ensure_stock_units(self, primedelta_logged_in, units: int) -> None:
         balance = primedelta_logged_in.get_onchain_stock_balance(self.SYMBOL)

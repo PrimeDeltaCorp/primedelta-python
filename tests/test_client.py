@@ -151,6 +151,46 @@ class TestErrorMapping:
             client.portfolio()
         assert info.value.error_code == "PARSE"
 
+    def test_400_keeps_backend_message(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(
+            400,
+            {
+                "errorCode": "INVALID_QUANTITY_PRECISION",
+                "message": "AAPL trades in whole shares",
+            },
+        )
+        with pytest.raises(APIError) as info:
+            client.send_sell_market_order(Decimal("0.5"), "AAPL")
+        assert info.value.error_code == "INVALID_QUANTITY_PRECISION"
+        assert info.value.message == "AAPL trades in whole shares"
+        assert str(info.value) == (
+            "INVALID_QUANTITY_PRECISION: AAPL trades in whole shares"
+        )
+
+    def test_400_keeps_drf_detail(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        detail = {"amount": ["Ensure that there are no more than 2 decimal places."]}
+        session.request.return_value = _Resp(
+            400, {"detail": detail, "code": "INVALID_REQUEST"}
+        )
+        with pytest.raises(APIError) as info:
+            client.get_deposit_stablecoin_signature(Decimal("1.25"), "dUSD")
+        assert info.value.error_code == "INVALID_REQUEST"
+        assert info.value.message is None
+        assert info.value.detail == detail
+        assert "no more than 2 decimal places" in str(info.value)
+
+    def test_error_without_message_or_detail_reads_as_the_code(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(400, {"errorCode": "INSUFFICIENT_FUNDS"})
+        with pytest.raises(APIError) as info:
+            client.portfolio()
+        assert str(info.value) == "INSUFFICIENT_FUNDS"
+        assert info.value.message is None and info.value.detail is None
+
 
 class TestReads:
     def test_me_returns_address(self):
@@ -844,3 +884,227 @@ class TestSessionPersistence:
 
     def test_export_is_empty_without_a_session(self):
         assert PrimeDeltaClient().export_session() == []
+
+
+def _open_order_item(quantity, filled_quantity, price="150.00"):
+    return {
+        "id": 1,
+        "submittedAt": "2026-09-30T14:00:00",
+        "actionType": "BUY",
+        "type": "LIMIT",
+        "stockSymbol": "AAPL",
+        "stockName": "Apple",
+        "quantity": quantity,
+        "filledQuantity": filled_quantity,
+        "price": price,
+        "value": "75.00",
+        "dateOfCancellation": None,
+    }
+
+
+def _closed_order_item(quantity, filled_quantity, price="150.00"):
+    return {
+        "id": 2,
+        "stockSymbol": "AAPL",
+        "quantity": quantity,
+        "filledQuantity": filled_quantity,
+        "actionType": "SELL",
+        "type": "LIMIT",
+        "status": "CANCELED",
+        "submittedAt": "2026-09-30T14:00:00",
+        "closedAt": "2026-09-30T15:00:00",
+        "averagePrice": "150.00",
+        "price": price,
+        "value": "75.00",
+        "fees": None,
+        "stockName": "Apple",
+        "dateOfCancellation": "2026-10-01",
+    }
+
+
+_QUANTITY_FIXTURES = [
+    ("0.5", "0.25"),
+    ("2.75", "1.5"),
+    ("10.000000000000000000", "0.000000000000000001"),
+]
+
+
+class TestOrderQuantities:
+    @pytest.mark.parametrize("quantity, filled_quantity", _QUANTITY_FIXTURES)
+    def test_open_orders_keep_fractional_quantities(self, quantity, filled_quantity):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(
+            200, {"items": [_open_order_item(quantity, filled_quantity)]}
+        )
+        [order] = client.open_orders(1, 10)
+        assert order.quantity == Decimal(quantity)
+        assert order.filled_quantity == Decimal(filled_quantity)
+        assert isinstance(order.quantity, Decimal)
+        assert str(order.quantity) == quantity
+
+    @pytest.mark.parametrize("quantity, filled_quantity", _QUANTITY_FIXTURES)
+    def test_closed_orders_keep_fractional_quantities(self, quantity, filled_quantity):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(
+            200, {"items": [_closed_order_item(quantity, filled_quantity)]}
+        )
+        [order] = client.closed_orders(1, 10)
+        assert order.quantity == Decimal(quantity)
+        assert order.filled_quantity == Decimal(filled_quantity)
+        assert isinstance(order.quantity, Decimal)
+        assert str(order.quantity) == quantity
+
+    def test_order_prices_keep_18_decimal_places(self):
+        client, session = _client_with_session()
+        price = "150.123456789012345678"
+        session.request.return_value = _Resp(
+            200, {"items": [_open_order_item("1", "0", price)]}
+        )
+        assert client.open_orders(1, 10)[0].price == Decimal(price)
+        session.request.return_value = _Resp(
+            200, {"items": [_closed_order_item("1", "0", price)]}
+        )
+        assert client.closed_orders(1, 10)[0].price == Decimal(price)
+
+
+_ANY_RESPONSE = {
+    "orderId": 1,
+    "withdrawalId": 2,
+    "signature": "ab",
+    "nonce": "0x1",
+    "amount": "1",
+    "total": None,
+    "serviceFee": None,
+    "serviceFeeRatePercentage": None,
+}
+
+_QUANTITY_CALLS = [
+    pytest.param(
+        lambda c, q: c.send_limit_order(q, "AAPL", OrderSide.BUY, Decimal("150"), None),
+        id="send_limit_order",
+    ),
+    pytest.param(
+        lambda c, q: c.send_sell_market_order(q, "AAPL"), id="send_sell_market_order"
+    ),
+    pytest.param(
+        lambda c, q: c.limit_order_cost(OrderSide.SELL, "AAPL", q, Decimal("150")),
+        id="limit_order_cost",
+    ),
+    pytest.param(lambda c, q: c.market_sell_cost("AAPL", q), id="market_sell_cost"),
+    pytest.param(
+        lambda c, q: c.get_deposit_stocks_signature(q, "AAPL"),
+        id="get_deposit_stocks_signature",
+    ),
+    pytest.param(
+        lambda c, q: c.request_stock_withdrawal(q, "AAPL"),
+        id="request_stock_withdrawal",
+    ),
+    pytest.param(
+        lambda c, q: c.get_deposit_stablecoin_signature(q, "dUSD"),
+        id="get_deposit_stablecoin_signature",
+    ),
+]
+
+_PRICE_CALLS = [
+    pytest.param(
+        lambda c, p: c.send_limit_order(1, "AAPL", OrderSide.BUY, p, None),
+        id="send_limit_order",
+    ),
+    pytest.param(
+        lambda c, p: c.limit_order_cost(OrderSide.BUY, "AAPL", 1, p),
+        id="limit_order_cost",
+    ),
+]
+
+
+def _sent(session, field):
+    kwargs = session.request.call_args.kwargs
+    return (kwargs["json"] or kwargs["params"])[field]
+
+
+class TestQuantityArguments:
+    @pytest.mark.parametrize("call", _QUANTITY_CALLS)
+    @pytest.mark.parametrize(
+        "quantity, wire",
+        [(10, "10"), (Decimal("0.5"), "0.5"), (Decimal("1E+1"), "10")],
+    )
+    def test_int_and_decimal_are_sent_as_plain_strings(self, call, quantity, wire):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(200, _ANY_RESPONSE)
+        call(client, quantity)
+        assert _sent(session, "amount") == wire
+
+    @pytest.mark.parametrize("call", _QUANTITY_CALLS)
+    @pytest.mark.parametrize(
+        "quantity, error",
+        [
+            (1.5, TypeError),
+            (10.0, TypeError),
+            (True, TypeError),
+            ("10", TypeError),
+            (Decimal("NaN"), ValueError),
+            (Decimal("Infinity"), ValueError),
+            (Decimal("0"), ValueError),
+            (-1, ValueError),
+        ],
+    )
+    def test_invalid_quantity_raises_before_any_http_call(self, call, quantity, error):
+        client, session = _client_with_session()
+        with pytest.raises(error):
+            call(client, quantity)
+        session.request.assert_not_called()
+        session.get.assert_not_called()
+
+    @pytest.mark.parametrize("call", _PRICE_CALLS)
+    @pytest.mark.parametrize(
+        "price, wire",
+        [
+            (Decimal("1.5E+2"), "150"),
+            (Decimal("150.123456789012345678"), "150.123456789012345678"),
+        ],
+    )
+    def test_price_limit_is_sent_without_exponent(self, call, price, wire):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(200, _ANY_RESPONSE)
+        call(client, price)
+        assert _sent(session, "priceLimit") == wire
+
+    @pytest.mark.parametrize("call", _PRICE_CALLS)
+    @pytest.mark.parametrize("price", [150.25, Decimal("0"), Decimal("NaN")])
+    def test_invalid_price_limit_raises_before_any_http_call(self, call, price):
+        client, session = _client_with_session()
+        with pytest.raises((TypeError, ValueError)):
+            call(client, price)
+        session.request.assert_not_called()
+        session.get.assert_not_called()
+
+
+class TestStablecoinDeposit:
+    @pytest.mark.parametrize(
+        "amount, wire",
+        [(Decimal("10.50"), "10.50"), (Decimal("0.01"), "0.01"), (10, "10")],
+    )
+    def test_cents_are_sent_as_given(self, amount, wire):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(
+            200, {"signature": "ab", "nonce": "0x1", "amount": "10500000"}
+        )
+        signature = client.get_deposit_stablecoin_signature(amount, "dUSD")
+        assert session.request.call_args.kwargs["json"] == {
+            "amount": wire,
+            "symbol": "dUSD",
+        }
+        assert signature.amount == "10500000"
+
+    @pytest.mark.parametrize(
+        "amount", [Decimal("10.505"), Decimal("0.001"), Decimal("10.500")]
+    )
+    def test_more_than_two_decimal_places_raises_before_any_http_call(self, amount):
+        client, session = _client_with_session()
+        with pytest.raises(ValueError, match="at most 2 decimal places"):
+            client.get_deposit_stablecoin_signature(amount, "dUSD")
+        session.request.assert_not_called()
+        session.get.assert_not_called()
