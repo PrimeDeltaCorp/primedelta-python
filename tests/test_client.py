@@ -1090,10 +1090,34 @@ class TestQuantityArguments:
         session.get.assert_not_called()
 
 
+class TestWithdrawalAmountWire:
+    def test_stablecoin_withdrawal_amount_is_sent_in_positional_notation(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(200, {"withdrawalId": 7})
+        client.request_stablecoin_withdrawal(Decimal("1E+2"))
+        assert session.request.call_args.kwargs["json"]["amount"] == "100"
+
+    def test_fiat_withdrawal_amount_is_sent_in_positional_notation(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(200, {"withdrawalId": 12})
+        client.request_fiat_withdrawal(
+            Decimal("1E+2"), FiatWithdrawalBankAccount(*["x"] * 8)
+        )
+        assert session.request.call_args.kwargs["json"]["amount"] == "100"
+
+
 class TestStablecoinDeposit:
     @pytest.mark.parametrize(
         "amount, wire",
-        [(Decimal("10.50"), "10.50"), (Decimal("0.01"), "0.01"), (10, "10")],
+        [
+            (Decimal("10.50"), "10.50"),
+            (Decimal("10.500"), "10.50"),
+            (Decimal("0.01"), "0.01"),
+            (Decimal("1E+1"), "10"),
+            (10, "10"),
+        ],
     )
     def test_cents_are_sent_as_given(self, amount, wire):
         client, session = _client_with_session()
@@ -1109,7 +1133,7 @@ class TestStablecoinDeposit:
         assert signature.amount == "10500000"
 
     @pytest.mark.parametrize(
-        "amount", [Decimal("10.505"), Decimal("0.001"), Decimal("10.500")]
+        "amount", [Decimal("10.505"), Decimal("0.001"), Decimal("10.5001")]
     )
     def test_more_than_two_decimal_places_raises_before_any_http_call(self, amount):
         client, session = _client_with_session()

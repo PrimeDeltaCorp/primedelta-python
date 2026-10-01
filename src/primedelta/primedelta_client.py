@@ -55,12 +55,16 @@ def _decimal_arg(value: Decimal | int, name: str) -> str:
 
 
 def _stablecoin_deposit_amount(amount: Decimal | int) -> str:
-    wire = _decimal_arg(amount, "amount")
-    if len(wire.partition(".")[2]) > _STABLECOIN_DEPOSIT_DECIMALS:
+    number = Decimal(_decimal_arg(amount, "amount"))
+    cents = number.quantize(Decimal(1).scaleb(-_STABLECOIN_DEPOSIT_DECIMALS))
+    if cents != number:
         raise ValueError(
             f"amount must have at most {_STABLECOIN_DEPOSIT_DECIMALS} decimal "
-            f"places (cents), got {wire}"
+            f"places (cents), got {format(number, 'f')}"
         )
+    wire = format(number, "f")
+    if len(wire.partition(".")[2]) > _STABLECOIN_DEPOSIT_DECIMALS:
+        return format(cents, "f")
     return wire
 
 
@@ -490,7 +494,7 @@ class PrimeDeltaClient:
     def request_stablecoin_withdrawal(self, amount: Decimal) -> int:
         response = self._post(
             "/initialize-stablecoin-withdraw/",
-            {"amount": str(amount), "symbol": _STABLECOIN_SYMBOL},
+            {"amount": _decimal_arg(amount, "amount"), "symbol": _STABLECOIN_SYMBOL},
         )
         return response["withdrawalId"]
 
@@ -644,7 +648,7 @@ class PrimeDeltaClient:
         response = self._post(
             "/fiat-withdrawals/",
             {
-                "amount": str(amount),
+                "amount": _decimal_arg(amount, "amount"),
                 "beneficiaryName": bank_account.beneficiary_name,
                 "beneficiaryAddress": bank_account.beneficiary_address,
                 "bankName": bank_account.bank_name,
