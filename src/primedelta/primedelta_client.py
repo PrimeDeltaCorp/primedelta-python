@@ -218,9 +218,12 @@ class PrimeDeltaClient:
         return body if isinstance(body, dict) else {}
 
     @staticmethod
-    def _error_code(response: requests.Response) -> Optional[str]:
-        body = PrimeDeltaClient._error_body(response)
+    def _code(body: dict[str, Any]) -> Optional[str]:
         return body.get("errorCode") or body.get("code")
+
+    @staticmethod
+    def _error_code(response: requests.Response) -> Optional[str]:
+        return PrimeDeltaClient._code(PrimeDeltaClient._error_body(response))
 
     @staticmethod
     def _decimal_or_none(value: Optional[str]) -> Optional[Decimal]:
@@ -231,7 +234,7 @@ class PrimeDeltaClient:
             raise BackendUnavailable(f"backend returned HTTP {response.status_code}")
         if response.status_code in (400, 404):
             body = self._error_body(response)
-            code = body.get("errorCode") or body.get("code")
+            code = self._code(body)
             if code or response.status_code == 400:
                 raise APIError(
                     code or "BAD_REQUEST", body.get("message"), body.get("detail")

@@ -151,6 +151,15 @@ class TestErrorMapping:
             client.portfolio()
         assert info.value.error_code == "PARSE"
 
+    def test_400_prefers_errorcode_over_code(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(
+            400, {"errorCode": "PRIMARY", "code": "secondary"}
+        )
+        with pytest.raises(APIError) as info:
+            client.portfolio()
+        assert info.value.error_code == "PRIMARY"
+
     def test_400_keeps_backend_message(self):
         client, session = _client_with_session()
         session.get.return_value = _Resp(200, {"csrfToken": "tok"})

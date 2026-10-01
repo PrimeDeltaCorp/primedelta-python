@@ -1830,7 +1830,7 @@ class TestClaimWithdrawals:
         session.get.return_value = response({"csrfToken": "tok"})
         session.request.side_effect = [
             response({"status": "VERIFIED_MINTED"}),
-            response({"signature": "ab" * 65, "nonce": "0xcd", "amount": "10500000"}),
+            response({"signature": "ab" * 65, "nonce": "0xcd", "amount": "10499999"}),
         ]
 
         assert pd.deposit_stablecoin(Decimal("10.50")) == "0xTX"
@@ -1841,7 +1841,7 @@ class TestClaimWithdrawals:
             "symbol": "dUSD",
         }
         struct, _ = factory.functions.burnStablecoin.call_args.args
-        assert struct["amount"] == 10500000
+        assert struct["amount"] == 10499999
 
 
 def test_networks_config_wires_multicall3():
