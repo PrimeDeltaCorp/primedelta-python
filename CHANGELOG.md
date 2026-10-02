@@ -14,6 +14,20 @@ semantic versioning once published.
   business error's `message` and a field-validation `detail` are kept on the
   exception and included in `str(exc)`, so a rejection such as a quantity finer
   than the instrument allows no longer arrives as a bare `INVALID_REQUEST`.
+- **`Stock.quantity_decimals` / `Stock.price_decimals`** (also on portfolio
+  `Position`) — how many decimal places the platform accepts in an order
+  quantity and price for that stock, parsed from the `quantityDecimals` /
+  `priceDecimals` that `stocks()` and `portfolio()` return. Today stocks trade
+  in whole shares (`0`) at cent prices (`2`), set per environment; both are
+  `None` while a backend does not send them yet.
+- **`InvalidOrderInput`** — an `APIError` subclass raised by
+  `send_limit_order`, `send_sell_market_order`, `limit_buy_cost`,
+  `limit_sell_cost` and `market_sell_cost` when the platform rejects the
+  quantity or price (`INVALID_QUANTITY`, `INVALID_QUANTITY_PRECISION`,
+  `INVALID_PRICE`, `INVALID_PRICE_PRECISION`). The backend sends only the code,
+  so the SDK supplies a short reason (`INVALID_QUANTITY_PRECISION: quantity has
+  more decimal places than the stock's quantity_decimals`); a backend message
+  wins when present. Existing `except APIError` handlers still catch it.
 - **`oracle_price(symbol)` — a reference USD price for oracle (price-feed)
   stocks.** AAPL-class stocks have no on-chain quote (`quote_swap`/`spot_price`
   are AMM-only), so an agent had to bring an out-of-band price. This decodes the

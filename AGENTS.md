@@ -86,6 +86,8 @@ txs = pd.craft(lambda: pd.swap_exact_input(
 Signers: `LocalAccountSigner` (raw key / keystore / mnemonic), `KmsSigner` (AWS KMS), `BrowserSigner` (loopback MetaMask bridge for a local app), `RemoteBrowserSigner` (the same wallet page served from a hosted HTTPS origin, for a hosted/remote app). See `docs/signers.md`.
 > Surface asymmetries to special-case: there is **no market-BUY** (buys are limit-only or on-chain swap); `Order.quantity` and `Order.filled_quantity` are `Decimal` (`filled_quantity` shows a partial fill in `open_orders` / `closed_orders`; `get_order_status` returns the status only); order, cost-preview and stock deposit/withdrawal amounts take `Decimal` or `int`, never `float` — the platform enforces each instrument's precision (stocks are whole shares today), so a fraction it does not allow comes back as an `APIError` whose `message`/`detail` say why; `deposit_stablecoin` takes dUSD in cents (at most 2 decimal places); swap/LP/allowance/DEL amounts are `Decimal` human units.
 
+> Order precision: `stocks()` items and `portfolio()` positions report `quantity_decimals` (0 today: whole shares) and `price_decimals` (2 today), `None` on a backend that does not send them yet; an order or cost preview with more decimal places raises `InvalidOrderInput` (an `APIError`, `error_code` `INVALID_QUANTITY_PRECISION` / `INVALID_PRICE_PRECISION`).
+
 ## 4. Operating rules the agent MUST follow
 
 **4.1 Market hours — oracle-priced vs oracle-free.**
@@ -103,7 +105,7 @@ Signers: `LocalAccountSigner` (raw key / keystore / mnemonic), `KmsSigner` (AWS 
 
 **4.6 Error handling.** Catch explicitly:
 - `TransactionFailed` — on-chain revert / failed mine. Attributes `.reason` (decoded `Error(string)`/`Panic`), `.tx_hash`, `.to`, `.data` (replay with `cast call`), `.trace`. Selector `0x19abf40e` = stale/absent oracle price → market closed.
-- `AccountNotVerified` (DID/KYC gate), `NotEnoughFunds` (`INSUFFICIENT_FUNDS`), `NotLoggedIn` (re-`login()`), `CannotCraft` (a backend REST action was wrapped in `craft` — it can't be crafted; call it directly or don't craft it), and config gaps `WdelNotConfigured` / `PoolNotFound` / `RouterNotConfigured` / `QuoterNotConfigured` / `PositionManagerNotConfigured` — not transient. Do not blind-retry a deterministic revert.
+- `AccountNotVerified` (DID/KYC gate), `NotEnoughFunds` (`INSUFFICIENT_FUNDS`), `InvalidOrderInput` (`INVALID_QUANTITY[_PRECISION]` / `INVALID_PRICE[_PRECISION]` — round quantity/price to the stock's `quantity_decimals` / `price_decimals` and keep both above zero), `NotLoggedIn` (re-`login()`), `CannotCraft` (a backend REST action was wrapped in `craft` — it can't be crafted; call it directly or don't craft it), and config gaps `WdelNotConfigured` / `PoolNotFound` / `RouterNotConfigured` / `QuoterNotConfigured` / `PositionManagerNotConfigured` — not transient. Do not blind-retry a deterministic revert.
 
 **4.7 Idempotency.** Methods return a **tx hash** or a **server-side id** (`order_id`, `withdrawal_id`). The SDK does **not** dedupe backend requests — before retrying a call that may have partially succeeded, check state first (`get_order_status`, `open_orders`, `claimable_withdrawals`, `get_onchain_*_balance`). Persist submitted hashes/ids; reconcile on restart. Deposits/withdrawals are two-phase (`request_*` → `claim_*`) — treat the id as the idempotency key.
 

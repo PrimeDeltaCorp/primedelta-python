@@ -127,6 +127,8 @@ class Position:
     is_offboarded: bool
     multiplier_numerator: int
     multiplier_denominator: int
+    quantity_decimals: Optional[int] = None
+    price_decimals: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -153,6 +155,8 @@ class Stock:
     cusip: str
     contract_address: str
     number_of_tokens_in_circulation: Decimal
+    quantity_decimals: Optional[int] = None
+    price_decimals: Optional[int] = None
 
 
 @dataclass(frozen=True)

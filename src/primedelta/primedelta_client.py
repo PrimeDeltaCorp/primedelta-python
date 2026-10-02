@@ -538,6 +538,8 @@ class PrimeDeltaClient:
                     is_offboarded=stock["isOffboarded"],
                     multiplier_numerator=stock["multiplierNumerator"],
                     multiplier_denominator=stock["multiplierDenominator"],
+                    quantity_decimals=stock.get("quantityDecimals"),
+                    price_decimals=stock.get("priceDecimals"),
                 )
                 for stock in positions
             ],
@@ -593,6 +595,8 @@ class PrimeDeltaClient:
                 cusip=stock["cusipId"],
                 contract_address=stock["smartContractAddress"],
                 number_of_tokens_in_circulation=Decimal(stock["numberOfTokens"]),
+                quantity_decimals=stock.get("quantityDecimals"),
+                price_decimals=stock.get("priceDecimals"),
             )
             for stock in stocks_data
         }
