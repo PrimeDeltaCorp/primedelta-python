@@ -116,6 +116,27 @@ class NotEnoughFunds(Exception):
     pass
 
 
+_INVALID_ORDER_INPUT_MESSAGES = {
+    "INVALID_QUANTITY": "quantity must be greater than zero",
+    "INVALID_QUANTITY_PRECISION": (
+        "quantity has more decimal places than the stock's quantity_decimals"
+    ),
+    "INVALID_PRICE": "price must be greater than zero",
+    "INVALID_PRICE_PRECISION": (
+        "price has more decimal places than the stock's price_decimals"
+    ),
+}
+
+
+class InvalidOrderInput(APIError):
+    def __init__(
+        self, error_code: str, message: Optional[str] = None, detail: Any = None
+    ):
+        if message is None:
+            message = _INVALID_ORDER_INPUT_MESSAGES.get(error_code)
+        super().__init__(error_code, message, detail)
+
+
 class AccountNotVerified(Exception):
     pass
 
@@ -1070,6 +1091,8 @@ class PrimeDelta:
         except APIError as exc:
             if exc.error_code == "INSUFFICIENT_FUNDS":
                 raise NotEnoughFunds()
+            if exc.error_code in _INVALID_ORDER_INPUT_MESSAGES:
+                raise InvalidOrderInput(exc.error_code, exc.message, exc.detail)
             raise
 
     def send_sell_market_order(self, stock_symbol: str, amount: Decimal | int) -> int:
@@ -1082,6 +1105,8 @@ class PrimeDelta:
         except APIError as exc:
             if exc.error_code == "INSUFFICIENT_FUNDS":
                 raise NotEnoughFunds()
+            if exc.error_code in _INVALID_ORDER_INPUT_MESSAGES:
+                raise InvalidOrderInput(exc.error_code, exc.message, exc.detail)
             raise
 
     def cancel_order(self, order_id: int) -> None:
@@ -1584,19 +1609,34 @@ class PrimeDelta:
     def limit_buy_cost(
         self, stock_symbol: str, amount: Decimal | int, price_limit: Decimal
     ) -> OrderCost:
-        return self._primedelta_client.limit_order_cost(
-            OrderSide.BUY, stock_symbol, amount, price_limit
-        )
+        try:
+            return self._primedelta_client.limit_order_cost(
+                OrderSide.BUY, stock_symbol, amount, price_limit
+            )
+        except APIError as exc:
+            if exc.error_code in _INVALID_ORDER_INPUT_MESSAGES:
+                raise InvalidOrderInput(exc.error_code, exc.message, exc.detail)
+            raise
 
     def limit_sell_cost(
         self, stock_symbol: str, amount: Decimal | int, price_limit: Decimal
     ) -> OrderCost:
-        return self._primedelta_client.limit_order_cost(
-            OrderSide.SELL, stock_symbol, amount, price_limit
-        )
+        try:
+            return self._primedelta_client.limit_order_cost(
+                OrderSide.SELL, stock_symbol, amount, price_limit
+            )
+        except APIError as exc:
+            if exc.error_code in _INVALID_ORDER_INPUT_MESSAGES:
+                raise InvalidOrderInput(exc.error_code, exc.message, exc.detail)
+            raise
 
     def market_sell_cost(self, stock_symbol: str, amount: Decimal | int) -> OrderCost:
-        return self._primedelta_client.market_sell_cost(stock_symbol, amount)
+        try:
+            return self._primedelta_client.market_sell_cost(stock_symbol, amount)
+        except APIError as exc:
+            if exc.error_code in _INVALID_ORDER_INPUT_MESSAGES:
+                raise InvalidOrderInput(exc.error_code, exc.message, exc.detail)
+            raise
 
     def swappable_symbols(self) -> list[str]:
         return self._primedelta_client.swappable_symbols()

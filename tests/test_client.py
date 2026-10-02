@@ -246,6 +246,81 @@ class TestReads:
         portfolio = client.portfolio()
         assert portfolio.positions[0].profit_loss_percentage is None
 
+    @pytest.mark.parametrize(
+        "item, quantity_decimals, price_decimals",
+        [
+            ({"quantityDecimals": 0, "priceDecimals": 2}, 0, 2),
+            ({}, None, None),
+        ],
+    )
+    def test_portfolio_parses_stock_precision(
+        self, item, quantity_decimals, price_decimals
+    ):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(
+            200,
+            {
+                "balance": {
+                    "available": "0",
+                    "equity": "0",
+                    "funds": "0",
+                    "profitLoss": "0",
+                    "totalValue": "0",
+                },
+                "stocks": [
+                    {
+                        "symbol": "AAPL",
+                        "name": "Apple Inc",
+                        "totalOwned": "3",
+                        "availableToSell": "3",
+                        "averagePurchasePrice": "150.25",
+                        "lastMarketPrice": "151.00",
+                        "profitLoss": "2.25",
+                        "profitLossPercentage": "0.50",
+                        "isOffboarded": False,
+                        "multiplierNumerator": 1,
+                        "multiplierDenominator": 1,
+                        **item,
+                    }
+                ],
+            },
+        )
+        [position] = client.portfolio().positions
+        assert position.quantity_decimals == quantity_decimals
+        assert position.price_decimals == price_decimals
+
+    @pytest.mark.parametrize(
+        "item, quantity_decimals, price_decimals",
+        [
+            ({"quantityDecimals": 0, "priceDecimals": 2}, 0, 2),
+            ({"quantityDecimals": 6, "priceDecimals": 4}, 6, 4),
+            ({}, None, None),
+        ],
+    )
+    def test_stocks_parses_stock_precision(
+        self, item, quantity_decimals, price_decimals
+    ):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(
+            200,
+            {
+                "items": [
+                    {
+                        "symbol": "AAPL",
+                        "name": "Apple Inc",
+                        "cusipId": "037833100",
+                        "smartContractAddress": "0x" + "1" * 40,
+                        "numberOfTokens": "1000000",
+                        **item,
+                    }
+                ]
+            },
+        )
+        stock = client.stocks()["AAPL"]
+        assert stock.number_of_tokens_in_circulation == Decimal("1000000")
+        assert stock.quantity_decimals == quantity_decimals
+        assert stock.price_decimals == price_decimals
+
     def test_prices_stream_token_minted(self):
         client, session = _client_with_session()
         session.request.return_value = _Resp(200, {"token": "abc"})

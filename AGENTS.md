@@ -86,6 +86,8 @@ txs = pd.craft(lambda: pd.swap_exact_input(
 Signers: `LocalAccountSigner` (raw key / keystore / mnemonic), `KmsSigner` (AWS KMS), `BrowserSigner` (loopback MetaMask bridge for a local app), `RemoteBrowserSigner` (the same wallet page served from a hosted HTTPS origin, for a hosted/remote app). See `docs/signers.md`.
 > Surface asymmetries to special-case: there is **no market-BUY** (buys are limit-only or on-chain swap); `Order.quantity` and `Order.filled_quantity` are `Decimal` (`filled_quantity` shows a partial fill in `open_orders` / `closed_orders`; `get_order_status` returns the status only); order, cost-preview and stock deposit/withdrawal amounts take `Decimal` or `int`, never `float` — the platform enforces each instrument's precision (stocks are whole shares today), so a fraction it does not allow comes back as an `APIError` whose `message`/`detail` say why; `deposit_stablecoin` takes dUSD in cents (at most 2 decimal places); swap/LP/allowance/DEL amounts are `Decimal` human units.
 
+> Order precision: `stocks()` items and `portfolio()` positions report `quantity_decimals` (0 today: whole shares) and `price_decimals` (2 today), `None` on a backend that does not send them yet; an order or cost preview with more decimal places raises `InvalidOrderInput` (an `APIError`, `error_code` `INVALID_QUANTITY_PRECISION` / `INVALID_PRICE_PRECISION`).
+
 ## 4. Operating rules the agent MUST follow
 
 **4.1 Market hours — oracle-priced vs oracle-free.**

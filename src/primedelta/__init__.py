@@ -18,6 +18,7 @@ from .primedelta import (
     AccountNotVerified,
     CannotCraft,
     DigitalIdentityAlreadyClaimed,
+    InvalidOrderInput,
     MarketClosed,
     NotEnoughFunds,
     PrimeDelta,

@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from primedelta import PrimeDelta
+from primedelta import InvalidOrderInput, PrimeDelta
 from primedelta.primedelta import NotEnoughFunds
 from primedelta.primedelta_client import APIError
 from primedelta.types import Order, OrderSide, OrderStatus
@@ -113,6 +113,118 @@ class TestMarketOrders:
         ):
             with pytest.raises(NotEnoughFunds):
                 primedelta.send_sell_market_order("AAPL", 100)
+
+
+_ORDER_INPUT_CALLS = [
+    pytest.param(
+        "send_limit_order",
+        lambda pd: pd.send_limit_order(
+            OrderSide.BUY, "AAPL", Decimal("1.5"), Decimal("150.255")
+        ),
+        id="limit",
+    ),
+    pytest.param(
+        "send_sell_market_order",
+        lambda pd: pd.send_sell_market_order("AAPL", Decimal("1.5")),
+        id="market-sell",
+    ),
+    pytest.param(
+        "limit_order_cost",
+        lambda pd: pd.limit_buy_cost("AAPL", Decimal("1.5"), Decimal("150.255")),
+        id="limit-buy-cost",
+    ),
+    pytest.param(
+        "limit_order_cost",
+        lambda pd: pd.limit_sell_cost("AAPL", Decimal("1.5"), Decimal("150.255")),
+        id="limit-sell-cost",
+    ),
+    pytest.param(
+        "market_sell_cost",
+        lambda pd: pd.market_sell_cost("AAPL", Decimal("1.5")),
+        id="market-sell-cost",
+    ),
+]
+
+
+class TestInvalidOrderInput:
+    @pytest.mark.parametrize("client_method, call", _ORDER_INPUT_CALLS)
+    @pytest.mark.parametrize(
+        "error_code, message",
+        [
+            ("INVALID_QUANTITY", "quantity must be greater than zero"),
+            (
+                "INVALID_QUANTITY_PRECISION",
+                "quantity has more decimal places than the stock's "
+                "quantity_decimals",
+            ),
+            ("INVALID_PRICE", "price must be greater than zero"),
+            (
+                "INVALID_PRICE_PRECISION",
+                "price has more decimal places than the stock's price_decimals",
+            ),
+        ],
+    )
+    def test_rejection_raises_invalid_order_input(
+        self, client_method, call, error_code, message
+    ):
+        with patch("primedelta.primedelta.Web3"):
+            primedelta = PrimeDelta(
+                private_key="0x" + "1" * 64,
+                web3_provider_url="http://localhost:8545",
+            )
+
+        with patch.object(
+            primedelta._primedelta_client,
+            client_method,
+            side_effect=APIError(error_code),
+        ):
+            with pytest.raises(InvalidOrderInput) as info:
+                call(primedelta)
+
+        assert isinstance(info.value, APIError)
+        assert info.value.error_code == error_code
+        assert info.value.message == message
+        assert str(info.value) == f"{error_code}: {message}"
+
+    @pytest.mark.parametrize("client_method, call", _ORDER_INPUT_CALLS)
+    def test_backend_reason_is_kept(self, client_method, call):
+        with patch("primedelta.primedelta.Web3"):
+            primedelta = PrimeDelta(
+                private_key="0x" + "1" * 64,
+                web3_provider_url="http://localhost:8545",
+            )
+
+        with patch.object(
+            primedelta._primedelta_client,
+            client_method,
+            side_effect=APIError(
+                "INVALID_QUANTITY_PRECISION",
+                "Order quantity 1.5 has more than 0 decimal places",
+                {"amount": ["1.5"]},
+            ),
+        ):
+            with pytest.raises(InvalidOrderInput) as info:
+                call(primedelta)
+
+        assert info.value.message == "Order quantity 1.5 has more than 0 decimal places"
+        assert info.value.detail == {"amount": ["1.5"]}
+
+    @pytest.mark.parametrize("client_method, call", _ORDER_INPUT_CALLS)
+    def test_other_api_errors_are_reraised_unchanged(self, client_method, call):
+        with patch("primedelta.primedelta.Web3"):
+            primedelta = PrimeDelta(
+                private_key="0x" + "1" * 64,
+                web3_provider_url="http://localhost:8545",
+            )
+
+        error = APIError("STOCK_WITHOUT_PRICE")
+        with patch.object(
+            primedelta._primedelta_client, client_method, side_effect=error
+        ):
+            with pytest.raises(APIError) as info:
+                call(primedelta)
+
+        assert info.value is error
 
 
 class TestCancelOrder:
