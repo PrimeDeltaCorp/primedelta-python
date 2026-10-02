@@ -1815,6 +1815,34 @@ class TestClaimWithdrawals:
         with pytest.raises(AccountNotVerified):
             pd.deposit_stablecoin(1)
 
+    def test_deposit_stablecoin_sends_cents_and_burns_the_signed_amount(self):
+        from primedelta.primedelta_client import PrimeDeltaClient
+
+        def response(body):
+            resp = MagicMock(status_code=200, content=b"{}")
+            resp.json.return_value = body
+            return resp
+
+        pd, factory = self._pd()
+        pd._primedelta_client = PrimeDeltaClient()
+        session = MagicMock()
+        pd._primedelta_client._session = session
+        session.get.return_value = response({"csrfToken": "tok"})
+        session.request.side_effect = [
+            response({"status": "VERIFIED_MINTED"}),
+            response({"signature": "ab" * 65, "nonce": "0xcd", "amount": "10499999"}),
+        ]
+
+        assert pd.deposit_stablecoin(Decimal("10.50")) == "0xTX"
+        method, url = session.request.call_args.args
+        assert method == "POST" and url.endswith("/deposit-stablecoin-signature/")
+        assert session.request.call_args.kwargs["json"] == {
+            "amount": "10.50",
+            "symbol": "dUSD",
+        }
+        struct, _ = factory.functions.burnStablecoin.call_args.args
+        assert struct["amount"] == 10499999
+
 
 def test_networks_config_wires_multicall3():
     from primedelta import networks

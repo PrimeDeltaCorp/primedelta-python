@@ -42,7 +42,13 @@ from primedelta.dex.params import (
     SwapSide,
     SwapSimulation,
 )
-from primedelta.primedelta_client import APIError, NotLoggedIn, PrimeDeltaClient
+from primedelta.primedelta_client import (
+    APIError,
+    NotLoggedIn,
+    PrimeDeltaClient,
+    _decimal_arg,
+    _stablecoin_deposit_amount,
+)
 from primedelta.settings import SIWE_MESSAGE, resolve_endpoints
 from primedelta.signer import LocalAccountSigner, Signer
 from primedelta.types import (
@@ -612,7 +618,8 @@ class PrimeDelta:
         webbrowser.open(url)
         return url
 
-    def deposit_stablecoin(self, amount: int) -> str:
+    def deposit_stablecoin(self, amount: Decimal | int) -> str:
+        _stablecoin_deposit_amount(amount)
         account_status = self._primedelta_client.get_account_status()
         if account_status != AccountStatus.DID_MINTED:
             raise AccountNotVerified()
@@ -673,7 +680,8 @@ class PrimeDelta:
             )
         )
 
-    def deposit_stock_token(self, stock_symbol: str, amount: int) -> str:
+    def deposit_stock_token(self, stock_symbol: str, amount: Decimal | int) -> str:
+        _decimal_arg(amount, "amount")
         account_status = self._primedelta_client.get_account_status()
         if account_status != AccountStatus.DID_MINTED:
             raise AccountNotVerified()
@@ -700,8 +708,9 @@ class PrimeDelta:
             )
         )
 
-    def request_stock_withdrawal(self, stock_symbol: str, amount: int) -> int:
+    def request_stock_withdrawal(self, stock_symbol: str, amount: Decimal | int) -> int:
         self._reject_backend_action_while_crafting("request_stock_withdrawal")
+        _decimal_arg(amount, "amount")
         account_status = self._primedelta_client.get_account_status()
         if account_status != AccountStatus.DID_MINTED:
             raise AccountNotVerified()
@@ -1045,7 +1054,7 @@ class PrimeDelta:
         self,
         side: OrderSide,
         stock_symbol: str,
-        amount: int,
+        amount: Decimal | int,
         price_limit: Decimal,
         date_of_cancellation: Optional[date] = None,
     ) -> int:
@@ -1063,7 +1072,7 @@ class PrimeDelta:
                 raise NotEnoughFunds()
             raise
 
-    def send_sell_market_order(self, stock_symbol: str, amount: int) -> int:
+    def send_sell_market_order(self, stock_symbol: str, amount: Decimal | int) -> int:
         self._reject_backend_action_while_crafting("send_sell_market_order")
         try:
             return self._primedelta_client.send_sell_market_order(
@@ -1573,20 +1582,20 @@ class PrimeDelta:
             raise
 
     def limit_buy_cost(
-        self, stock_symbol: str, amount: int, price_limit: Decimal
+        self, stock_symbol: str, amount: Decimal | int, price_limit: Decimal
     ) -> OrderCost:
         return self._primedelta_client.limit_order_cost(
             OrderSide.BUY, stock_symbol, amount, price_limit
         )
 
     def limit_sell_cost(
-        self, stock_symbol: str, amount: int, price_limit: Decimal
+        self, stock_symbol: str, amount: Decimal | int, price_limit: Decimal
     ) -> OrderCost:
         return self._primedelta_client.limit_order_cost(
             OrderSide.SELL, stock_symbol, amount, price_limit
         )
 
-    def market_sell_cost(self, stock_symbol: str, amount: int) -> OrderCost:
+    def market_sell_cost(self, stock_symbol: str, amount: Decimal | int) -> OrderCost:
         return self._primedelta_client.market_sell_cost(stock_symbol, amount)
 
     def swappable_symbols(self) -> list[str]:
