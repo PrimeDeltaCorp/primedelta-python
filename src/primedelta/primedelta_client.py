@@ -1,7 +1,8 @@
 import json
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any, Callable, Iterator, Optional
+from enum import Enum
+from typing import Any, Callable, Iterator, Optional, TypeVar
 from urllib.parse import urlsplit
 
 import requests
@@ -43,6 +44,16 @@ _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # the caller indefinitely. Long-lived SSE streams (stream=True) are exempt.
 _HTTP_TIMEOUT = 30.0
 _STABLECOIN_DEPOSIT_DECIMALS = 2
+_EnumT = TypeVar("_EnumT", bound=Enum)
+
+
+def _enum_or_unknown(
+    enum_type: type[_EnumT], value: str
+) -> tuple[_EnumT, Optional[str]]:
+    try:
+        return enum_type(value), None
+    except ValueError:
+        return enum_type["UNKNOWN"], value
 
 
 def _decimal_arg(value: Decimal | int, name: str) -> str:
@@ -385,26 +396,33 @@ class PrimeDeltaClient:
 
     @staticmethod
     def _parse_transfer(item: dict[str, Any]) -> Transfer:
+        transfer_type, raw_type = _enum_or_unknown(TransactionType, item["type"])
+        status, raw_status = _enum_or_unknown(TransferHistoryStatus, item["status"])
         return Transfer(
             transaction_id=item["transactionId"],
             amount=Decimal(item["amount"]),
             symbol=item["symbol"],
-            type=TransactionType(item["type"]),
-            status=TransferHistoryStatus(item["status"]),
+            type=transfer_type,
+            status=status,
             transfer_id=item.get("transferId"),
+            raw_type=raw_type,
+            raw_status=raw_status,
         )
 
     def get_distributions(self, page: int, size: int) -> list[Distribution]:
         response = self._get("/closed-distributions/", {"page": page, "size": size})
-        return [
-            Distribution(
-                amount=Decimal(item["amount"]),
-                type=DistributionType(item["type"]),
-                stock_symbol=item["stockSymbol"],
-                stock_quantity=Decimal(item["quantity"]),
-            )
-            for item in response["items"]
-        ]
+        return [self._parse_distribution(item) for item in response["items"]]
+
+    @staticmethod
+    def _parse_distribution(item: dict[str, Any]) -> Distribution:
+        distribution_type, raw_type = _enum_or_unknown(DistributionType, item["type"])
+        return Distribution(
+            amount=Decimal(item["amount"]),
+            type=distribution_type,
+            stock_symbol=item["stockSymbol"],
+            stock_quantity=Decimal(item["quantity"]),
+            raw_type=raw_type,
+        )
 
     def create_digital_identity_signature(self) -> DigitalIdentitySignature:
         response = self._post(
@@ -446,24 +464,27 @@ class PrimeDeltaClient:
 
     def closed_orders(self, page: int, size: int) -> list[Order]:
         response = self._get("/closed-orders/", {"page": page, "size": size})
-        return [
-            Order(
-                id=item["id"],
-                order_side=OrderSide(item["actionType"]),
-                type=item["type"],
-                symbol=item["stockSymbol"],
-                quantity=Decimal(item["quantity"]),
-                filled_quantity=Decimal(item["filledQuantity"]),
-                price=Decimal(item["price"]) if item["price"] is not None else None,
-                status=OrderStatus(item["status"]),
-                date_of_cancellation=(
-                    date.fromisoformat(item["dateOfCancellation"])
-                    if item["dateOfCancellation"]
-                    else None
-                ),
-            )
-            for item in response["items"]
-        ]
+        return [self._parse_closed_order(item) for item in response["items"]]
+
+    @staticmethod
+    def _parse_closed_order(item: dict[str, Any]) -> Order:
+        status, raw_status = _enum_or_unknown(OrderStatus, item["status"])
+        return Order(
+            id=item["id"],
+            order_side=OrderSide(item["actionType"]),
+            type=item["type"],
+            symbol=item["stockSymbol"],
+            quantity=Decimal(item["quantity"]),
+            filled_quantity=Decimal(item["filledQuantity"]),
+            price=Decimal(item["price"]) if item["price"] is not None else None,
+            status=status,
+            date_of_cancellation=(
+                date.fromisoformat(item["dateOfCancellation"])
+                if item["dateOfCancellation"]
+                else None
+            ),
+            raw_status=raw_status,
+        )
 
     def get_deposit_stocks_signature(
         self, amount: Decimal | int, symbol: str

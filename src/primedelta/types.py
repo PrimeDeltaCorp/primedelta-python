@@ -34,6 +34,7 @@ class TransactionType(Enum):
     WITHDRAWAL = "WITHDRAWAL"
     FIAT_DEPOSIT = "FIAT_DEPOSIT"
     FIAT_WITHDRAWAL = "FIAT_WITHDRAWAL"
+    UNKNOWN = "UNKNOWN"
 
 
 class DistributionType(Enum):
@@ -41,6 +42,7 @@ class DistributionType(Enum):
     DELISTING = "DELISTING"
     DIVIDEND = "DIVIDEND"
     OTHER = "OTHER"
+    UNKNOWN = "UNKNOWN"
 
 
 class TransferHistoryStatus(Enum):
@@ -48,6 +50,7 @@ class TransferHistoryStatus(Enum):
     CLAIMABLE = "CLAIMABLE"
     REJECTED = "REJECTED"
     DONE = "DONE"
+    UNKNOWN = "UNKNOWN"
 
 
 class OrderSide(Enum):
@@ -59,6 +62,7 @@ class OrderStatus(Enum):
     PENDING = "PENDING"
     EXECUTED = "EXECUTED"
     CANCELED = "CANCELED"
+    UNKNOWN = "UNKNOWN"
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,8 @@ class Transfer:
     type: TransactionType
     status: TransferHistoryStatus
     transfer_id: Optional[int] = None
+    raw_type: Optional[str] = None
+    raw_status: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +83,7 @@ class Distribution:
     type: DistributionType
     stock_symbol: str
     stock_quantity: Decimal
+    raw_type: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +119,7 @@ class Order:
     status: OrderStatus
     price: Optional[Decimal]
     date_of_cancellation: Optional[date]
+    raw_status: Optional[str] = None
 
 
 @dataclass(frozen=True)
