@@ -6,6 +6,21 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+### Added
+- **`TransactionType.INTERNAL_OUT` / `TransactionType.INTERNAL_IN`** — cash
+  (USD) moves between a main account and its AI agent. `pending_transfers()` /
+  `closed_transfers()` parsed these rows as `UNKNOWN` (value on `raw_type`);
+  they now parse as their own members and, like the `FIAT_*` rows, carry
+  symbol `cash` and a USD amount.
+
+### Fixed
+- **`get_account_status()` no longer raises `ValueError` on a status the SDK
+  does not know.** `SUBACCOUNT_REJECTED` (an AI subaccount whose main account
+  rejected it) is now `AccountStatus.SUBACCOUNT_REJECTED`, and any other new
+  value returns the new `AccountStatus.UNKNOWN`. Both count as not verified, so
+  `claim_digital_identity()` and the other DID/KYC checks raise
+  `AccountNotVerified`.
+
 ## [0.2.0] - 2026-10-03
 
 ### Added

@@ -1,3 +1,4 @@
+import dataclasses
 from decimal import Decimal
 from unittest.mock import MagicMock
 
@@ -348,6 +349,7 @@ class TestAuditFixes:
                 "AWAITING_MAIN_CONFIRMATION",
                 AccountStatus.AWAITING_MAIN_CONFIRMATION,
             ),
+            ("SUBACCOUNT_REJECTED", AccountStatus.SUBACCOUNT_REJECTED),
         ]:
             session.request.return_value = _Resp(200, {"status": value})
             assert client.get_account_status() == expected
@@ -1353,3 +1355,30 @@ class TestUnknownEnumValues:
         )
         [order] = client.closed_orders(1, 10)
         assert (order.status, order.raw_status) == (status, None)
+
+    def test_unknown_account_status_parses_as_unknown(self):
+        from primedelta.types import AccountStatus
+
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(200, {"status": "SUSPENDED"})
+        assert client.get_account_status() == AccountStatus.UNKNOWN
+
+
+class TestInternalTransfers:
+    @pytest.mark.parametrize("fetch", _TRANSFER_PAGES)
+    @pytest.mark.parametrize("transfer_type", ["INTERNAL_OUT", "INTERNAL_IN"])
+    def test_internal_rows_parse_like_fiat_cash_rows(self, fetch, transfer_type):
+        client, session = _client_with_session()
+        fiat_row = {
+            **_transfer_item("FIAT_DEPOSIT", "DONE"),
+            "symbol": "cash",
+            "amount": "25.50",
+        }
+        session.request.return_value = _page(
+            fiat_row, {**fiat_row, "type": transfer_type}
+        )
+        fiat, internal = fetch(client)
+        assert internal == dataclasses.replace(
+            fiat, type=TransactionType(transfer_type)
+        )
+        assert (internal.symbol, internal.amount) == ("cash", Decimal("25.50"))

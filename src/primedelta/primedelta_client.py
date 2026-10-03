@@ -363,7 +363,10 @@ class PrimeDeltaClient:
         return self._get("/me/")["address"]
 
     def get_account_status(self) -> AccountStatus:
-        return AccountStatus(self._get("/verification-status/")["status"])
+        status, _ = _enum_or_unknown(
+            AccountStatus, self._get("/verification-status/")["status"]
+        )
+        return status
 
     def register_ai_account(self, agent_name: str, main_wallet_address: str) -> None:
         self._post(
