@@ -7,6 +7,15 @@ semantic versioning once published.
 ## [Unreleased]
 
 ### Added
+- **Transfer, distribution and closed-order rows with a type or status the SDK
+  does not know yet stay readable.** `pending_transfers()` /
+  `closed_transfers()`, `distributions()` and `closed_orders()` raised
+  `ValueError` for the whole page when one row carried such a value (e.g. a
+  transfer type the backend added later). That row now parses as the new
+  `UNKNOWN` member of `TransactionType` / `TransferHistoryStatus` /
+  `DistributionType` / `OrderStatus`, and the backend's value is kept on the new
+  `Transfer.raw_type` / `Transfer.raw_status`, `Distribution.raw_type` and
+  `Order.raw_status` — `None` whenever the SDK knows the value.
 - **`Order.filled_quantity`** — how much of the order has filled so far, parsed
   from the `filledQuantity` the backend already sends on `open_orders()` /
   `closed_orders()`. The SDK dropped it, so partial fills were invisible.

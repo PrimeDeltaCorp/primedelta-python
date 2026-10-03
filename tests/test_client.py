@@ -13,7 +13,14 @@ from primedelta.primedelta_client import (
     UserSignedMessageVerificationError,
     _TimeoutSession,
 )
-from primedelta.types import FiatWithdrawalBankAccount, OrderSide, TransactionType
+from primedelta.types import (
+    DistributionType,
+    FiatWithdrawalBankAccount,
+    OrderSide,
+    OrderStatus,
+    TransactionType,
+    TransferHistoryStatus,
+)
 
 _UNSET = object()
 
@@ -346,8 +353,6 @@ class TestAuditFixes:
             assert client.get_account_status() == expected
 
     def test_distributions_accepts_other_type(self):
-        from primedelta.types import DistributionType
-
         client, session = _client_with_session()
         session.request.return_value = _Resp(
             200,
@@ -1216,3 +1221,135 @@ class TestStablecoinDeposit:
             client.get_deposit_stablecoin_signature(amount, "dUSD")
         session.request.assert_not_called()
         session.get.assert_not_called()
+
+
+def _page(*items):
+    return _Resp(200, {"items": list(items), "total": len(items), "count": len(items)})
+
+
+def _transfer_item(transfer_type, status):
+    return {
+        "transferId": 7,
+        "transactionId": "0xabc",
+        "amount": "5.00",
+        "symbol": "USDC",
+        "type": transfer_type,
+        "status": status,
+    }
+
+
+def _distribution_item(distribution_type):
+    return {
+        "amount": "1.25",
+        "type": distribution_type,
+        "stockSymbol": "AAPL",
+        "quantity": "3",
+    }
+
+
+def _known(enum_type):
+    return [member for member in enum_type if member is not enum_type.UNKNOWN]
+
+
+_TRANSFER_PAGES = [
+    pytest.param(lambda c: c.get_pending_transfers(1, 10), id="pending"),
+    pytest.param(lambda c: c.get_closed_transfers(1, 10), id="closed"),
+]
+
+
+class TestUnknownEnumValues:
+    @pytest.mark.parametrize("fetch", _TRANSFER_PAGES)
+    def test_unknown_transfer_type_keeps_the_row(self, fetch):
+        client, session = _client_with_session()
+        session.request.return_value = _page(
+            _transfer_item("DEPOSIT", "DONE"),
+            _transfer_item("CRYPTO_DEPOSIT", "DONE"),
+        )
+        known, unknown = fetch(client)
+        assert (known.type, known.raw_type) == (TransactionType.DEPOSIT, None)
+        assert (unknown.type, unknown.raw_type) == (
+            TransactionType.UNKNOWN,
+            "CRYPTO_DEPOSIT",
+        )
+        assert (unknown.status, unknown.raw_status) == (
+            TransferHistoryStatus.DONE,
+            None,
+        )
+        assert (unknown.transfer_id, unknown.amount) == (7, Decimal("5.00"))
+
+    @pytest.mark.parametrize("fetch", _TRANSFER_PAGES)
+    def test_unknown_transfer_status_keeps_the_row(self, fetch):
+        client, session = _client_with_session()
+        session.request.return_value = _page(
+            _transfer_item("WITHDRAWAL", "PENDING"),
+            _transfer_item("WITHDRAWAL", "ON_HOLD"),
+        )
+        known, unknown = fetch(client)
+        assert (known.status, known.raw_status) == (
+            TransferHistoryStatus.PENDING,
+            None,
+        )
+        assert (unknown.status, unknown.raw_status) == (
+            TransferHistoryStatus.UNKNOWN,
+            "ON_HOLD",
+        )
+        assert (unknown.type, unknown.raw_type) == (TransactionType.WITHDRAWAL, None)
+
+    @pytest.mark.parametrize("transfer_type", _known(TransactionType))
+    @pytest.mark.parametrize("status", _known(TransferHistoryStatus))
+    def test_known_transfer_values_carry_no_raw_value(self, transfer_type, status):
+        client, session = _client_with_session()
+        session.request.return_value = _page(
+            _transfer_item(transfer_type.value, status.value)
+        )
+        [transfer] = client.get_closed_transfers(1, 10)
+        assert (transfer.type, transfer.raw_type) == (transfer_type, None)
+        assert (transfer.status, transfer.raw_status) == (status, None)
+
+    def test_unknown_distribution_type_keeps_the_row(self):
+        client, session = _client_with_session()
+        session.request.return_value = _page(
+            _distribution_item("DIVIDEND"), _distribution_item("SPIN_OFF")
+        )
+        known, unknown = client.get_distributions(1, 10)
+        assert (known.type, known.raw_type) == (DistributionType.DIVIDEND, None)
+        assert (unknown.type, unknown.raw_type) == (
+            DistributionType.UNKNOWN,
+            "SPIN_OFF",
+        )
+        assert (unknown.amount, unknown.stock_quantity) == (
+            Decimal("1.25"),
+            Decimal("3"),
+        )
+
+    @pytest.mark.parametrize("distribution_type", _known(DistributionType))
+    def test_known_distribution_types_carry_no_raw_value(self, distribution_type):
+        client, session = _client_with_session()
+        session.request.return_value = _page(
+            _distribution_item(distribution_type.value)
+        )
+        [distribution] = client.get_distributions(1, 10)
+        assert (distribution.type, distribution.raw_type) == (distribution_type, None)
+
+    def test_unknown_closed_order_status_keeps_the_row(self):
+        client, session = _client_with_session()
+        session.request.return_value = _page(
+            _closed_order_item("2", "1"),
+            {**_closed_order_item("2", "1"), "status": "EXPIRED"},
+        )
+        known, unknown = client.closed_orders(1, 10)
+        assert (known.status, known.raw_status) == (OrderStatus.CANCELED, None)
+        assert (unknown.status, unknown.raw_status) == (OrderStatus.UNKNOWN, "EXPIRED")
+        assert (unknown.order_side, unknown.filled_quantity) == (
+            OrderSide.SELL,
+            Decimal("1"),
+        )
+
+    @pytest.mark.parametrize("status", [OrderStatus.EXECUTED, OrderStatus.CANCELED])
+    def test_known_closed_order_statuses_carry_no_raw_value(self, status):
+        client, session = _client_with_session()
+        session.request.return_value = _page(
+            {**_closed_order_item("1", "1"), "status": status.value}
+        )
+        [order] = client.closed_orders(1, 10)
+        assert (order.status, order.raw_status) == (status, None)
