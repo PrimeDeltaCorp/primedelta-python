@@ -13,6 +13,8 @@ from urllib3.util.retry import Retry
 from primedelta.settings import PRIMEDELTA_BASE_URL, PYTH_HERMES_BASE_URL
 from primedelta.types import (
     AccountStatus,
+    AIAgent,
+    AIAgentApproval,
     ApplicationSettings,
     BankDetails,
     ClaimableWithdrawal,
@@ -21,6 +23,8 @@ from primedelta.types import (
     Distribution,
     DistributionType,
     FiatWithdrawalBankAccount,
+    InternalTransfer,
+    InternalTransferKind,
     Message,
     Order,
     OrderCost,
@@ -54,6 +58,12 @@ def _enum_or_unknown(
         return enum_type(value), None
     except ValueError:
         return enum_type["UNKNOWN"], value
+
+
+def _parse_datetime(value: str) -> datetime:
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    return datetime.fromisoformat(value)
 
 
 def _decimal_arg(value: Decimal | int, name: str) -> str:
@@ -383,11 +393,103 @@ class PrimeDeltaClient:
             for item in self._get("/pending-ai-agents/")
         ]
 
-    def confirm_ai_agent(self, sub_wallet_address: str) -> None:
-        self._post("/confirm-ai-agent/", {"subWalletAddress": sub_wallet_address})
+    def get_my_ai_agents(self) -> list[AIAgent]:
+        return [self._parse_ai_agent(item) for item in self._get("/my-ai-agents/")]
+
+    @staticmethod
+    def _parse_ai_agent(item: dict[str, Any]) -> AIAgent:
+        status, raw_status = _enum_or_unknown(AccountStatus, item["status"])
+        return AIAgent(
+            sub_wallet_address=item["subWalletAddress"],
+            agent_name=item["agentName"],
+            status=status,
+            raw_status=raw_status,
+        )
+
+    def request_ai_agent_approval(
+        self, sub_wallet_address: str, agent_name: Optional[str] = None
+    ) -> AIAgentApproval:
+        body = {"subWalletAddress": sub_wallet_address}
+        if agent_name is not None:
+            body["agentName"] = agent_name
+        response = self._post("/request-ai-agent-approval/", body)
+        return AIAgentApproval(
+            nonce=response["nonce"],
+            expires_at=_parse_datetime(response["expiresAt"]),
+            main_message=response["mainMessage"],
+            agent_message=response["agentMessage"],
+        )
+
+    def confirm_ai_agent(
+        self,
+        sub_wallet_address: str,
+        nonce: Optional[str] = None,
+        signature: Optional[str] = None,
+    ) -> None:
+        body = {"subWalletAddress": sub_wallet_address}
+        if nonce is not None:
+            body["nonce"] = nonce
+        if signature is not None:
+            body["signature"] = signature
+        self._post("/confirm-ai-agent/", body)
+
+    def link_ai_agent(
+        self,
+        sub_wallet_address: str,
+        nonce: str,
+        main_signature: str,
+        agent_signature: str,
+    ) -> None:
+        self._post(
+            "/link-ai-agent/",
+            {
+                "subWalletAddress": sub_wallet_address,
+                "nonce": nonce,
+                "mainSignature": main_signature,
+                "agentSignature": agent_signature,
+            },
+        )
 
     def reject_ai_agent(self, sub_wallet_address: str) -> None:
         self._post("/reject-ai-agent/", {"subWalletAddress": sub_wallet_address})
+
+    def fund_ai_agent(
+        self, sub_wallet_address: str, amount: Decimal | int, request_id: str
+    ) -> InternalTransfer:
+        response = self._post(
+            "/fund-ai-agent/",
+            {
+                "subWalletAddress": sub_wallet_address,
+                "amount": _decimal_arg(amount, "amount"),
+                "requestId": request_id,
+            },
+        )
+        return self._parse_internal_transfer(response)
+
+    def return_to_main(
+        self,
+        amount: Decimal | int,
+        request_id: str,
+        sub_wallet_address: Optional[str] = None,
+    ) -> InternalTransfer:
+        body = {"amount": _decimal_arg(amount, "amount"), "requestId": request_id}
+        if sub_wallet_address is not None:
+            body["subWalletAddress"] = sub_wallet_address
+        return self._parse_internal_transfer(self._post("/return-to-main/", body))
+
+    @staticmethod
+    def _parse_internal_transfer(item: dict[str, Any]) -> InternalTransfer:
+        kind, raw_kind = _enum_or_unknown(InternalTransferKind, item["kind"])
+        return InternalTransfer(
+            transfer_id=item["transferId"],
+            kind=kind,
+            amount=Decimal(item["amount"]),
+            symbol=item["symbol"],
+            from_wallet_address=item["fromWalletAddress"],
+            to_wallet_address=item["toWalletAddress"],
+            created_at=_parse_datetime(item["createdAt"]),
+            raw_kind=raw_kind,
+        )
 
     def get_pending_transfers(self, page: int, size: int) -> list[Transfer]:
         response = self._get("/pending-transfers/", {"page": page, "size": size})

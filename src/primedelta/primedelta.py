@@ -1,5 +1,6 @@
 import json
 import threading
+import uuid
 import warnings
 from contextlib import contextmanager
 from dataclasses import fields
@@ -53,11 +54,14 @@ from primedelta.settings import SIWE_MESSAGE, resolve_endpoints
 from primedelta.signer import LocalAccountSigner, Signer
 from primedelta.types import (
     AccountStatus,
+    AIAgent,
+    AIAgentApproval,
     ApplicationSettings,
     BankDetails,
     ClaimableWithdrawal,
     Distribution,
     FiatWithdrawalBankAccount,
+    InternalTransfer,
     LPPosition,
     Message,
     Order,
@@ -137,6 +141,98 @@ class InvalidOrderInput(APIError):
         super().__init__(error_code, message, detail)
 
 
+_AI_AGENT_ERROR_MESSAGES = {
+    "SELF_LINK_NOT_ALLOWED": "a wallet cannot be its own AI agent",
+    "AGENT_NAME_REQUIRED": (
+        "agent_name is required unless the wallet is awaiting this main "
+        "account's confirmation"
+    ),
+    "SUBACCOUNT_NOT_FOUND": "the wallet is not an AI agent of this main account",
+    "MAIN_ACCOUNT_NOT_VERIFIED": "the main account is not verified",
+    "SUBACCOUNT_NOT_AWAITING_CONFIRMATION": (
+        "the AI agent is not awaiting confirmation"
+    ),
+    "SUBACCOUNT_NOT_EMPTY": "the agent account already holds assets",
+    "SUBACCOUNT_NOT_ELIGIBLE": (
+        "the wallet cannot become an AI agent: it must be unblocked and not "
+        "verified on its own"
+    ),
+    "ALREADY_SUBACCOUNT": "the wallet is already an AI agent",
+    "MAIN_ACCOUNT_NOT_FOUND": "the main account was not found",
+    "MAIN_IS_SUBACCOUNT": "an AI agent cannot have AI agents of its own",
+    "SUBACCOUNT_LIMIT_REACHED": "the main account has reached its AI agent limit",
+    "APPROVAL_SIGNATURE_REQUIRED": "the platform requires a signed approval",
+    "INVALID_APPROVAL": (
+        "the approval is unknown, already used, or issued for another main "
+        "account or agent"
+    ),
+    "APPROVAL_EXPIRED": "the approval expired; request a new one",
+    "INVALID_APPROVAL_SIGNATURE": (
+        "a signature does not match its approval message and wallet"
+    ),
+    "NOT_A_MAIN_ACCOUNT": "only a main account can fund an AI agent",
+    "AGENT_NOT_FOUND": "the wallet is not an AI agent of this account",
+    "AGENT_ADDRESS_REQUIRED": "a main account must pass sub_wallet_address",
+    "ACCOUNT_NOT_ACTIVE": "the main account or the AI agent is not active",
+    "INVALID_AMOUNT": "amount must be greater than zero",
+    "REQUEST_ID_CONFLICT": "request_id was already used for a different transfer",
+}
+
+
+class AIAgentError(APIError):
+    def __init__(
+        self, error_code: str, message: Optional[str] = None, detail: Any = None
+    ):
+        if message is None:
+            message = _AI_AGENT_ERROR_MESSAGES.get(error_code)
+        super().__init__(error_code, message, detail)
+
+
+class AIAgentApprovalError(AIAgentError):
+    pass
+
+
+class AIAgentTransferError(AIAgentError):
+    pass
+
+
+_AI_AGENT_APPROVAL_CODES = frozenset(
+    {
+        "APPROVAL_SIGNATURE_REQUIRED",
+        "INVALID_APPROVAL",
+        "APPROVAL_EXPIRED",
+        "INVALID_APPROVAL_SIGNATURE",
+    }
+)
+_AI_AGENT_TRANSFER_CODES = frozenset(
+    {
+        "NOT_A_MAIN_ACCOUNT",
+        "AGENT_NOT_FOUND",
+        "AGENT_ADDRESS_REQUIRED",
+        "ACCOUNT_NOT_ACTIVE",
+        "INVALID_AMOUNT",
+        "REQUEST_ID_CONFLICT",
+    }
+)
+
+
+@contextmanager
+def _ai_agent_errors() -> Iterator[None]:
+    try:
+        yield
+    except APIError as exc:
+        if exc.error_code == "INSUFFICIENT_FUNDS":
+            raise NotEnoughFunds() from exc
+        if exc.error_code not in _AI_AGENT_ERROR_MESSAGES:
+            raise
+        error_type: type[AIAgentError] = AIAgentError
+        if exc.error_code in _AI_AGENT_APPROVAL_CODES:
+            error_type = AIAgentApprovalError
+        elif exc.error_code in _AI_AGENT_TRANSFER_CODES:
+            error_type = AIAgentTransferError
+        raise error_type(exc.error_code, exc.message, exc.detail) from exc
+
+
 class AccountNotVerified(Exception):
     pass
 
@@ -158,9 +254,9 @@ class WdelNotConfigured(Exception):
 
 class CannotCraft(Exception):
     """Raised when a backend REST action (limit/market order, withdrawal
-    request, order cancel) is invoked inside `craft`. Those actions do not
-    produce an on-chain transaction the SDK can capture, so crafting cannot
-    intercept them — calling one would execute it for real."""
+    request, order cancel, AI-agent fund/return) is invoked inside `craft`.
+    Those actions do not produce an on-chain transaction the SDK can capture, so
+    crafting cannot intercept them — calling one would execute it for real."""
 
     pass
 
@@ -603,19 +699,83 @@ class PrimeDelta:
         Call this from the SUBACCOUNT's session (a fresh wallet); the main
         account must then confirm it before the subaccount becomes active.
         """
-        self._primedelta_client.register_ai_account(agent_name, main_wallet_address)
+        with _ai_agent_errors():
+            self._primedelta_client.register_ai_account(agent_name, main_wallet_address)
 
     def get_pending_ai_agents(self) -> list[PendingAIAgent]:
         """List AI subaccounts awaiting this (main) account's confirmation."""
         return self._primedelta_client.get_pending_ai_agents()
 
+    def get_my_ai_agents(self) -> list[AIAgent]:
+        return self._primedelta_client.get_my_ai_agents()
+
+    def request_ai_agent_approval(
+        self, sub_wallet_address: str, agent_name: Optional[str] = None
+    ) -> AIAgentApproval:
+        with _ai_agent_errors():
+            return self._primedelta_client.request_ai_agent_approval(
+                sub_wallet_address, agent_name
+            )
+
     def confirm_ai_agent(self, sub_wallet_address: str) -> None:
-        """Confirm a pending AI subaccount registered under this main account."""
-        self._primedelta_client.confirm_ai_agent(sub_wallet_address)
+        """Confirm a pending AI subaccount registered under this main account,
+        signing the platform's approval message with this client's signer."""
+        with _ai_agent_errors():
+            approval = self._primedelta_client.request_ai_agent_approval(
+                sub_wallet_address
+            )
+            self._primedelta_client.confirm_ai_agent(
+                sub_wallet_address,
+                nonce=approval.nonce,
+                signature=self._signer.sign_message(approval.main_message),
+            )
+
+    def link_ai_agent(
+        self,
+        sub_wallet_address: str,
+        approval: AIAgentApproval,
+        agent_signature: str,
+    ) -> None:
+        with _ai_agent_errors():
+            self._primedelta_client.link_ai_agent(
+                sub_wallet_address,
+                nonce=approval.nonce,
+                main_signature=self._signer.sign_message(approval.main_message),
+                agent_signature=agent_signature,
+            )
 
     def reject_ai_agent(self, sub_wallet_address: str) -> None:
         """Reject a pending AI subaccount registered under this main account."""
-        self._primedelta_client.reject_ai_agent(sub_wallet_address)
+        with _ai_agent_errors():
+            self._primedelta_client.reject_ai_agent(sub_wallet_address)
+
+    def fund_ai_agent(
+        self,
+        sub_wallet_address: str,
+        amount: Decimal | int,
+        request_id: Optional[str] = None,
+    ) -> InternalTransfer:
+        self._reject_backend_action_while_crafting("fund_ai_agent")
+        with _ai_agent_errors():
+            return self._primedelta_client.fund_ai_agent(
+                sub_wallet_address,
+                amount,
+                request_id if request_id is not None else str(uuid.uuid4()),
+            )
+
+    def return_to_main(
+        self,
+        amount: Decimal | int,
+        sub_wallet_address: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> InternalTransfer:
+        self._reject_backend_action_while_crafting("return_to_main")
+        with _ai_agent_errors():
+            return self._primedelta_client.return_to_main(
+                amount,
+                request_id if request_id is not None else str(uuid.uuid4()),
+                sub_wallet_address,
+            )
 
     def verification_url(self) -> str:
         """Return the URL of the web page where the user completes KYC.

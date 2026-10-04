@@ -26,6 +26,40 @@ class PendingAIAgent:
     agent_name: str
 
 
+@dataclass(frozen=True)
+class AIAgent:
+    sub_wallet_address: str
+    agent_name: str
+    status: AccountStatus
+    raw_status: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class AIAgentApproval:
+    nonce: str
+    expires_at: datetime
+    main_message: str
+    agent_message: str
+
+
+class InternalTransferKind(Enum):
+    FUND = "FUND"
+    RETURN = "RETURN"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True)
+class InternalTransfer:
+    transfer_id: int
+    kind: InternalTransferKind
+    amount: Decimal
+    symbol: str
+    from_wallet_address: str
+    to_wallet_address: str
+    created_at: datetime
+    raw_kind: Optional[str] = None
+
+
 class OrderType(Enum):
     LIMIT = "LIMIT"
     MARKET = "MARKET"

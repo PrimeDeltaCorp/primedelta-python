@@ -16,6 +16,9 @@ from .dex.params import (
 )
 from .primedelta import (
     AccountNotVerified,
+    AIAgentApprovalError,
+    AIAgentError,
+    AIAgentTransferError,
     CannotCraft,
     DigitalIdentityAlreadyClaimed,
     InvalidOrderInput,

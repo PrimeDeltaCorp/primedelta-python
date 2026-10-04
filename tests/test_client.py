@@ -819,6 +819,200 @@ class TestAISubaccounts:
         session.get.assert_any_call(client._url("/csrf-token/"))
         assert kwargs["headers"]["X-CSRFToken"] == "tok"
 
+    def test_get_my_ai_agents_parses_status_and_keeps_an_unknown_one(self):
+        from primedelta.types import AccountStatus, AIAgent
+
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(
+            200,
+            [
+                {
+                    "subWalletAddress": "0xSUB1",
+                    "agentName": "bot-1",
+                    "status": "VERIFIED_MINTED",
+                },
+                {"subWalletAddress": "0xSUB2", "agentName": "bot-2", "status": "X"},
+            ],
+        )
+
+        assert client.get_my_ai_agents() == [
+            AIAgent(
+                sub_wallet_address="0xSUB1",
+                agent_name="bot-1",
+                status=AccountStatus.DID_MINTED,
+            ),
+            AIAgent(
+                sub_wallet_address="0xSUB2",
+                agent_name="bot-2",
+                status=AccountStatus.UNKNOWN,
+                raw_status="X",
+            ),
+        ]
+        method, url = session.request.call_args.args
+        assert method == "GET"
+        assert url.endswith("/my-ai-agents/")
+
+    @pytest.mark.parametrize(
+        "agent_name, body",
+        [
+            (None, {"subWalletAddress": "0xSUB"}),
+            ("bot", {"subWalletAddress": "0xSUB", "agentName": "bot"}),
+        ],
+    )
+    def test_request_ai_agent_approval_posts_and_parses(self, agent_name, body):
+        from datetime import datetime, timezone
+
+        from primedelta.types import AIAgentApproval
+
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(
+            201,
+            {
+                "nonce": "ab" * 32,
+                "expiresAt": "2026-10-04T12:10:00Z",
+                "mainMessage": "main\ntext",
+                "agentMessage": "agent\ntext",
+            },
+        )
+
+        approval = client.request_ai_agent_approval("0xSUB", agent_name)
+
+        assert approval == AIAgentApproval(
+            nonce="ab" * 32,
+            expires_at=datetime(2026, 10, 4, 12, 10, tzinfo=timezone.utc),
+            main_message="main\ntext",
+            agent_message="agent\ntext",
+        )
+        method, url = session.request.call_args.args
+        assert method == "POST"
+        assert url.endswith("/request-ai-agent-approval/")
+        assert session.request.call_args.kwargs["json"] == body
+
+    def test_confirm_ai_agent_posts_nonce_and_signature(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(204)
+
+        client.confirm_ai_agent("0xSUB", nonce="n1", signature="0xsig")
+
+        assert session.request.call_args.kwargs["json"] == {
+            "subWalletAddress": "0xSUB",
+            "nonce": "n1",
+            "signature": "0xsig",
+        }
+
+    def test_link_ai_agent_posts_both_signatures(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(204)
+
+        client.link_ai_agent(
+            "0xSUB", nonce="n1", main_signature="0xmain", agent_signature="0xagent"
+        )
+
+        method, url = session.request.call_args.args
+        assert method == "POST"
+        assert url.endswith("/link-ai-agent/")
+        assert session.request.call_args.kwargs["json"] == {
+            "subWalletAddress": "0xSUB",
+            "nonce": "n1",
+            "mainSignature": "0xmain",
+            "agentSignature": "0xagent",
+        }
+
+    _TRANSFER = {
+        "transferId": 7,
+        "kind": "FUND",
+        "amount": "10.500000",
+        "symbol": "USD",
+        "fromWalletAddress": "0xMAIN",
+        "toWalletAddress": "0xSUB",
+        "createdAt": "2026-10-04T12:00:00.123456Z",
+    }
+
+    def test_fund_ai_agent_posts_a_string_amount_and_parses_the_transfer(self):
+        from datetime import datetime, timezone
+
+        from primedelta.types import InternalTransfer, InternalTransferKind
+
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(201, self._TRANSFER)
+
+        transfer = client.fund_ai_agent("0xSUB", Decimal("10.5"), "req-1")
+
+        assert transfer == InternalTransfer(
+            transfer_id=7,
+            kind=InternalTransferKind.FUND,
+            amount=Decimal("10.5"),
+            symbol="USD",
+            from_wallet_address="0xMAIN",
+            to_wallet_address="0xSUB",
+            created_at=datetime(2026, 10, 4, 12, 0, 0, 123456, tzinfo=timezone.utc),
+        )
+        method, url = session.request.call_args.args
+        assert method == "POST"
+        assert url.endswith("/fund-ai-agent/")
+        assert session.request.call_args.kwargs["json"] == {
+            "subWalletAddress": "0xSUB",
+            "amount": "10.5",
+            "requestId": "req-1",
+        }
+
+    @pytest.mark.parametrize("amount", [1.5, Decimal("0"), Decimal("-1"), True])
+    def test_fund_ai_agent_rejects_a_bad_amount_before_posting(self, amount):
+        client, session = _client_with_session()
+        with pytest.raises((TypeError, ValueError)):
+            client.fund_ai_agent("0xSUB", amount, "req-1")
+        session.request.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "sub_wallet_address, body",
+        [
+            (None, {"amount": "3", "requestId": "req-2"}),
+            (
+                "0xSUB",
+                {"amount": "3", "requestId": "req-2", "subWalletAddress": "0xSUB"},
+            ),
+        ],
+    )
+    def test_return_to_main_names_the_agent_only_when_given(
+        self, sub_wallet_address, body
+    ):
+        from primedelta.types import InternalTransferKind
+
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(201, {**self._TRANSFER, "kind": "RETURN"})
+
+        transfer = client.return_to_main(3, "req-2", sub_wallet_address)
+
+        assert transfer.kind == InternalTransferKind.RETURN
+        assert transfer.raw_kind is None
+        method, url = session.request.call_args.args
+        assert url.endswith("/return-to-main/")
+        assert session.request.call_args.kwargs["json"] == body
+
+    def test_internal_transfer_keeps_an_unknown_kind(self):
+        from primedelta.types import InternalTransferKind
+
+        transfer = PrimeDeltaClient._parse_internal_transfer(
+            {**self._TRANSFER, "kind": "SWEEP"}
+        )
+
+        assert transfer.kind == InternalTransferKind.UNKNOWN
+        assert transfer.raw_kind == "SWEEP"
+
+    def test_transfer_error_code_surfaces_as_api_error(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(400, {"errorCode": "AGENT_NOT_FOUND"})
+
+        with pytest.raises(APIError) as excinfo:
+            client.fund_ai_agent("0xSUB", 1, "req-1")
+        assert excinfo.value.error_code == "AGENT_NOT_FOUND"
+
 
 class TestTransportRobustness:
     def test_connection_error_becomes_backend_unavailable(self):
