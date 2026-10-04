@@ -17,6 +17,7 @@ class AccountStatus(Enum):
     INVALID = "INVALID"
     AWAITING_MAIN_CONFIRMATION = "AWAITING_MAIN_CONFIRMATION"
     SUBACCOUNT_REJECTED = "SUBACCOUNT_REJECTED"
+    CLOSED = "CLOSED"
     UNKNOWN = "UNKNOWN"
 
 
@@ -24,6 +25,57 @@ class AccountStatus(Enum):
 class PendingAIAgent:
     sub_wallet_address: str
     agent_name: str
+
+
+@dataclass(frozen=True)
+class AIAgent:
+    sub_wallet_address: str
+    agent_name: str
+    status: AccountStatus
+    raw_status: Optional[str] = None
+    paused: Optional[bool] = None
+    allowed_symbols: Optional[list[str]] = None
+    max_order_usd: Optional[Decimal] = None
+    max_daily_usd: Optional[Decimal] = None
+
+
+@dataclass(frozen=True)
+class AIAgentPolicy:
+    sub_wallet_address: str
+    paused: bool
+    allowed_symbols: Optional[list[str]]
+    max_order_usd: Optional[Decimal]
+    max_daily_usd: Optional[Decimal]
+    day: date
+    used_today_usd: Decimal
+    remaining_today_usd: Optional[Decimal]
+    resets_at: datetime
+
+
+@dataclass(frozen=True)
+class AIAgentApproval:
+    nonce: str
+    expires_at: datetime
+    main_message: str
+    agent_message: str
+
+
+class InternalTransferKind(Enum):
+    FUND = "FUND"
+    RETURN = "RETURN"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True)
+class InternalTransfer:
+    transfer_id: int
+    kind: InternalTransferKind
+    amount: Decimal
+    symbol: str
+    from_wallet_address: str
+    to_wallet_address: str
+    created_at: datetime
+    raw_kind: Optional[str] = None
 
 
 class OrderType(Enum):

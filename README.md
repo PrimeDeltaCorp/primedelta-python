@@ -55,6 +55,7 @@ If an AI agent operates this SDK to trade, read [**AGENTS.md**](https://github.c
 - [Deposit, withdraw, distributions](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/mint-platform/deposit_withdraw_distribution.py)
 - [Buying and selling stocks (orders)](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/mint-platform/buying_and_selling_stocks.py)
 - [Portfolio](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/mint-platform/portfolio.py)
+- [AI agents](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/mint-platform/ai_agents.py) — `confirm_ai_agent` (signed approval), `request_ai_agent_approval` + `link_ai_agent`, `get_my_ai_agents`, `fund_ai_agent` / `return_to_main`, `get_ai_agent_portfolio` / `get_ai_agent_open_orders`, `set_ai_agent_policy`, `close_ai_agent` / `reopen_ai_agent`
 - [Allowances, native DEL, DID reads](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/mint-platform/allowances_and_did.py) — `approve` / `allowance` / `revoke_approval`, `send_del`, `did_token_id` / `is_pro` / `is_valid`
 - [Real-time price stream (logged in)](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/mint-platform/price_stream/prices_stream_logged.py)
 - [Real-time price stream (public Pyth — parked since the 2026-07-31 free-Hermes shutdown; set PYTH_HERMES_BASE_URL to an authenticated endpoint to re-enable)](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/mint-platform/price_stream/prices_stream_not_logged.py)

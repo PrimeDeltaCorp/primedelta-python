@@ -7,11 +7,88 @@ semantic versioning once published.
 ## [Unreleased]
 
 ### Added
+- **AI-agent management for a main account.** `get_my_ai_agents()` lists every
+  AI agent linked to the main as `AIAgent` (`sub_wallet_address`, `agent_name`,
+  `status` as an `AccountStatus`, with an unknown status kept on `raw_status`).
+  `fund_ai_agent(sub_wallet_address, amount)` moves USD from the main's ledger
+  to an agent; `return_to_main(amount, sub_wallet_address=None)` moves it back,
+  called by the agent itself or by the main naming the agent. Both return an
+  `InternalTransfer` (`transfer_id`, `kind` `FUND` / `RETURN`, `amount`,
+  `symbol`, `from_wallet_address`, `to_wallet_address`, `created_at`) and take a
+  `request_id`: repeating one returns the original transfer instead of moving
+  the funds again. A fresh UUID4 is sent when it is omitted, so pass your own
+  and reuse it to retry safely. Both raise `CannotCraft` inside `craft`.
+- **`request_ai_agent_approval(sub_wallet_address, agent_name=None)`** returns
+  an `AIAgentApproval` (`nonce`, `expires_at`, `main_message`, `agent_message`):
+  a single-use approval valid for 10 minutes. `agent_name` is required unless
+  the wallet is already awaiting this main's confirmation.
+- **`link_ai_agent(sub_wallet_address, approval, agent_signature)`** links and
+  confirms an agent wallet that never logs in. The agent wallet signs
+  `approval.agent_message` (EIP-191 `personal_sign`) wherever its key lives, and
+  this client's signer signs `approval.main_message`.
+- **Typed AI-agent errors.** `AIAgentError` (an `APIError`) and its subclasses
+  `AIAgentApprovalError` (`APPROVAL_SIGNATURE_REQUIRED`, `INVALID_APPROVAL`,
+  `APPROVAL_EXPIRED`, `INVALID_APPROVAL_SIGNATURE`) and `AIAgentTransferError`
+  (`NOT_A_MAIN_ACCOUNT`, `AGENT_NOT_FOUND`, `AGENT_ADDRESS_REQUIRED`,
+  `ACCOUNT_NOT_ACTIVE`, `INVALID_AMOUNT`, `REQUEST_ID_CONFLICT`) are raised by
+  every AI-agent method, including `register_ai_account` and
+  `reject_ai_agent`; the link/confirm codes (`SUBACCOUNT_NOT_FOUND`,
+  `SUBACCOUNT_LIMIT_REACHED`, …) raise `AIAgentError` itself. The backend sends
+  only the code, so the SDK supplies a short reason. `INSUFFICIENT_FUNDS` on a
+  transfer raises `NotEnoughFunds`. Existing `except APIError` handlers still
+  catch them.
+- **A main account reads its agent.** `get_ai_agent_portfolio(sub_wallet_address)`
+  returns a `Portfolio`; `get_ai_agent_open_orders(sub_wallet_address)` /
+  `get_ai_agent_closed_orders(sub_wallet_address)` return `Order`s (same
+  paging as `open_orders` / `closed_orders`). Needs
+  https://github.com/PrimeDeltaCorp/backend/pull/405.
+- **`close_ai_agent(sub_wallet_address)` / `reopen_ai_agent(sub_wallet_address)`.**
+  Closing invalidates the agent's digital identity (DID-gated tokens on its
+  wallet freeze), cancels its open Mint orders and moves its Mint balances to
+  the main; repeating it is harmless. Reopening makes the DID valid again;
+  swept balances stay on the main. `AccountStatus.CLOSED` is the closed
+  agent's status, and the DID/KYC checks treat it as not verified.
+  `close_ai_agent` raises `CannotCraft` inside `craft`. Needs
+  https://github.com/PrimeDeltaCorp/backend/pull/406.
+- **Agent trading policy.** `get_ai_agent_policy(sub_wallet_address=None)` —
+  a main names its agent, an agent reads its own — and
+  `set_ai_agent_policy(sub_wallet_address, *, paused, allowed_symbols,
+  max_order_usd, max_daily_usd)` return an `AIAgentPolicy` (the rules plus
+  today's `used_today_usd`, `remaining_today_usd` and `resets_at`). Setting
+  replaces the whole policy: every rule is a required keyword and `None`
+  turns it off; the caps take `Decimal`/`int` > 0 with at most 2 decimal
+  places, checked before the request. The allow-list and the caps apply to
+  buy orders; `paused` blocks every new order. `AIAgent` from
+  `get_my_ai_agents()` gains `paused`, `allowed_symbols`, `max_order_usd` and
+  `max_daily_usd` (all `None` on a backend without policies). Needs
+  https://github.com/PrimeDeltaCorp/backend/pull/407.
+- **`AIAgentPolicyError`** (an `AIAgentError`) — `send_limit_order` /
+  `send_sell_market_order` raise it when an AI agent's order breaks its
+  policy: `AGENT_PAUSED`, `AGENT_SYMBOL_NOT_ALLOWED` (`allowed_symbols`),
+  `AGENT_ORDER_LIMIT_EXCEEDED` (`limit_usd`, `order_value_usd`) or
+  `AGENT_DAILY_LIMIT_EXCEEDED` (`limit_usd`, `remaining_usd`,
+  `order_value_usd`), with the reason spelled out from those fields. A
+  `AGENT_PAUSED` 403 is no longer retried as a stale CSRF token.
+- **`APIError.payload`** — the whole error body, so a refusal's extra fields
+  survive.
 - **`TransactionType.INTERNAL_OUT` / `TransactionType.INTERNAL_IN`** — cash
   (USD) moves between a main account and its AI agent, written by the backend
   as settled rows, so they show up in `closed_transfers()`. They used to parse
   as `UNKNOWN` (value on `raw_type`); they now parse as their own members and,
   like the `FIAT_*` rows, carry symbol `cash` and a USD amount.
+
+### Changed
+- **`confirm_ai_agent()` signs the approval.** It requests an approval, signs
+  its `main_message` with the client's signer (EIP-191 `personal_sign`, so a
+  browser wallet shows the text to the user) and confirms with the nonce and
+  signature. It keeps working once the platform requires a signed approval.
+  Every bundled signer can sign a message (login needs it too), so there is no
+  unsigned fallback. A wallet that is not awaiting this main's confirmation now
+  fails at the approval step with `AGENT_NAME_REQUIRED` instead of
+  `SUBACCOUNT_NOT_FOUND` / `SUBACCOUNT_NOT_AWAITING_CONFIRMATION`.
+- An AI-agent refusal's class follows the call: `fund_ai_agent` /
+  `return_to_main` raise `AIAgentTransferError`, the other agent calls
+  `AIAgentError`, and an approval code `AIAgentApprovalError` everywhere.
 
 ### Fixed
 - **`get_account_status()` no longer raises `ValueError` on a status the SDK

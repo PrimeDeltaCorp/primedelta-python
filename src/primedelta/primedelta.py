@@ -1,5 +1,6 @@
 import json
 import threading
+import uuid
 import warnings
 from contextlib import contextmanager
 from dataclasses import fields
@@ -53,11 +54,15 @@ from primedelta.settings import SIWE_MESSAGE, resolve_endpoints
 from primedelta.signer import LocalAccountSigner, Signer
 from primedelta.types import (
     AccountStatus,
+    AIAgent,
+    AIAgentApproval,
+    AIAgentPolicy,
     ApplicationSettings,
     BankDetails,
     ClaimableWithdrawal,
     Distribution,
     FiatWithdrawalBankAccount,
+    InternalTransfer,
     LPPosition,
     Message,
     Order,
@@ -137,6 +142,151 @@ class InvalidOrderInput(APIError):
         super().__init__(error_code, message, detail)
 
 
+_AI_AGENT_ERROR_MESSAGES = {
+    "SELF_LINK_NOT_ALLOWED": "a wallet cannot be its own AI agent",
+    "AGENT_NAME_REQUIRED": (
+        "agent_name is required unless the wallet is awaiting this main "
+        "account's confirmation"
+    ),
+    "SUBACCOUNT_NOT_FOUND": "the wallet is not an AI agent of this main account",
+    "MAIN_ACCOUNT_NOT_VERIFIED": "the main account is not verified",
+    "SUBACCOUNT_NOT_AWAITING_CONFIRMATION": (
+        "the AI agent is not awaiting confirmation"
+    ),
+    "SUBACCOUNT_NOT_EMPTY": "the agent account already holds assets",
+    "SUBACCOUNT_NOT_ELIGIBLE": (
+        "the wallet cannot become an AI agent: it must be unblocked and not "
+        "verified on its own"
+    ),
+    "ALREADY_SUBACCOUNT": "the wallet is already an AI agent",
+    "MAIN_ACCOUNT_NOT_FOUND": "the main account was not found",
+    "MAIN_IS_SUBACCOUNT": "an AI agent cannot have AI agents of its own",
+    "SUBACCOUNT_LIMIT_REACHED": "the main account has reached its AI agent limit",
+    "APPROVAL_SIGNATURE_REQUIRED": "the platform requires a signed approval",
+    "INVALID_APPROVAL": (
+        "the approval is unknown, already used, or issued for another main "
+        "account or agent"
+    ),
+    "APPROVAL_EXPIRED": "the approval expired; request a new one",
+    "INVALID_APPROVAL_SIGNATURE": (
+        "a signature does not match its approval message and wallet"
+    ),
+    "NOT_A_MAIN_ACCOUNT": "only a main account can do this for its AI agents",
+    "AGENT_NOT_FOUND": "the wallet is not an AI agent of this account",
+    "AGENT_ADDRESS_REQUIRED": "a main account must pass sub_wallet_address",
+    "ACCOUNT_NOT_ACTIVE": "the main account or the AI agent is not active",
+    "INVALID_AMOUNT": "amount must be greater than zero",
+    "REQUEST_ID_CONFLICT": "request_id was already used for a different transfer",
+    "AGENT_NOT_CLOSABLE": "only a confirmed AI agent that is not blocked can be closed",
+    "AGENT_NOT_CLOSED": "the AI agent is not closed",
+    "SYMBOL_NOT_LISTED": "an allowed symbol is not a listed stock",
+}
+
+
+class AIAgentError(APIError):
+    def __init__(
+        self,
+        error_code: str,
+        message: Optional[str] = None,
+        detail: Any = None,
+        payload: Optional[dict[str, Any]] = None,
+    ):
+        if message is None:
+            message = _AI_AGENT_ERROR_MESSAGES.get(error_code)
+        super().__init__(error_code, message, detail, payload)
+
+
+class AIAgentApprovalError(AIAgentError):
+    pass
+
+
+class AIAgentTransferError(AIAgentError):
+    pass
+
+
+def _usd_text(value: Optional[Decimal]) -> str:
+    return "unknown" if value is None else format(value.normalize(), "f")
+
+
+class AIAgentPolicyError(AIAgentError):
+    def __init__(
+        self,
+        error_code: str,
+        message: Optional[str] = None,
+        detail: Any = None,
+        payload: Optional[dict[str, Any]] = None,
+    ):
+        body = payload if payload is not None else {}
+        self.allowed_symbols: Optional[list[str]] = body.get("allowedSymbols")
+        self.limit_usd = PrimeDeltaClient._decimal_or_none(body.get("limitUsd"))
+        self.remaining_usd = PrimeDeltaClient._decimal_or_none(body.get("remainingUsd"))
+        self.order_value_usd = PrimeDeltaClient._decimal_or_none(
+            body.get("orderValueUsd")
+        )
+        if message is None:
+            message = self._reason(error_code)
+        super().__init__(error_code, message, detail, payload)
+
+    def _reason(self, error_code: str) -> str:
+        order_value = _usd_text(self.order_value_usd)
+        limit = _usd_text(self.limit_usd)
+        if error_code == "AGENT_PAUSED":
+            return "this AI agent is paused by its main account and cannot place orders"
+        if error_code == "AGENT_SYMBOL_NOT_ALLOWED":
+            allowed = ", ".join(self.allowed_symbols or []) or "none"
+            return f"this AI agent may only buy these symbols: {allowed}"
+        if error_code == "AGENT_ORDER_LIMIT_EXCEEDED":
+            return (
+                f"order value {order_value} USD exceeds this AI agent's per-order "
+                f"limit of {limit} USD"
+            )
+        return (
+            f"order value {order_value} USD exceeds the {_usd_text(self.remaining_usd)}"
+            f" USD left of this AI agent's daily limit of {limit} USD"
+        )
+
+
+_AI_AGENT_APPROVAL_CODES = frozenset(
+    {
+        "APPROVAL_SIGNATURE_REQUIRED",
+        "INVALID_APPROVAL",
+        "APPROVAL_EXPIRED",
+        "INVALID_APPROVAL_SIGNATURE",
+    }
+)
+_AI_AGENT_POLICY_CODES = frozenset(
+    {
+        "AGENT_PAUSED",
+        "AGENT_SYMBOL_NOT_ALLOWED",
+        "AGENT_ORDER_LIMIT_EXCEEDED",
+        "AGENT_DAILY_LIMIT_EXCEEDED",
+    }
+)
+
+
+@contextmanager
+def _ai_agent_errors(
+    error_type: type[AIAgentError] = AIAgentError,
+) -> Iterator[None]:
+    try:
+        yield
+    except APIError as exc:
+        if exc.error_code == "INSUFFICIENT_FUNDS":
+            raise NotEnoughFunds() from exc
+        if exc.error_code not in _AI_AGENT_ERROR_MESSAGES:
+            raise
+        if exc.error_code in _AI_AGENT_APPROVAL_CODES:
+            error_type = AIAgentApprovalError
+        raise error_type(exc.error_code, exc.message, exc.detail, exc.payload) from exc
+
+
+def _raise_agent_policy_refusal(exc: APIError) -> None:
+    if exc.error_code in _AI_AGENT_POLICY_CODES:
+        raise AIAgentPolicyError(
+            exc.error_code, exc.message, exc.detail, exc.payload
+        ) from exc
+
+
 class AccountNotVerified(Exception):
     pass
 
@@ -158,9 +308,9 @@ class WdelNotConfigured(Exception):
 
 class CannotCraft(Exception):
     """Raised when a backend REST action (limit/market order, withdrawal
-    request, order cancel) is invoked inside `craft`. Those actions do not
-    produce an on-chain transaction the SDK can capture, so crafting cannot
-    intercept them — calling one would execute it for real."""
+    request, order cancel, AI-agent fund/return) is invoked inside `craft`.
+    Those actions do not produce an on-chain transaction the SDK can capture, so
+    crafting cannot intercept them — calling one would execute it for real."""
 
     pass
 
@@ -603,19 +753,138 @@ class PrimeDelta:
         Call this from the SUBACCOUNT's session (a fresh wallet); the main
         account must then confirm it before the subaccount becomes active.
         """
-        self._primedelta_client.register_ai_account(agent_name, main_wallet_address)
+        with _ai_agent_errors():
+            self._primedelta_client.register_ai_account(agent_name, main_wallet_address)
 
     def get_pending_ai_agents(self) -> list[PendingAIAgent]:
         """List AI subaccounts awaiting this (main) account's confirmation."""
         return self._primedelta_client.get_pending_ai_agents()
 
+    def get_my_ai_agents(self) -> list[AIAgent]:
+        return self._primedelta_client.get_my_ai_agents()
+
+    def request_ai_agent_approval(
+        self, sub_wallet_address: str, agent_name: Optional[str] = None
+    ) -> AIAgentApproval:
+        with _ai_agent_errors():
+            return self._primedelta_client.request_ai_agent_approval(
+                sub_wallet_address, agent_name
+            )
+
     def confirm_ai_agent(self, sub_wallet_address: str) -> None:
-        """Confirm a pending AI subaccount registered under this main account."""
-        self._primedelta_client.confirm_ai_agent(sub_wallet_address)
+        """Confirm a pending AI subaccount registered under this main account,
+        signing the platform's approval message with this client's signer."""
+        with _ai_agent_errors():
+            approval = self._primedelta_client.request_ai_agent_approval(
+                sub_wallet_address
+            )
+            self._primedelta_client.confirm_ai_agent(
+                sub_wallet_address,
+                nonce=approval.nonce,
+                signature=self._signer.sign_message(approval.main_message),
+            )
+
+    def link_ai_agent(
+        self,
+        sub_wallet_address: str,
+        approval: AIAgentApproval,
+        agent_signature: str,
+    ) -> None:
+        with _ai_agent_errors():
+            self._primedelta_client.link_ai_agent(
+                sub_wallet_address,
+                nonce=approval.nonce,
+                main_signature=self._signer.sign_message(approval.main_message),
+                agent_signature=agent_signature,
+            )
 
     def reject_ai_agent(self, sub_wallet_address: str) -> None:
         """Reject a pending AI subaccount registered under this main account."""
-        self._primedelta_client.reject_ai_agent(sub_wallet_address)
+        with _ai_agent_errors():
+            self._primedelta_client.reject_ai_agent(sub_wallet_address)
+
+    def fund_ai_agent(
+        self,
+        sub_wallet_address: str,
+        amount: Decimal | int,
+        request_id: Optional[str] = None,
+    ) -> InternalTransfer:
+        self._reject_backend_action_while_crafting("fund_ai_agent")
+        with _ai_agent_errors(AIAgentTransferError):
+            return self._primedelta_client.fund_ai_agent(
+                sub_wallet_address,
+                amount,
+                request_id if request_id is not None else str(uuid.uuid4()),
+            )
+
+    def return_to_main(
+        self,
+        amount: Decimal | int,
+        sub_wallet_address: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> InternalTransfer:
+        self._reject_backend_action_while_crafting("return_to_main")
+        with _ai_agent_errors(AIAgentTransferError):
+            return self._primedelta_client.return_to_main(
+                amount,
+                request_id if request_id is not None else str(uuid.uuid4()),
+                sub_wallet_address,
+            )
+
+    def get_ai_agent_portfolio(self, sub_wallet_address: str) -> Portfolio:
+        with _ai_agent_errors():
+            return self._primedelta_client.get_ai_agent_portfolio(sub_wallet_address)
+
+    def get_ai_agent_open_orders(
+        self, sub_wallet_address: str, page_number: int = 1, page_size: int = 1000
+    ) -> list[Order]:
+        with _ai_agent_errors():
+            return self._primedelta_client.get_ai_agent_open_orders(
+                sub_wallet_address, page_number, page_size
+            )
+
+    def get_ai_agent_closed_orders(
+        self, sub_wallet_address: str, page_number: int = 1, page_size: int = 1000
+    ) -> list[Order]:
+        with _ai_agent_errors():
+            return self._primedelta_client.get_ai_agent_closed_orders(
+                sub_wallet_address, page_number, page_size
+            )
+
+    def close_ai_agent(self, sub_wallet_address: str) -> None:
+        self._reject_backend_action_while_crafting("close_ai_agent")
+        with _ai_agent_errors():
+            self._primedelta_client.close_ai_agent(sub_wallet_address)
+
+    def reopen_ai_agent(self, sub_wallet_address: str) -> None:
+        with _ai_agent_errors():
+            self._primedelta_client.reopen_ai_agent(sub_wallet_address)
+
+    def get_ai_agent_policy(
+        self, sub_wallet_address: Optional[str] = None
+    ) -> AIAgentPolicy:
+        with _ai_agent_errors():
+            return self._primedelta_client.get_ai_agent_policy(sub_wallet_address)
+
+    def set_ai_agent_policy(
+        self,
+        sub_wallet_address: str,
+        *,
+        paused: bool,
+        allowed_symbols: Optional[list[str]],
+        max_order_usd: Optional[Decimal | int],
+        max_daily_usd: Optional[Decimal | int],
+    ) -> AIAgentPolicy:
+        if isinstance(allowed_symbols, str):
+            raise TypeError("allowed_symbols must be a list of symbols or None")
+        with _ai_agent_errors():
+            return self._primedelta_client.set_ai_agent_policy(
+                sub_wallet_address,
+                paused,
+                None if allowed_symbols is None else list(allowed_symbols),
+                max_order_usd,
+                max_daily_usd,
+            )
 
     def verification_url(self) -> str:
         """Return the URL of the web page where the user completes KYC.
@@ -1093,6 +1362,7 @@ class PrimeDelta:
                 raise NotEnoughFunds()
             if exc.error_code in _INVALID_ORDER_INPUT_MESSAGES:
                 raise InvalidOrderInput(exc.error_code, exc.message, exc.detail)
+            _raise_agent_policy_refusal(exc)
             raise
 
     def send_sell_market_order(self, stock_symbol: str, amount: Decimal | int) -> int:
@@ -1107,6 +1377,7 @@ class PrimeDelta:
                 raise NotEnoughFunds()
             if exc.error_code in _INVALID_ORDER_INPUT_MESSAGES:
                 raise InvalidOrderInput(exc.error_code, exc.message, exc.detail)
+            _raise_agent_policy_refusal(exc)
             raise
 
     def cancel_order(self, order_id: int) -> None:
