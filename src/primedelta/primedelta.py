@@ -56,6 +56,7 @@ from primedelta.types import (
     AccountStatus,
     AIAgent,
     AIAgentApproval,
+    AIAgentPolicy,
     ApplicationSettings,
     BankDetails,
     ClaimableWithdrawal,
@@ -170,22 +171,29 @@ _AI_AGENT_ERROR_MESSAGES = {
     "INVALID_APPROVAL_SIGNATURE": (
         "a signature does not match its approval message and wallet"
     ),
-    "NOT_A_MAIN_ACCOUNT": "only a main account can fund an AI agent",
+    "NOT_A_MAIN_ACCOUNT": "only a main account can do this for its AI agents",
     "AGENT_NOT_FOUND": "the wallet is not an AI agent of this account",
     "AGENT_ADDRESS_REQUIRED": "a main account must pass sub_wallet_address",
     "ACCOUNT_NOT_ACTIVE": "the main account or the AI agent is not active",
     "INVALID_AMOUNT": "amount must be greater than zero",
     "REQUEST_ID_CONFLICT": "request_id was already used for a different transfer",
+    "AGENT_NOT_CLOSABLE": "only a confirmed AI agent that is not blocked can be closed",
+    "AGENT_NOT_CLOSED": "the AI agent is not closed",
+    "SYMBOL_NOT_LISTED": "an allowed symbol is not a listed stock",
 }
 
 
 class AIAgentError(APIError):
     def __init__(
-        self, error_code: str, message: Optional[str] = None, detail: Any = None
+        self,
+        error_code: str,
+        message: Optional[str] = None,
+        detail: Any = None,
+        payload: Optional[dict[str, Any]] = None,
     ):
         if message is None:
             message = _AI_AGENT_ERROR_MESSAGES.get(error_code)
-        super().__init__(error_code, message, detail)
+        super().__init__(error_code, message, detail, payload)
 
 
 class AIAgentApprovalError(AIAgentError):
@@ -196,6 +204,48 @@ class AIAgentTransferError(AIAgentError):
     pass
 
 
+def _usd_text(value: Optional[Decimal]) -> str:
+    return "unknown" if value is None else format(value.normalize(), "f")
+
+
+class AIAgentPolicyError(AIAgentError):
+    def __init__(
+        self,
+        error_code: str,
+        message: Optional[str] = None,
+        detail: Any = None,
+        payload: Optional[dict[str, Any]] = None,
+    ):
+        body = payload if payload is not None else {}
+        self.allowed_symbols: Optional[list[str]] = body.get("allowedSymbols")
+        self.limit_usd = PrimeDeltaClient._decimal_or_none(body.get("limitUsd"))
+        self.remaining_usd = PrimeDeltaClient._decimal_or_none(body.get("remainingUsd"))
+        self.order_value_usd = PrimeDeltaClient._decimal_or_none(
+            body.get("orderValueUsd")
+        )
+        if message is None:
+            message = self._reason(error_code)
+        super().__init__(error_code, message, detail, payload)
+
+    def _reason(self, error_code: str) -> str:
+        order_value = _usd_text(self.order_value_usd)
+        limit = _usd_text(self.limit_usd)
+        if error_code == "AGENT_PAUSED":
+            return "this AI agent is paused by its main account and cannot place orders"
+        if error_code == "AGENT_SYMBOL_NOT_ALLOWED":
+            allowed = ", ".join(self.allowed_symbols or []) or "none"
+            return f"this AI agent may only buy these symbols: {allowed}"
+        if error_code == "AGENT_ORDER_LIMIT_EXCEEDED":
+            return (
+                f"order value {order_value} USD exceeds this AI agent's per-order "
+                f"limit of {limit} USD"
+            )
+        return (
+            f"order value {order_value} USD exceeds the {_usd_text(self.remaining_usd)}"
+            f" USD left of this AI agent's daily limit of {limit} USD"
+        )
+
+
 _AI_AGENT_APPROVAL_CODES = frozenset(
     {
         "APPROVAL_SIGNATURE_REQUIRED",
@@ -204,20 +254,20 @@ _AI_AGENT_APPROVAL_CODES = frozenset(
         "INVALID_APPROVAL_SIGNATURE",
     }
 )
-_AI_AGENT_TRANSFER_CODES = frozenset(
+_AI_AGENT_POLICY_CODES = frozenset(
     {
-        "NOT_A_MAIN_ACCOUNT",
-        "AGENT_NOT_FOUND",
-        "AGENT_ADDRESS_REQUIRED",
-        "ACCOUNT_NOT_ACTIVE",
-        "INVALID_AMOUNT",
-        "REQUEST_ID_CONFLICT",
+        "AGENT_PAUSED",
+        "AGENT_SYMBOL_NOT_ALLOWED",
+        "AGENT_ORDER_LIMIT_EXCEEDED",
+        "AGENT_DAILY_LIMIT_EXCEEDED",
     }
 )
 
 
 @contextmanager
-def _ai_agent_errors() -> Iterator[None]:
+def _ai_agent_errors(
+    error_type: type[AIAgentError] = AIAgentError,
+) -> Iterator[None]:
     try:
         yield
     except APIError as exc:
@@ -225,12 +275,16 @@ def _ai_agent_errors() -> Iterator[None]:
             raise NotEnoughFunds() from exc
         if exc.error_code not in _AI_AGENT_ERROR_MESSAGES:
             raise
-        error_type: type[AIAgentError] = AIAgentError
         if exc.error_code in _AI_AGENT_APPROVAL_CODES:
             error_type = AIAgentApprovalError
-        elif exc.error_code in _AI_AGENT_TRANSFER_CODES:
-            error_type = AIAgentTransferError
-        raise error_type(exc.error_code, exc.message, exc.detail) from exc
+        raise error_type(exc.error_code, exc.message, exc.detail, exc.payload) from exc
+
+
+def _raise_agent_policy_refusal(exc: APIError) -> None:
+    if exc.error_code in _AI_AGENT_POLICY_CODES:
+        raise AIAgentPolicyError(
+            exc.error_code, exc.message, exc.detail, exc.payload
+        ) from exc
 
 
 class AccountNotVerified(Exception):
@@ -756,7 +810,7 @@ class PrimeDelta:
         request_id: Optional[str] = None,
     ) -> InternalTransfer:
         self._reject_backend_action_while_crafting("fund_ai_agent")
-        with _ai_agent_errors():
+        with _ai_agent_errors(AIAgentTransferError):
             return self._primedelta_client.fund_ai_agent(
                 sub_wallet_address,
                 amount,
@@ -770,11 +824,66 @@ class PrimeDelta:
         request_id: Optional[str] = None,
     ) -> InternalTransfer:
         self._reject_backend_action_while_crafting("return_to_main")
-        with _ai_agent_errors():
+        with _ai_agent_errors(AIAgentTransferError):
             return self._primedelta_client.return_to_main(
                 amount,
                 request_id if request_id is not None else str(uuid.uuid4()),
                 sub_wallet_address,
+            )
+
+    def get_ai_agent_portfolio(self, sub_wallet_address: str) -> Portfolio:
+        with _ai_agent_errors():
+            return self._primedelta_client.get_ai_agent_portfolio(sub_wallet_address)
+
+    def get_ai_agent_open_orders(
+        self, sub_wallet_address: str, page_number: int = 1, page_size: int = 1000
+    ) -> list[Order]:
+        with _ai_agent_errors():
+            return self._primedelta_client.get_ai_agent_open_orders(
+                sub_wallet_address, page_number, page_size
+            )
+
+    def get_ai_agent_closed_orders(
+        self, sub_wallet_address: str, page_number: int = 1, page_size: int = 1000
+    ) -> list[Order]:
+        with _ai_agent_errors():
+            return self._primedelta_client.get_ai_agent_closed_orders(
+                sub_wallet_address, page_number, page_size
+            )
+
+    def close_ai_agent(self, sub_wallet_address: str) -> None:
+        self._reject_backend_action_while_crafting("close_ai_agent")
+        with _ai_agent_errors():
+            self._primedelta_client.close_ai_agent(sub_wallet_address)
+
+    def reopen_ai_agent(self, sub_wallet_address: str) -> None:
+        with _ai_agent_errors():
+            self._primedelta_client.reopen_ai_agent(sub_wallet_address)
+
+    def get_ai_agent_policy(
+        self, sub_wallet_address: Optional[str] = None
+    ) -> AIAgentPolicy:
+        with _ai_agent_errors():
+            return self._primedelta_client.get_ai_agent_policy(sub_wallet_address)
+
+    def set_ai_agent_policy(
+        self,
+        sub_wallet_address: str,
+        *,
+        paused: bool,
+        allowed_symbols: Optional[list[str]],
+        max_order_usd: Optional[Decimal | int],
+        max_daily_usd: Optional[Decimal | int],
+    ) -> AIAgentPolicy:
+        if isinstance(allowed_symbols, str):
+            raise TypeError("allowed_symbols must be a list of symbols or None")
+        with _ai_agent_errors():
+            return self._primedelta_client.set_ai_agent_policy(
+                sub_wallet_address,
+                paused,
+                None if allowed_symbols is None else list(allowed_symbols),
+                max_order_usd,
+                max_daily_usd,
             )
 
     def verification_url(self) -> str:
@@ -1253,6 +1362,7 @@ class PrimeDelta:
                 raise NotEnoughFunds()
             if exc.error_code in _INVALID_ORDER_INPUT_MESSAGES:
                 raise InvalidOrderInput(exc.error_code, exc.message, exc.detail)
+            _raise_agent_policy_refusal(exc)
             raise
 
     def send_sell_market_order(self, stock_symbol: str, amount: Decimal | int) -> int:
@@ -1267,6 +1377,7 @@ class PrimeDelta:
                 raise NotEnoughFunds()
             if exc.error_code in _INVALID_ORDER_INPUT_MESSAGES:
                 raise InvalidOrderInput(exc.error_code, exc.message, exc.detail)
+            _raise_agent_policy_refusal(exc)
             raise
 
     def cancel_order(self, order_id: int) -> None:

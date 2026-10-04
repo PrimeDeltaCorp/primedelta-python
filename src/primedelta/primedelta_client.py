@@ -15,6 +15,7 @@ from primedelta.types import (
     AccountStatus,
     AIAgent,
     AIAgentApproval,
+    AIAgentPolicy,
     ApplicationSettings,
     BankDetails,
     ClaimableWithdrawal,
@@ -48,6 +49,7 @@ _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # the caller indefinitely. Long-lived SSE streams (stream=True) are exempt.
 _HTTP_TIMEOUT = 30.0
 _STABLECOIN_DEPOSIT_DECIMALS = 2
+_BUSINESS_403_CODES = frozenset({"AGENT_PAUSED"})
 _EnumT = TypeVar("_EnumT", bound=Enum)
 
 
@@ -75,18 +77,26 @@ def _decimal_arg(value: Decimal | int, name: str) -> str:
     return format(number, "f")
 
 
-def _stablecoin_deposit_amount(amount: Decimal | int) -> str:
-    number = Decimal(_decimal_arg(amount, "amount"))
+def _cents_arg(value: Decimal | int, name: str) -> str:
+    number = Decimal(_decimal_arg(value, name))
     cents = number.quantize(Decimal(1).scaleb(-_STABLECOIN_DEPOSIT_DECIMALS))
     if cents != number:
         raise ValueError(
-            f"amount must have at most {_STABLECOIN_DEPOSIT_DECIMALS} decimal "
+            f"{name} must have at most {_STABLECOIN_DEPOSIT_DECIMALS} decimal "
             f"places (cents), got {format(number, 'f')}"
         )
     wire = format(number, "f")
     if len(wire.partition(".")[2]) > _STABLECOIN_DEPOSIT_DECIMALS:
         return format(cents, "f")
     return wire
+
+
+def _stablecoin_deposit_amount(amount: Decimal | int) -> str:
+    return _cents_arg(amount, "amount")
+
+
+def _optional_cents_arg(value: Optional[Decimal | int], name: str) -> Optional[str]:
+    return None if value is None else _cents_arg(value, name)
 
 
 class _TimeoutSession(requests.Session):
@@ -136,11 +146,16 @@ class AuthorizationError(Exception):
 
 class APIError(Exception):
     def __init__(
-        self, error_code: str, message: Optional[str] = None, detail: Any = None
+        self,
+        error_code: str,
+        message: Optional[str] = None,
+        detail: Any = None,
+        payload: Optional[dict[str, Any]] = None,
     ):
         self.error_code = error_code
         self.message = message
         self.detail = detail
+        self.payload = payload if payload is not None else {}
         reason = message if message is not None else detail
         super().__init__(error_code if reason is None else f"{error_code}: {reason}")
 
@@ -254,15 +269,25 @@ class PrimeDeltaClient:
     def _decimal_or_none(value: Optional[str]) -> Optional[Decimal]:
         return Decimal(value) if value is not None else None
 
+    @classmethod
+    def _is_business_refusal(cls, response: requests.Response) -> bool:
+        return (
+            response.status_code == 403
+            and cls._error_code(response) in _BUSINESS_403_CODES
+        )
+
     def _handle(self, response: requests.Response) -> Any:
         if response.status_code >= 500:
             raise BackendUnavailable(f"backend returned HTTP {response.status_code}")
-        if response.status_code in (400, 404):
+        if response.status_code in (400, 404) or self._is_business_refusal(response):
             body = self._error_body(response)
             code = self._code(body)
             if code or response.status_code == 400:
                 raise APIError(
-                    code or "BAD_REQUEST", body.get("message"), body.get("detail")
+                    code or "BAD_REQUEST",
+                    body.get("message"),
+                    body.get("detail"),
+                    payload=body,
                 )
         if response.status_code == 401:
             raise NotLoggedIn()
@@ -305,7 +330,11 @@ class PrimeDeltaClient:
     def _unsafe(self, method: str, endpoint: str, **kwargs: Any) -> Any:
         def send() -> requests.Response:
             response = self._request(method, endpoint, **kwargs)
-            if response.status_code == 403 and self._csrf_token is not None:
+            if (
+                response.status_code == 403
+                and self._csrf_token is not None
+                and not self._is_business_refusal(response)
+            ):
                 self._csrf_token = None
                 response = self._request(method, endpoint, **kwargs)
             return response
@@ -314,6 +343,9 @@ class PrimeDeltaClient:
 
     def _post(self, endpoint: str, json_body: dict[str, Any]) -> Any:
         return self._unsafe("POST", endpoint, json_body=json_body)
+
+    def _put(self, endpoint: str, json_body: dict[str, Any]) -> Any:
+        return self._unsafe("PUT", endpoint, json_body=json_body)
 
     def _delete(self, endpoint: str) -> Any:
         return self._unsafe("DELETE", endpoint)
@@ -396,14 +428,91 @@ class PrimeDeltaClient:
     def get_my_ai_agents(self) -> list[AIAgent]:
         return [self._parse_ai_agent(item) for item in self._get("/my-ai-agents/")]
 
-    @staticmethod
-    def _parse_ai_agent(item: dict[str, Any]) -> AIAgent:
+    @classmethod
+    def _parse_ai_agent(cls, item: dict[str, Any]) -> AIAgent:
         status, raw_status = _enum_or_unknown(AccountStatus, item["status"])
         return AIAgent(
             sub_wallet_address=item["subWalletAddress"],
             agent_name=item["agentName"],
             status=status,
             raw_status=raw_status,
+            paused=item.get("paused"),
+            allowed_symbols=item.get("allowedSymbols"),
+            max_order_usd=cls._decimal_or_none(item.get("maxOrderUsd")),
+            max_daily_usd=cls._decimal_or_none(item.get("maxDailyUsd")),
+        )
+
+    def get_ai_agent_portfolio(self, sub_wallet_address: str) -> Portfolio:
+        return self._parse_portfolio(
+            self._get("/ai-agent-portfolio/", {"subWalletAddress": sub_wallet_address})
+        )
+
+    def get_ai_agent_open_orders(
+        self, sub_wallet_address: str, page: int, size: int
+    ) -> list[Order]:
+        response = self._get(
+            "/ai-agent-open-orders/",
+            {"subWalletAddress": sub_wallet_address, "page": page, "size": size},
+        )
+        return [self._parse_open_order(item) for item in response["items"]]
+
+    def get_ai_agent_closed_orders(
+        self, sub_wallet_address: str, page: int, size: int
+    ) -> list[Order]:
+        response = self._get(
+            "/ai-agent-closed-orders/",
+            {"subWalletAddress": sub_wallet_address, "page": page, "size": size},
+        )
+        return [self._parse_closed_order(item) for item in response["items"]]
+
+    def close_ai_agent(self, sub_wallet_address: str) -> None:
+        self._post("/close-ai-agent/", {"subWalletAddress": sub_wallet_address})
+
+    def reopen_ai_agent(self, sub_wallet_address: str) -> None:
+        self._post("/reopen-ai-agent/", {"subWalletAddress": sub_wallet_address})
+
+    def get_ai_agent_policy(
+        self, sub_wallet_address: Optional[str] = None
+    ) -> AIAgentPolicy:
+        params = (
+            None
+            if sub_wallet_address is None
+            else {"subWalletAddress": sub_wallet_address}
+        )
+        return self._parse_ai_agent_policy(self._get("/ai-agent-policy/", params))
+
+    def set_ai_agent_policy(
+        self,
+        sub_wallet_address: str,
+        paused: bool,
+        allowed_symbols: Optional[list[str]],
+        max_order_usd: Optional[Decimal | int],
+        max_daily_usd: Optional[Decimal | int],
+    ) -> AIAgentPolicy:
+        response = self._put(
+            "/ai-agent-policy/",
+            {
+                "subWalletAddress": sub_wallet_address,
+                "paused": paused,
+                "allowedSymbols": allowed_symbols,
+                "maxOrderUsd": _optional_cents_arg(max_order_usd, "max_order_usd"),
+                "maxDailyUsd": _optional_cents_arg(max_daily_usd, "max_daily_usd"),
+            },
+        )
+        return self._parse_ai_agent_policy(response)
+
+    @classmethod
+    def _parse_ai_agent_policy(cls, item: dict[str, Any]) -> AIAgentPolicy:
+        return AIAgentPolicy(
+            sub_wallet_address=item["subWalletAddress"],
+            paused=item["paused"],
+            allowed_symbols=item["allowedSymbols"],
+            max_order_usd=cls._decimal_or_none(item["maxOrderUsd"]),
+            max_daily_usd=cls._decimal_or_none(item["maxDailyUsd"]),
+            day=date.fromisoformat(item["day"]),
+            used_today_usd=Decimal(item["usedTodayUsd"]),
+            remaining_today_usd=cls._decimal_or_none(item["remainingTodayUsd"]),
+            resets_at=_parse_datetime(item["resetsAt"]),
         )
 
     def request_ai_agent_approval(
@@ -548,24 +657,25 @@ class PrimeDeltaClient:
 
     def open_orders(self, page: int, size: int) -> list[Order]:
         response = self._get("/open-orders/", {"page": page, "size": size})
-        return [
-            Order(
-                id=item["id"],
-                order_side=OrderSide(item["actionType"]),
-                type=item["type"],
-                symbol=item["stockSymbol"],
-                quantity=Decimal(item["quantity"]),
-                filled_quantity=Decimal(item["filledQuantity"]),
-                price=Decimal(item["price"]),
-                status=OrderStatus.PENDING,
-                date_of_cancellation=(
-                    date.fromisoformat(item["dateOfCancellation"])
-                    if item["dateOfCancellation"]
-                    else None
-                ),
-            )
-            for item in response["items"]
-        ]
+        return [self._parse_open_order(item) for item in response["items"]]
+
+    @staticmethod
+    def _parse_open_order(item: dict[str, Any]) -> Order:
+        return Order(
+            id=item["id"],
+            order_side=OrderSide(item["actionType"]),
+            type=item["type"],
+            symbol=item["stockSymbol"],
+            quantity=Decimal(item["quantity"]),
+            filled_quantity=Decimal(item["filledQuantity"]),
+            price=Decimal(item["price"]),
+            status=OrderStatus.PENDING,
+            date_of_cancellation=(
+                date.fromisoformat(item["dateOfCancellation"])
+                if item["dateOfCancellation"]
+                else None
+            ),
+        )
 
     def closed_orders(self, page: int, size: int) -> list[Order]:
         response = self._get("/closed-orders/", {"page": page, "size": size})
@@ -640,7 +750,9 @@ class PrimeDeltaClient:
         )
 
     def portfolio(self) -> Portfolio:
-        response = self._get("/portfolio/")
+        return self._parse_portfolio(self._get("/portfolio/"))
+
+    def _parse_portfolio(self, response: dict[str, Any]) -> Portfolio:
         balance = response["balance"]
         positions = response["stocks"]
         return Portfolio(

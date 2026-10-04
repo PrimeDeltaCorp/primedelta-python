@@ -18,6 +18,7 @@ from .primedelta import (
     AccountNotVerified,
     AIAgentApprovalError,
     AIAgentError,
+    AIAgentPolicyError,
     AIAgentTransferError,
     CannotCraft,
     DigitalIdentityAlreadyClaimed,

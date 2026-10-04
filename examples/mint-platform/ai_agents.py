@@ -29,5 +29,16 @@ funded = main.fund_ai_agent(agent_signer.address, Decimal("100"), request_id="fu
 returned = main.return_to_main(
     Decimal("40"), sub_wallet_address=agent_signer.address, request_id="return-1"
 )
+agent_portfolio = main.get_ai_agent_portfolio(agent_signer.address)
+agent_orders = main.get_ai_agent_open_orders(agent_signer.address)
+policy = main.set_ai_agent_policy(
+    agent_signer.address,
+    paused=False,
+    allowed_symbols=["AAPL"],
+    max_order_usd=Decimal("50"),
+    max_daily_usd=Decimal("200"),
+)
+main.close_ai_agent(agent_signer.address)
+main.reopen_ai_agent(agent_signer.address)
 
 main.logout()

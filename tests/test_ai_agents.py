@@ -9,8 +9,10 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 
 from primedelta import (
+    AccountNotVerified,
     AIAgentApprovalError,
     AIAgentError,
+    AIAgentPolicyError,
     AIAgentTransferError,
     CannotCraft,
     LocalAccountSigner,
@@ -19,6 +21,7 @@ from primedelta import (
     PrimeDelta,
 )
 from primedelta.primedelta_client import APIError
+from primedelta.types import AccountStatus, OrderSide
 
 MAIN_KEY = "0x" + "1" * 64
 AGENT_KEY = "0x" + "2" * 64
@@ -202,44 +205,89 @@ class TestLink:
         pd._signer.sign_message.assert_called_once_with(MAIN_MESSAGE)
 
 
+_MANAGEMENT_CODES = [
+    "SELF_LINK_NOT_ALLOWED",
+    "AGENT_NAME_REQUIRED",
+    "SUBACCOUNT_NOT_FOUND",
+    "MAIN_ACCOUNT_NOT_VERIFIED",
+    "SUBACCOUNT_NOT_AWAITING_CONFIRMATION",
+    "SUBACCOUNT_NOT_EMPTY",
+    "SUBACCOUNT_NOT_ELIGIBLE",
+    "ALREADY_SUBACCOUNT",
+    "MAIN_ACCOUNT_NOT_FOUND",
+    "MAIN_IS_SUBACCOUNT",
+    "SUBACCOUNT_LIMIT_REACHED",
+    "AGENT_NOT_FOUND",
+    "AGENT_NOT_CLOSABLE",
+    "AGENT_NOT_CLOSED",
+    "NOT_A_MAIN_ACCOUNT",
+    "AGENT_ADDRESS_REQUIRED",
+    "SYMBOL_NOT_LISTED",
+]
+_APPROVAL_CODES = [
+    "APPROVAL_SIGNATURE_REQUIRED",
+    "INVALID_APPROVAL",
+    "APPROVAL_EXPIRED",
+    "INVALID_APPROVAL_SIGNATURE",
+]
+_TRANSFER_CODES = [
+    "NOT_A_MAIN_ACCOUNT",
+    "AGENT_NOT_FOUND",
+    "AGENT_ADDRESS_REQUIRED",
+    "ACCOUNT_NOT_ACTIVE",
+    "INVALID_AMOUNT",
+    "REQUEST_ID_CONFLICT",
+]
+
+
 class TestErrorMapping:
-    @pytest.mark.parametrize(
-        "code, error_type",
-        [
-            ("SELF_LINK_NOT_ALLOWED", AIAgentError),
-            ("AGENT_NAME_REQUIRED", AIAgentError),
-            ("SUBACCOUNT_NOT_FOUND", AIAgentError),
-            ("MAIN_ACCOUNT_NOT_VERIFIED", AIAgentError),
-            ("SUBACCOUNT_NOT_AWAITING_CONFIRMATION", AIAgentError),
-            ("SUBACCOUNT_NOT_EMPTY", AIAgentError),
-            ("SUBACCOUNT_NOT_ELIGIBLE", AIAgentError),
-            ("ALREADY_SUBACCOUNT", AIAgentError),
-            ("MAIN_ACCOUNT_NOT_FOUND", AIAgentError),
-            ("MAIN_IS_SUBACCOUNT", AIAgentError),
-            ("SUBACCOUNT_LIMIT_REACHED", AIAgentError),
-            ("APPROVAL_SIGNATURE_REQUIRED", AIAgentApprovalError),
-            ("INVALID_APPROVAL", AIAgentApprovalError),
-            ("APPROVAL_EXPIRED", AIAgentApprovalError),
-            ("INVALID_APPROVAL_SIGNATURE", AIAgentApprovalError),
-            ("NOT_A_MAIN_ACCOUNT", AIAgentTransferError),
-            ("AGENT_NOT_FOUND", AIAgentTransferError),
-            ("AGENT_ADDRESS_REQUIRED", AIAgentTransferError),
-            ("ACCOUNT_NOT_ACTIVE", AIAgentTransferError),
-            ("INVALID_AMOUNT", AIAgentTransferError),
-            ("REQUEST_ID_CONFLICT", AIAgentTransferError),
-        ],
-    )
-    def test_each_code_maps_to_its_type_with_a_reason(self, code, error_type):
+    @staticmethod
+    def _raised(method, code, call):
         pd = _pd_with_mock_client()
-        pd._primedelta_client.fund_ai_agent.side_effect = APIError(code, None, "d")
-
-        with pytest.raises(error_type) as excinfo:
-            pd.fund_ai_agent(AGENT, Decimal("1"))
-
-        assert type(excinfo.value) is error_type
+        getattr(pd._primedelta_client, method).side_effect = APIError(code, None, "d")
+        with pytest.raises(AIAgentError) as excinfo:
+            call(pd)
         assert excinfo.value.error_code == code
         assert excinfo.value.message
         assert excinfo.value.detail == "d"
+        return type(excinfo.value)
+
+    @pytest.mark.parametrize("code", _MANAGEMENT_CODES)
+    def test_a_management_code_is_an_agent_error(self, code):
+        raised = self._raised(
+            "request_ai_agent_approval",
+            code,
+            lambda pd: pd.request_ai_agent_approval(AGENT),
+        )
+        assert raised is AIAgentError
+
+    @pytest.mark.parametrize("code", _APPROVAL_CODES)
+    @pytest.mark.parametrize("method", ["request_ai_agent_approval", "fund_ai_agent"])
+    def test_an_approval_code_is_an_approval_error_everywhere(self, method, code):
+        raised = self._raised(
+            method,
+            code,
+            lambda pd: (
+                pd.fund_ai_agent(AGENT, Decimal("1"))
+                if method == "fund_ai_agent"
+                else pd.request_ai_agent_approval(AGENT)
+            ),
+        )
+        assert raised is AIAgentApprovalError
+
+    @pytest.mark.parametrize("code", _TRANSFER_CODES)
+    @pytest.mark.parametrize("method", ["fund_ai_agent", "return_to_main"])
+    def test_a_transfer_refusal_is_a_transfer_error(self, method, code):
+        raised = self._raised(
+            method,
+            code,
+            lambda pd: (
+                pd.fund_ai_agent(AGENT, Decimal("1"))
+                if method == "fund_ai_agent"
+                else pd.return_to_main(Decimal("1"))
+            ),
+        )
+        assert raised is AIAgentTransferError
 
     @pytest.mark.parametrize("method", ["fund_ai_agent", "return_to_main"])
     def test_insufficient_funds_is_not_enough_funds(self, method):
@@ -342,3 +390,207 @@ class TestTransfers:
         pd._primedelta_client.get_my_ai_agents.return_value = ["agent"]
 
         assert pd.get_my_ai_agents() == ["agent"]
+
+
+_ORDERS = {
+    "limit_buy": lambda pd: pd.send_limit_order(
+        OrderSide.BUY, "AAPL", 1, Decimal("150")
+    ),
+    "market_sell": lambda pd: pd.send_sell_market_order("AAPL", 1),
+}
+_CLIENT_ORDER_METHOD = {
+    "limit_buy": "send_limit_order",
+    "market_sell": "send_sell_market_order",
+}
+
+
+class TestAgentPolicyRefusals:
+    @pytest.mark.parametrize(
+        "payload, fields, reason",
+        [
+            (
+                {"errorCode": "AGENT_PAUSED"},
+                (None, None, None, None),
+                "this AI agent is paused by its main account and cannot place orders",
+            ),
+            (
+                {"errorCode": "AGENT_SYMBOL_NOT_ALLOWED", "allowedSymbols": ["MSFT"]},
+                (["MSFT"], None, None, None),
+                "this AI agent may only buy these symbols: MSFT",
+            ),
+            (
+                {
+                    "errorCode": "AGENT_ORDER_LIMIT_EXCEEDED",
+                    "limitUsd": "100.000000",
+                    "orderValueUsd": "150.000000",
+                },
+                (None, Decimal("100"), None, Decimal("150")),
+                "order value 150 USD exceeds this AI agent's per-order limit of "
+                "100 USD",
+            ),
+            (
+                {
+                    "errorCode": "AGENT_DAILY_LIMIT_EXCEEDED",
+                    "limitUsd": "1000.500000",
+                    "remainingUsd": "20.250000",
+                    "orderValueUsd": "30.000000",
+                },
+                (None, Decimal("1000.5"), Decimal("20.25"), Decimal("30")),
+                "order value 30 USD exceeds the 20.25 USD left of this AI agent's "
+                "daily limit of 1000.5 USD",
+            ),
+        ],
+        ids=["paused", "symbol", "order_limit", "daily_limit"],
+    )
+    @pytest.mark.parametrize("order", sorted(_ORDERS))
+    def test_a_refused_order_carries_the_rule_that_refused_it(
+        self, order, payload, fields, reason
+    ):
+        pd = _pd_with_mock_client()
+        getattr(pd._primedelta_client, _CLIENT_ORDER_METHOD[order]).side_effect = (
+            APIError(payload["errorCode"], None, None, payload)
+        )
+
+        with pytest.raises(AIAgentPolicyError) as excinfo:
+            _ORDERS[order](pd)
+
+        error = excinfo.value
+        assert isinstance(error, AIAgentError)
+        assert error.error_code == payload["errorCode"]
+        assert (
+            error.allowed_symbols,
+            error.limit_usd,
+            error.remaining_usd,
+            error.order_value_usd,
+        ) == fields
+        assert error.message == reason
+        assert str(error) == f"{payload['errorCode']}: {reason}"
+
+    def test_an_empty_allow_list_reads_as_none(self):
+        pd = _pd_with_mock_client()
+        pd._primedelta_client.send_limit_order.side_effect = APIError(
+            "AGENT_SYMBOL_NOT_ALLOWED",
+            payload={"errorCode": "AGENT_SYMBOL_NOT_ALLOWED", "allowedSymbols": []},
+        )
+
+        with pytest.raises(AIAgentPolicyError, match="symbols: none"):
+            _ORDERS["limit_buy"](pd)
+
+    def test_a_backend_message_wins(self):
+        pd = _pd_with_mock_client()
+        pd._primedelta_client.send_limit_order.side_effect = APIError(
+            "AGENT_PAUSED", "from the server"
+        )
+
+        with pytest.raises(AIAgentPolicyError) as excinfo:
+            _ORDERS["limit_buy"](pd)
+
+        assert excinfo.value.message == "from the server"
+
+    def test_a_paused_agent_is_refused_end_to_end_with_one_request(self):
+        pd, session = _pd_over_http([_Resp(403, {"errorCode": "AGENT_PAUSED"})])
+
+        with pytest.raises(AIAgentPolicyError, match="AGENT_PAUSED"):
+            _ORDERS["market_sell"](pd)
+
+        assert session.request.call_count == 1
+
+    def test_other_order_errors_keep_their_types(self):
+        pd = _pd_with_mock_client()
+        pd._primedelta_client.send_limit_order.side_effect = APIError("STOCK_CLOSED")
+
+        with pytest.raises(APIError) as excinfo:
+            _ORDERS["limit_buy"](pd)
+
+        assert type(excinfo.value) is APIError
+
+
+class TestOversight:
+    @pytest.mark.parametrize(
+        "method, args, client_args",
+        [
+            ("get_ai_agent_portfolio", (AGENT,), (AGENT,)),
+            ("get_ai_agent_open_orders", (AGENT,), (AGENT, 1, 1000)),
+            ("get_ai_agent_closed_orders", (AGENT, 2, 50), (AGENT, 2, 50)),
+            ("close_ai_agent", (AGENT,), (AGENT,)),
+            ("reopen_ai_agent", (AGENT,), (AGENT,)),
+            ("get_ai_agent_policy", (), (None,)),
+            ("get_ai_agent_policy", (AGENT,), (AGENT,)),
+        ],
+    )
+    def test_delegates_and_maps_a_refusal(self, method, args, client_args):
+        pd = _pd_with_mock_client()
+        client_method = getattr(pd._primedelta_client, method)
+
+        getattr(pd, method)(*args)
+        client_method.assert_called_once_with(*client_args)
+
+        client_method.side_effect = APIError("SUBACCOUNT_NOT_FOUND")
+        with pytest.raises(AIAgentError) as excinfo:
+            getattr(pd, method)(*args)
+        assert type(excinfo.value) is AIAgentError
+
+    def test_set_policy_passes_every_rule(self):
+        pd = _pd_with_mock_client()
+
+        pd.set_ai_agent_policy(
+            AGENT,
+            paused=True,
+            allowed_symbols=("AAPL",),
+            max_order_usd=Decimal("500"),
+            max_daily_usd=None,
+        )
+
+        pd._primedelta_client.set_ai_agent_policy.assert_called_once_with(
+            AGENT, True, ["AAPL"], Decimal("500"), None
+        )
+
+    def test_set_policy_refuses_a_bare_symbol_string(self):
+        pd = _pd_with_mock_client()
+
+        with pytest.raises(TypeError, match="allowed_symbols"):
+            pd.set_ai_agent_policy(
+                AGENT,
+                paused=False,
+                allowed_symbols="AAPL",
+                max_order_usd=None,
+                max_daily_usd=None,
+            )
+
+        pd._primedelta_client.set_ai_agent_policy.assert_not_called()
+
+    def test_set_policy_rules_are_keyword_only(self):
+        pd = _pd_with_mock_client()
+
+        with pytest.raises(TypeError):
+            pd.set_ai_agent_policy(AGENT, False, None, None, None)
+
+    def test_set_policy_maps_an_unlisted_symbol(self):
+        pd = _pd_with_mock_client()
+        pd._primedelta_client.set_ai_agent_policy.side_effect = APIError(
+            "SYMBOL_NOT_LISTED"
+        )
+
+        with pytest.raises(AIAgentError, match="SYMBOL_NOT_LISTED"):
+            pd.set_ai_agent_policy(
+                AGENT,
+                paused=False,
+                allowed_symbols=["NOPE"],
+                max_order_usd=None,
+                max_daily_usd=None,
+            )
+
+    def test_close_cannot_be_crafted(self):
+        pd = _pd_with_mock_client()
+
+        with pytest.raises(CannotCraft):
+            pd.craft(lambda: pd.close_ai_agent(AGENT))
+
+        pd._primedelta_client.close_ai_agent.assert_not_called()
+
+    def test_a_closed_agent_is_not_verified(self):
+        pd = _pd_with_mock_client()
+        pd._primedelta_client.get_account_status.return_value = AccountStatus.CLOSED
+
+        with pytest.raises(AccountNotVerified):
+            pd.claim_digital_identity()

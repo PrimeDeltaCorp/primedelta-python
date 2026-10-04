@@ -17,6 +17,7 @@ class AccountStatus(Enum):
     INVALID = "INVALID"
     AWAITING_MAIN_CONFIRMATION = "AWAITING_MAIN_CONFIRMATION"
     SUBACCOUNT_REJECTED = "SUBACCOUNT_REJECTED"
+    CLOSED = "CLOSED"
     UNKNOWN = "UNKNOWN"
 
 
@@ -32,6 +33,23 @@ class AIAgent:
     agent_name: str
     status: AccountStatus
     raw_status: Optional[str] = None
+    paused: Optional[bool] = None
+    allowed_symbols: Optional[list[str]] = None
+    max_order_usd: Optional[Decimal] = None
+    max_daily_usd: Optional[Decimal] = None
+
+
+@dataclass(frozen=True)
+class AIAgentPolicy:
+    sub_wallet_address: str
+    paused: bool
+    allowed_symbols: Optional[list[str]]
+    max_order_usd: Optional[Decimal]
+    max_daily_usd: Optional[Decimal]
+    day: date
+    used_today_usd: Decimal
+    remaining_today_usd: Optional[Decimal]
+    resets_at: datetime
 
 
 @dataclass(frozen=True)
