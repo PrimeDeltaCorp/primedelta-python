@@ -6,6 +6,8 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-08
+
 ### Added
 - **Every on-chain write is simulated before it is signed.** The SDK runs an
   `eth_call` of the exact transaction, pinned to the block that holds this
