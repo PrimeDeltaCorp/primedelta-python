@@ -34,12 +34,12 @@ semantic versioning once published.
   server. A time-out now says whether the wallet ever received the request
   ("nothing was sent") or may still complete it ("check balances and
   transactions before retrying").
-- **Loopback sign-in on dev.** A `BrowserSigner` signs in with the SIWE domain
-  `127.0.0.1` and its loopback origin as the URI on networks whose backend
-  accepts it (only `dev` today), so MetaMask no longer marks the sign-in as
-  suspicious. `PRIMEDELTA_SIWE_LOOPBACK=1` / `0` forces it on or off; setting
+- **Loopback sign-in.** On networks whose backend accepts it, a
+  `BrowserSigner` signs in with the SIWE domain `127.0.0.1` and its loopback
+  origin as the URI, so MetaMask no longer marks the sign-in as suspicious.
+  `PRIMEDELTA_SIWE_LOOPBACK=1` / `0` forces it on or off; setting
   `PRIMEDELTA_BASE_URL`, `PRIMEDELTA_APP_URL` or `PRIMEDELTA_SIWE_DOMAIN` turns
-  it off. Needs https://github.com/PrimeDeltaCorp/gitops/pull/438 deployed.
+  it off.
 - **AI-agent management for a main account.** `get_my_ai_agents()` lists every
   AI agent linked to the main as `AIAgent` (`sub_wallet_address`, `agent_name`,
   `status` as an `AccountStatus`, with an unknown status kept on `raw_status`).

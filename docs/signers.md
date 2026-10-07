@@ -88,11 +88,10 @@ pd = PrimeDelta(signer=BrowserSigner(), web3_provider_url=RPC)
 pd.login()  # opens the signer tab: connect the wallet, then sign in
 ```
 
-On `dev` the sign-in message uses the domain `127.0.0.1` and the tab's origin
-as its URI, so MetaMask matches it to the page instead of flagging it as a
-suspicious sign-in. Other networks keep the app domain until their backend
-accepts the loopback domain; `PRIMEDELTA_SIWE_LOOPBACK=1` / `0` overrides the
-default.
+Where the network's backend accepts it, the sign-in message uses the domain
+`127.0.0.1` and the tab's origin as its URI, so MetaMask matches it to the page
+instead of flagging it as a suspicious sign-in. Elsewhere it keeps the app
+domain; `PRIMEDELTA_SIWE_LOOPBACK=1` / `0` overrides the default.
 
 Pin the loopback port with `BrowserSigner(port=...)` or
 `PRIMEDELTA_BROWSER_SIGNER_PORT` to have the wallet remember the connection
