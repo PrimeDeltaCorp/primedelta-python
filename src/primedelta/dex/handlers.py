@@ -10,6 +10,7 @@ from primedelta.contracts import ContractRef, Contracts
 from primedelta.dex.params import (
     AMMAddLiquidity,
     AMMRemoveLiquidity,
+    OracleQuote,
     PriceFeedAddLiquidity,
     PriceFeedRemoveLiquidity,
     SwapSide,
@@ -216,6 +217,10 @@ def _batched_symbols(
 
 
 class PoolNotFound(Exception):
+    pass
+
+
+class NotEnoughPoolLiquidity(Exception):
     pass
 
 
@@ -975,6 +980,56 @@ class _AMMPoolHandler:
 
 _DUSD_EXP = 6
 _STOCK_EXP = 18
+_WAD = 10**18
+
+
+def _share_price_wad(update: bytes) -> int:
+    price = int.from_bytes(update[32:40], "big", signed=True)
+    expo = int.from_bytes(update[40:44], "big", signed=True)
+    if price < 0 or expo > 0 or expo < -255:
+        raise ValueError(f"signed price {price}e{expo} is not a valid USD price")
+    decimals = -expo
+    if decimals <= _STOCK_EXP:
+        return price * 10 ** (_STOCK_EXP - decimals)
+    return price // 10 ** (decimals - _STOCK_EXP)
+
+
+def _stocks_ratio(price: int, reserves: tuple[int, int]) -> Optional[tuple[int, int]]:
+    stock_reserve, stablecoin_reserve = reserves
+    total = stock_reserve * price // _WAD + stablecoin_reserve
+    if total == 0:
+        return None
+    return _WAD * (stock_reserve * price // _WAD) // total, total
+
+
+def _buy_fee_rate(
+    stock_out: int, price: int, reserves: tuple[int, int], curve: tuple[int, int]
+) -> Optional[int]:
+    ratio = _stocks_ratio(price, reserves)
+    if ratio is None:
+        return None
+    before, total = ratio
+    delta = stock_out * price // total
+    if delta >= before:
+        return None
+    product = before * (before - delta) // _WAD or 1
+    rate = curve[1] + curve[0] * (_WAD * _WAD // product) // _WAD
+    return min(rate, _WAD)
+
+
+def _sell_fee_rate(
+    stock_in: int, price: int, reserves: tuple[int, int], curve: tuple[int, int]
+) -> Optional[int]:
+    ratio = _stocks_ratio(price, reserves)
+    if ratio is None:
+        return None
+    before, total = ratio
+    after = before + stock_in * price // total
+    if after >= _WAD:
+        return None
+    denominator = _WAD + before * after // _WAD - before - after or 1
+    rate = curve[1] + curve[0] * (_WAD * _WAD // denominator) // _WAD
+    return min(rate, _WAD)
 
 
 class _QuoteHandler:
@@ -1023,6 +1078,77 @@ class _QuoteHandler:
             )
             return Decimal(in_units) / Decimal(10) ** in_exp
         raise ValueError("exact must be 'input' or 'output'")
+
+    def oracle_quote(
+        self, symbol: str, side: SwapSide, amount_in: Decimal, signed_update: bytes
+    ) -> OracleQuote:
+        contracts = self._contracts_provider()
+        router_ref = contracts.core.dex_router
+        if router_ref is None:
+            raise RouterNotConfigured()
+        stock = _resolve_stock_token(self._web3, contracts, symbol)
+        router = self._contract(router_ref.address, router_ref.abi)
+        pool_address = _call_view(
+            "DclexRouter.stockTokenToPool",
+            lambda: router.functions.stockTokenToPool(
+                self._web3.to_checksum_address(stock)
+            ).call(),
+        )
+        if int(pool_address, 16) == 0:
+            raise PoolNotFound(f"no oracle-priced pool registered for {symbol}")
+        pool = self._contract(pool_address, _require_pool_abi(contracts, "dclex_pool"))
+        token = self._contract(stock, _require_pool_abi(contracts, "stock"))
+        curve = tuple(
+            _call_view(
+                "DclexPool.getFeeCurve", lambda: pool.functions.getFeeCurve().call()
+            )
+        )
+        reserves = tuple(
+            _call_view(
+                "DclexPool.getReserves", lambda: pool.functions.getReserves().call()
+            )
+        )
+        numerator, denominator = _call_view(
+            "Stock.multiplier", lambda: token.functions.multiplier().call()
+        )
+        share_price = _share_price_wad(signed_update)
+        token_price = share_price * numerator // denominator
+        if token_price == 0:
+            raise ValueError(f"{symbol} has no usable oracle price")
+        if side == SwapSide.STABLECOIN_TO_STOCK:
+            exact_in = int(amount_in * Decimal(10) ** _DUSD_EXP) * 10**12
+            gross = exact_in * _WAD // token_price
+            provisional = _buy_fee_rate(gross, token_price, reserves, curve)
+            fee = (
+                None
+                if provisional is None
+                else _buy_fee_rate(
+                    gross * (_WAD - provisional) // _WAD, token_price, reserves, curve
+                )
+            )
+            out_units, out_exp = gross, _STOCK_EXP
+        else:
+            exact_in = int(amount_in * Decimal(10) ** _STOCK_EXP)
+            gross = exact_in * token_price // _WAD
+            fee = _sell_fee_rate(exact_in, token_price, reserves, curve)
+            out_units, out_exp = gross, _STOCK_EXP
+        if fee is None:
+            raise NotEnoughPoolLiquidity(
+                f"the {symbol} oracle-priced pool can't fill {amount_in} "
+                f"({side.value}); trade less"
+            )
+        net = out_units * (_WAD - fee) // _WAD
+        if side == SwapSide.STOCK_TO_STABLECOIN:
+            net, out_exp = net // 10**12, _DUSD_EXP
+        return OracleQuote(
+            symbol=symbol,
+            side=side,
+            amount_in=amount_in,
+            share_price=Decimal(share_price) / Decimal(_WAD),
+            token_price=Decimal(token_price) / Decimal(_WAD),
+            fee_rate=Decimal(fee) / Decimal(_WAD),
+            expected_amount_out=Decimal(net) / Decimal(10) ** out_exp,
+        )
 
     def spot_price(self, symbol: str) -> Decimal:
         contracts = self._contracts_provider()

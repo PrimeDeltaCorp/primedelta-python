@@ -40,6 +40,21 @@ semantic versioning once published.
   `PRIMEDELTA_SIWE_LOOPBACK=1` / `0` forces it on or off; setting
   `PRIMEDELTA_BASE_URL`, `PRIMEDELTA_APP_URL` or `PRIMEDELTA_SIWE_DOMAIN` turns
   it off.
+- **`oracle_quote(symbol, side, amount_in)` quotes an exact-input swap on an
+  oracle-priced pool.** It fetches the signed price (needs a login), prices one
+  token at the share price times the token's `multiplier()` (shares per token,
+  so it stays right after a split), and applies the pool's dynamic fee from
+  `getFeeCurve()` and `getReserves()`. Returns an `OracleQuote`
+  (`share_price`, `token_price`, `fee_rate`, `expected_amount_out`); feed
+  `expected_amount_out` to `min_out_from_quote`. Raises
+  `OraclePriceUnavailable` while there is no signed price (market closed) and
+  `NotEnoughPoolLiquidity` when the pool can't fill the amount. The bundled
+  `dclex_pool` ABI gains `getFeeCurve` / `getReserves` and a `stock` ABI holds
+  `multiplier`.
+- **`keep_alive()`** touches the backend session (`/verification-status/`)
+  without signing: `True` while it lives (which extends its idle timeout),
+  `False` once it has expired. It never re-logs-in, so a background heartbeat
+  can't open a wallet prompt.
 - **AI-agent management for a main account.** `get_my_ai_agents()` lists every
   AI agent linked to the main as `AIAgent` (`sub_wallet_address`, `agent_name`,
   `status` as an `AccountStatus`, with an unknown status kept on `raw_status`).

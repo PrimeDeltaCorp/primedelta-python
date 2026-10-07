@@ -371,6 +371,25 @@ class TestReads:
         ]
         assert client.stocks() == {}
         assert session.get.call_count == 1
+    def test_touch_session_reports_a_live_session(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(200, {"status": "VERIFIED"})
+        assert client.touch_session() is True
+
+    def test_touch_session_never_relogs_in(self):
+        client, session = _client_with_session()
+        relogin = MagicMock()
+        client.set_relogin(relogin)
+        session.request.return_value = _Resp(401, {})
+        assert client.touch_session() is False
+        relogin.assert_not_called()
+        assert session.request.call_count == 1
+
+    def test_touch_session_types_a_server_error(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(503, {})
+        with pytest.raises(BackendUnavailable):
+            client.touch_session()
 
     def test_prices_stream_token_minted(self):
         client, session = _client_with_session()

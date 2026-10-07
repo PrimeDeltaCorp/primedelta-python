@@ -38,6 +38,7 @@ from primedelta.dex.params import (
     AddLiquidityParams,
     AMMAddLiquidity,
     AMMRemoveLiquidity,
+    OracleQuote,
     PoolType,
     PriceFeedAddLiquidity,
     PriceFeedRemoveLiquidity,
@@ -380,6 +381,11 @@ class MarketClosed(TransactionFailed):
     still catch it, but agents can catch it specifically to distinguish 'market
     closed' from a bug.
     """
+
+
+class OraclePriceUnavailable(Exception):
+    """No signed price for an oracle-priced token right now: the US market is
+    closed, or the symbol is halted or unknown to the oracle."""
 
 
 class TradingHalted(Exception):
@@ -2000,6 +2006,33 @@ class PrimeDelta:
         price = int.from_bytes(blob[32:40], "big", signed=True)
         expo = int.from_bytes(blob[40:44], "big", signed=True)
         return Decimal(price) * (Decimal(10) ** expo)
+
+    def oracle_quote(
+        self, symbol: str, side: SwapSide, amount_in: Decimal
+    ) -> OracleQuote:
+        """Estimate an exact-input swap on an oracle-priced pool before sending
+        it. Prices one token at the signed oracle share price times the token's
+        multiplier (shares per token, so it stays right after a split), then
+        applies the pool's dynamic fee from its fee curve and reserves. The
+        estimate follows the pool's published formula; the swap itself settles
+        on-chain, so derive ``min_amount_out`` from ``expected_amount_out`` with
+        ``min_out_from_quote`` and a slippage budget. Needs a logged-in session.
+        Raises ``OraclePriceUnavailable`` when there is no signed price (market
+        closed) and ``NotEnoughPoolLiquidity`` when the pool can't fill the
+        amount."""
+        updates = self._primedelta_client.get_signed_price_updates([symbol])
+        if not updates or len(updates[0]) < 44:
+            raise OraclePriceUnavailable(
+                f"no signed price for {symbol}: the market is closed or the "
+                "symbol is halted"
+            )
+        return self._quote_handler.oracle_quote(symbol, side, amount_in, updates[0])
+
+    def keep_alive(self) -> bool:
+        """Touch the backend session without signing anything: True while it is
+        alive (and extends its idle timeout), False once it has expired. Never
+        re-logs-in, so a background heartbeat can't open a wallet prompt."""
+        return self._primedelta_client.touch_session()
 
     def simulate_swap(
         self,

@@ -27,6 +27,17 @@ class SwapSimulation:
 
 
 @dataclass(frozen=True)
+class OracleQuote:
+    symbol: str
+    side: SwapSide
+    amount_in: Decimal
+    share_price: Decimal
+    token_price: Decimal
+    fee_rate: Decimal
+    expected_amount_out: Decimal
+
+
+@dataclass(frozen=True)
 class PriceFeedAddLiquidity:
     symbol: str
     liquidity_amount: Decimal
