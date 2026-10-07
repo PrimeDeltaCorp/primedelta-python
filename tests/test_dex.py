@@ -1542,6 +1542,25 @@ class TestResolveStockTokenMulticall:
         now[0] += handlers._SYMBOL_TTL_SECONDS + 1
         assert _resolve_stock_token(web3, contracts, "XYZ") == _AMMT2_TOKEN
 
+    def test_a_scan_for_another_symbol_refreshes_cached_ones(self, monkeypatch):
+        from primedelta.dex import handlers
+
+        now = [1000.0]
+        monkeypatch.setattr(handlers.time, "monotonic", lambda: now[0])
+        tokens = [_AMMT1_TOKEN]
+        results = [self._symbol("XYZ")]
+        web3, by_address = self._web3(results, tokens)
+        contracts = _contracts(with_multicall=True)
+        assert _resolve_stock_token(web3, contracts, "XYZ") == _AMMT1_TOKEN
+        tokens.append(_AMMT2_TOKEN)
+        results[:] = [self._symbol("NEW"), self._symbol("XYZ")]
+        now[0] += 300
+        assert _resolve_stock_token(web3, contracts, "NEW") == _AMMT1_TOKEN
+        aggregate = by_address[_MULTICALL_ADDRESS].functions.aggregate3
+        calls = aggregate.call_count
+        assert _resolve_stock_token(web3, contracts, "XYZ") == _AMMT2_TOKEN
+        assert aggregate.call_count == calls
+
     def test_unknown_symbol_raises_pool_not_found(self):
         web3, _ = self._web3([self._symbol("AMMT1")], [_AMMT1_TOKEN])
         with pytest.raises(PoolNotFound):

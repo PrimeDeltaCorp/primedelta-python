@@ -1,8 +1,10 @@
 import http.client
 import json
+import os
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import threading
 import time
@@ -13,11 +15,12 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from hexbytes import HexBytes
 
-from primedelta import BrowserSigner
+from primedelta import BrowserSigner, browser
 from primedelta.browser import (
     _WALLET_HELPERS,
     BrowserSignerError,
     _loopback_port,
+    _peer_open,
     _render_page,
     _render_session_page,
 )
@@ -323,6 +326,80 @@ class TestBridgeEdges:
         assert [job["op"] for job in tab.jobs] == ["connect"]
         assert len(tab.opened) == 1
 
+    def _open_orphan_poll(self, signer):
+        bridge = signer._bridge
+        port = urlparse(signer.loopback_origin).port
+        orphan = socket.create_connection(("127.0.0.1", port), timeout=5)
+        orphan.sendall(
+            f"GET /next?session={bridge._session} HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{port}\r\n\r\n".encode()
+        )
+        deadline = time.monotonic() + 2
+        while bridge._polling == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert bridge._polling == 1
+        return orphan
+
+    def test_a_closed_poll_stops_counting_as_a_tab(self, make_signer):
+        signer, _ = make_signer(_wallet)
+        bridge = signer._bridge
+        bridge.liveness_seconds = 0.05
+        bridge.poll_seconds = 30
+        self._open_orphan_poll(signer).close()
+        deadline = time.monotonic() + 2
+        while bridge._polling and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert bridge._polling == 0
+
+    def test_a_job_whose_delivery_fails_goes_to_the_next_tab(
+        self, make_signer, monkeypatch, capfd
+    ):
+        monkeypatch.setattr(browser, "_peer_open", lambda connection: True)
+        signer, tab = make_signer(_wallet)
+        bridge = signer._bridge
+        bridge.liveness_seconds = 0.05
+        bridge.tab_grace_seconds = 0.1
+        bridge.poll_seconds = 30
+        orphan = self._open_orphan_poll(signer)
+        orphan.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        orphan.close()
+        time.sleep(0.2)
+        assert signer.address == ADDR
+        assert [job["op"] for job in tab.jobs] == ["connect"]
+        assert len(tab.opened) == 1
+        assert "Traceback" not in capfd.readouterr().err
+
+    def test_a_request_queued_behind_a_busy_tab_opens_no_second_one(self, make_signer):
+        signer, _ = make_signer(_wallet)
+        bridge = signer._bridge
+        bridge.liveness_seconds = 0.05
+        bridge.tab_grace_seconds = 0.5
+        opened = []
+        answers = []
+
+        def ask(op):
+            answers.append(bridge.request(op, {}, opened.append))
+
+        first = threading.Thread(target=ask, args=("connect",))
+        first.start()
+        deadline = time.monotonic() + 2
+        while not opened and time.monotonic() < deadline:
+            time.sleep(0.01)
+        job_a = json.loads(self._next(signer).read())
+        time.sleep(0.6)
+        second = threading.Thread(target=ask, args=("personal_sign",))
+        second.start()
+        time.sleep(0.2)
+        assert len(opened) == 1
+        assert self._post(signer, job_a["state"], b'{"value": "0xA"}') == 204
+        time.sleep(0.2)
+        job_b = json.loads(self._next(signer).read())
+        assert self._post(signer, job_b["state"], b'{"value": "0xB"}') == 204
+        first.join(timeout=5)
+        second.join(timeout=5)
+        assert len(opened) == 1
+        assert sorted(answers) == ["0xA", "0xB"]
+
     def test_a_request_with_no_tab_reopens_one(self, make_signer):
         signer, tab = make_signer(_wallet)
         signer._bridge.reopen_seconds = 0.2
@@ -331,7 +408,84 @@ class TestBridgeEdges:
         signer._open = opened.append
         threading.Timer(0.5, lambda: tab.open(opened[-1])).start()
         assert signer.address == ADDR
-        assert len(opened) >= 2
+        assert len(opened) == 2
+
+    def test_a_tab_that_never_loads_is_reopened_only_once(self, make_signer):
+        signer, _ = make_signer(_wallet, timeout=0.8)
+        signer._bridge.reopen_seconds = 0.1
+        signer._bridge.liveness_seconds = 0.05
+        opened = []
+        signer._open = opened.append
+        with pytest.raises(BrowserSignerError, match="nothing was sent"):
+            _ = signer.address
+        assert len(opened) == 2
+
+    def test_a_page_loaded_without_a_wallet_is_not_reopened(self, make_signer):
+        signer, _ = make_signer(_wallet, timeout=0.8)
+        signer._bridge.reopen_seconds = 0.1
+        signer._bridge.liveness_seconds = 0.05
+        opened = []
+
+        def load_only(url):
+            opened.append(url)
+            urllib.request.urlopen(url, timeout=5).read()
+
+        signer._open = load_only
+        with pytest.raises(BrowserSignerError, match="nothing was sent"):
+            _ = signer.address
+        assert len(opened) == 1
+
+    def test_an_interrupted_request_leaves_nothing_queued(self, make_signer):
+        signer, _ = make_signer(_wallet)
+
+        def interrupted(url):
+            raise KeyboardInterrupt
+
+        signer._open = interrupted
+        with pytest.raises(KeyboardInterrupt):
+            _ = signer.address
+        assert signer._bridge._jobs == {}
+        assert signer._bridge._queue == []
+        assert self._next(signer).status == 204
+
+    def test_close_during_a_wallet_prompt_warns_it_may_still_complete(
+        self, make_signer
+    ):
+        signer, _ = make_signer(_wallet, timeout=30)
+        signer._open = lambda url: None
+        errors = []
+
+        def ask():
+            try:
+                _ = signer.address
+            except BrowserSignerError as exc:
+                errors.append(str(exc))
+
+        worker = threading.Thread(target=ask)
+        worker.start()
+        self._next(signer).read()
+        signer.close()
+        worker.join(timeout=5)
+        assert errors and "may still complete" in errors[0]
+
+    def test_the_liveness_check_works_past_descriptor_1024(self):
+        resource = pytest.importorskip("resource")
+        if resource.getrlimit(resource.RLIMIT_NOFILE)[0] <= 1500:
+            pytest.skip("needs a descriptor limit above 1500")
+        try:
+            os.fstat(1500)
+            pytest.skip("descriptor 1500 is in use")
+        except OSError:
+            pass
+        left, right = socket.socketpair()
+        high = socket.socket(fileno=os.dup2(left.fileno(), 1500))
+        left.close()
+        try:
+            assert _peer_open(high) is True
+            right.close()
+            assert _peer_open(high) is False
+        finally:
+            high.close()
 
     def test_close_fails_a_pending_request_at_once(self, make_signer):
         signer, _ = make_signer(_wallet, timeout=30)
@@ -467,6 +621,28 @@ class TestWalletJs:
             "personal_sign", {"message": "m", "address": ADDR}, ["0x" + "1" * 40]
         )
         assert out.startswith("ERR Switch your wallet to")
+
+    def test_the_session_page_backs_off_after_a_quick_empty_poll(self):
+        page = _render_session_page("S")
+        body = re.findall(r"<script>(.*?)</script>", page, re.S)[0]
+        script = (
+            "const calls = [];"
+            "globalThis.window = {addEventListener() {}, removeEventListener() {},"
+            " dispatchEvent() {}, ethereum: {request: async () => []}};"
+            "globalThis.Event = class { constructor(type) { this.type = type; } };"
+            "globalThis.location = {href: 'x'};"
+            "globalThis.document = {getElementById: (id) => ({textContent:"
+            " id === 'config' ? JSON.stringify({session: 'S'}) : ''})};"
+            "globalThis.fetch = async () => { calls.push(Date.now());"
+            " if (calls.length > 1) throw new Error('stop');"
+            " return {status: 204, ok: false}; };"
+            + body
+            + "setTimeout(() => console.log(calls[1] - calls[0]), 2500);"
+        )
+        result = subprocess.run(
+            ["node", "-e", script], capture_output=True, text=True, timeout=30
+        )
+        assert int(result.stdout.strip()) >= 900
 
     def test_the_connected_account_signs_whatever_its_case(self):
         out = self._run(

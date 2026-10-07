@@ -1,7 +1,7 @@
 import json
 import os
 import secrets
-import select
+import selectors
 import socket
 import sys
 import threading
@@ -134,13 +134,17 @@ async function serve() {
   const query = "?session=" + encodeURIComponent(CONFIG.session);
   for (;;) {
     let response;
+    const asked = Date.now();
     try {
       response = await fetch("/next" + query, {cache: "no-store"});
     } catch (err) {
       setStatus("PrimeDelta stopped. You can close this tab.");
       return;
     }
-    if (response.status === 204) continue;
+    if (response.status === 204) {
+      if (Date.now() - asked < 1000) await new Promise((r) => setTimeout(r, 1000));
+      continue;
+    }
     if (!response.ok) {
       setStatus("This signing session has ended. You can close this tab.");
       return;
@@ -184,9 +188,10 @@ class _QuietServer(ThreadingHTTPServer):
 
 def _peer_open(connection: Any) -> bool:
     try:
-        readable, _, _ = select.select([connection], [], [], 0)
-        if not readable:
-            return True
+        with selectors.DefaultSelector() as selector:
+            selector.register(connection, selectors.EVENT_READ)
+            if not selector.select(0):
+                return True
         return bool(connection.recv(1, socket.MSG_PEEK))
     except (OSError, ValueError):
         return False
@@ -239,6 +244,7 @@ class _LoopbackBridge:
         self._queue: list[str] = []
         self._polling = 0
         self._last_poll = 0.0
+        self._page_loaded = 0.0
         self._server: Optional[ThreadingHTTPServer] = None
         self._closed = False
         self._origin = ""
@@ -323,34 +329,14 @@ class _LoopbackBridge:
                 or time.monotonic() - self._last_poll < self.tab_grace_seconds
             )
             self._cond.notify_all()
-        opened_at: Optional[float] = None
-        if not tab_ready:
-            opener(self.page_url)
-            opened_at = time.monotonic()
-        give_up = time.monotonic() + self._timeout
-        while not done.is_set():
-            now = time.monotonic()
-            if now >= give_up:
-                break
-            if done.wait(min(self.liveness_seconds, give_up - now)):
-                break
+        try:
+            self._wait(job, tab_ready, opener)
+        finally:
             with self._cond:
-                stranded = (
-                    not job["dispatched"]
-                    and self._polling == 0
-                    and not self._tab_busy()
-                )
-            now = time.monotonic()
-            if stranded and (
-                opened_at is None or now - opened_at >= self.reopen_seconds
-            ):
-                opener(self.page_url)
-                opened_at = now
-        with self._cond:
-            self._jobs.pop(state, None)
-            if state in self._queue:
-                self._queue.remove(state)
-            finished = done.is_set()
+                self._jobs.pop(state, None)
+                if state in self._queue:
+                    self._queue.remove(state)
+                finished = done.is_set()
         if job["closed"]:
             raise BrowserSignerError(
                 "the wallet signer was closed"
@@ -374,6 +360,37 @@ class _LoopbackBridge:
         if payload.get("error"):
             raise BrowserSignerError(payload["error"])
         return payload.get("value")
+
+    def _wait(
+        self, job: dict[str, Any], tab_ready: bool, opener: Callable[[str], None]
+    ) -> None:
+        done = job["done"]
+        opened_at: Optional[float] = None
+        if not tab_ready:
+            opened_at = time.monotonic()
+            opener(self.page_url)
+        reopened = False
+        give_up = time.monotonic() + self._timeout
+        while not done.is_set():
+            now = time.monotonic()
+            if now >= give_up:
+                return
+            if done.wait(min(self.liveness_seconds, give_up - now)):
+                return
+            now = time.monotonic()
+            with self._cond:
+                stranded = (
+                    not job["dispatched"]
+                    and self._polling == 0
+                    and not self._tab_busy()
+                    and now - self._last_poll >= self.tab_grace_seconds
+                )
+                loaded = opened_at is not None and self._page_loaded >= opened_at
+            if reopened or not stranded or loaded:
+                continue
+            if opened_at is None or now - opened_at >= self.reopen_seconds:
+                opener(self.page_url)
+                reopened = True
 
     def _next_job(self, alive: Callable[[], bool]) -> Optional[dict[str, Any]]:
         deadline = time.monotonic() + self.poll_seconds
@@ -403,7 +420,7 @@ class _LoopbackBridge:
     def _requeue(self, state: str) -> None:
         with self._cond:
             job = self._jobs.get(state)
-            if job is None or job["done"].is_set():
+            if job is None:
                 return
             job["dispatched"] = False
             self._queue.insert(0, state)
@@ -461,6 +478,8 @@ class _LoopbackBridge:
                     return
                 path, _ = found
                 if path == "/":
+                    with bridge._cond:
+                        bridge._page_loaded = time.monotonic()
                     page = _render_session_page(bridge._session).encode()
                     self._reply(200, page, "text/html; charset=utf-8")
                 elif path == "/next":

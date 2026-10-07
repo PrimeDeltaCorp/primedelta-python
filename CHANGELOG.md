@@ -21,8 +21,10 @@ semantic versioning once published.
   for the next request, so the wallet asks to connect once per session and
   every later signature or transaction appears in that tab instead of a new
   one. A tab that is busy with a wallet prompt still counts as open; a new tab
-  opens only when none is listening, and again every 15 seconds while a request
-  waits with no tab. A closed tab's abandoned poll can't take the next request.
+  opens only when none is listening, and once more after 15 seconds if the
+  page never loaded (a page that loaded in a browser without a wallet is not
+  reopened). A closed tab's abandoned poll can't take the next request, and a
+  request that is interrupted or fails leaves nothing queued for the next tab.
   `close()` fails pending requests at once, and the signer refuses requests
   after it. The page refuses a request
   for an account other than the one the session connected. `port=` (or
