@@ -74,16 +74,31 @@ signer = LocalAccountSigner.from_key(data["private_key"])
 ## Browser wallet (MetaMask, …)
 
 `BrowserSigner` signs through a browser extension wallet — no private key touches
-the SDK. Each operation opens a single-use page on `127.0.0.1` that discovers the
-wallet (EIP-6963) and runs `eth_requestAccounts` / `personal_sign` /
-`eth_sendTransaction`; the wallet fills gas and nonce and broadcasts.
+the SDK. The first operation opens one page on `127.0.0.1` that discovers the
+wallet (EIP-6963). The page stays open for the whole session and runs every
+`eth_requestAccounts` / `personal_sign` / `eth_sendTransaction` from the same
+origin, so the wallet asks to connect once instead of once per operation; the
+wallet fills gas and nonce and broadcasts. Keep the tab open: a new one opens
+only when no tab is listening.
 
 ```python
 from primedelta import PrimeDelta, BrowserSigner
 
 pd = PrimeDelta(signer=BrowserSigner(), web3_provider_url=RPC)
-pd.login()  # opens the browser to connect the wallet, then to sign
+pd.login()  # opens the signer tab: connect the wallet, then sign in
 ```
+
+On `dev` the sign-in message uses the domain `127.0.0.1` and the tab's origin
+as its URI, so MetaMask matches it to the page instead of flagging it as a
+suspicious sign-in. Other networks keep the app domain until their backend
+accepts the loopback domain; `PRIMEDELTA_SIWE_LOOPBACK=1` / `0` overrides the
+default.
+
+Pin the loopback port with `BrowserSigner(port=...)` or
+`PRIMEDELTA_BROWSER_SIGNER_PORT` to have the wallet remember the connection
+across restarts. Any program on the same machine that later listens on that
+port inherits the wallet's connection to it, so leave the port random on a
+shared machine.
 
 Pass `chain` (a `wallet_addEthereumChain` params dict) to switch the wallet to
 the right network first — it is added if unknown:
@@ -97,10 +112,12 @@ signer = BrowserSigner(chain={
 })
 ```
 
-Interactive and desktop-only: every signature/transaction opens a browser tab you
-approve in the wallet. The bridge binds loopback only, gates each round-trip with
-a one-time state token, serves a single result then shuts down, and times out
-(`timeout=`, default 180s). WalletConnect is not used (no maintained Python v2
+Interactive and desktop-only: you approve every signature/transaction in the
+wallet. The bridge binds loopback only, accepts requests only for its own
+`Host` and with the session token from the URL it opened, refuses a request for
+an account other than the connected one, and times out (`timeout=`, default
+180s). A time-out says whether the wallet ever saw the request or may still
+complete it, so check balances before retrying. WalletConnect is not used (no maintained Python v2
 library); this bridge covers the same "plug in my wallet" intent. For automation,
 use `MockBrowserSigner` (signs locally with a dev key on the same wallet path).
 
@@ -111,7 +128,7 @@ and the user share a machine. For a **hosted** app — an MCP server or web back
 that can't reach the user's local browser — `RemoteBrowserSigner` serves the same
 one-shot wallet page from a public HTTPS origin instead. It keeps the wallet
 non-custodial (the user's own MetaMask/EIP-6963 wallet signs; no key on the
-server) and reuses `BrowserSigner`'s page, state token, and tx shape.
+server) and reuses the wallet logic, a one-time state token, and the tx shape.
 
 The hosting app owns transport. `RemoteBrowserSigner` parks each pending
 operation under a one-time `state` token and calls your `deliver(url)` callback

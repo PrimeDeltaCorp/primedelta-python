@@ -39,8 +39,27 @@ _NETWORK_ENDPOINTS: dict[str, tuple[str, str]] = {
 }
 
 
+_SIWE_LOOPBACK_NETWORKS = frozenset({"dev"})
+SIWE_LOOPBACK_DOMAIN = "127.0.0.1"
+
+
 def _strip_scheme(url: str) -> str:
     return url.replace("https://", "").replace("http://", "")
+
+
+def _siwe_loopback(network: str) -> bool:
+    raw = os.getenv("PRIMEDELTA_SIWE_LOOPBACK")
+    if raw is not None and raw.strip():
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    overridden = any(
+        os.getenv(name)
+        for name in (
+            "PRIMEDELTA_BASE_URL",
+            "PRIMEDELTA_APP_URL",
+            "PRIMEDELTA_SIWE_DOMAIN",
+        )
+    )
+    return network in _SIWE_LOOPBACK_NETWORKS and not overridden
 
 
 @dataclass(frozen=True)
@@ -49,6 +68,7 @@ class Endpoints:
     app_url: str
     siwe_domain: str
     siwe_uri: str
+    siwe_loopback: bool = False
 
 
 def resolve_endpoints(network: str) -> Endpoints:
@@ -68,7 +88,11 @@ def resolve_endpoints(network: str) -> Endpoints:
         )
     siwe_domain = os.getenv("PRIMEDELTA_SIWE_DOMAIN") or _strip_scheme(app_url)
     return Endpoints(
-        base_url=base_url, app_url=app_url, siwe_domain=siwe_domain, siwe_uri=app_url
+        base_url=base_url,
+        app_url=app_url,
+        siwe_domain=siwe_domain,
+        siwe_uri=app_url,
+        siwe_loopback=_siwe_loopback(network),
     )
 
 

@@ -530,6 +530,31 @@ class TestDclexHandlerLiquidity:
         assert (_DCLEX_POOL, 10 * 10**18) in approve_args
         assert (_DCLEX_POOL, 20 * 10**6) in approve_args
 
+    def test_add_liquidity_skips_an_approve_already_set_to_the_cap(self):
+        handler, web3, contract, send_tx = self._setup()
+
+        def allowance(owner, spender):
+            call = MagicMock()
+            call.call.return_value = 10 * 10**18
+            return call
+
+        contract.functions.allowance.side_effect = allowance
+        handler.add_liquidity(
+            PriceFeedAddLiquidity(
+                symbol="AAPL",
+                liquidity_amount=Decimal(30 * 10**18),
+                max_stock_amount=Decimal("10"),
+                max_stablecoin_amount=Decimal("20"),
+            )
+        )
+        approve_args = [a.args for a in contract.functions.approve.call_args_list]
+        assert approve_args == [(_DCLEX_POOL, 20 * 10**6)]
+        allowance_args = [a.args for a in contract.functions.allowance.call_args_list]
+        assert allowance_args == [
+            (_USER_ADDRESS, _DCLEX_POOL),
+            (_USER_ADDRESS, _DCLEX_POOL),
+        ]
+
     def test_remove_liquidity_calls_pool_remove(self):
         handler, web3, contract, send_tx = self._setup()
 
@@ -1312,6 +1337,94 @@ class TestResolveStockToken:
             _resolve_stock_token(web3, _contracts(), "AMMT1")
 
 
+class TestResolveStockTokenMulticall:
+    def _web3(self, symbol_results, all_tokens):
+        web3 = _make_web3_mock()
+        by_address = {}
+
+        def make_contract(address=None, abi=None):
+            if address is None:
+                encoder = MagicMock()
+                encoder.encode_abi.return_value = "0x95d89b41"
+                return encoder
+            contract = by_address.setdefault(address, MagicMock())
+            if address == _ROUTER_ADDRESS:
+                contract.functions.allStockTokens.return_value.call.return_value = (
+                    all_tokens
+                )
+            elif address == _MULTICALL_ADDRESS:
+                contract.functions.aggregate3.return_value.call.return_value = (
+                    symbol_results
+                )
+            return contract
+
+        web3.eth.contract.side_effect = make_contract
+        return web3, by_address
+
+    @staticmethod
+    def _symbol(text):
+        from eth_abi import encode
+
+        return (True, encode(["string"], [text]))
+
+    def test_one_batched_call_resolves_and_caches_every_symbol(self):
+        tokens = [_AMMT2_TOKEN, "0x" + "F" * 40, _AMMT1_TOKEN]
+        web3, by_address = self._web3(
+            [self._symbol("AMMT2"), (False, b""), self._symbol("AMMT1")], tokens
+        )
+        contracts = _contracts(with_multicall=True)
+
+        assert _resolve_stock_token(web3, contracts, "AMMT1") == _AMMT1_TOKEN
+        batch = by_address[_MULTICALL_ADDRESS].functions.aggregate3.call_args.args[0]
+        assert [call[0] for call in batch] == tokens
+        assert all(call[1] is True for call in batch)
+
+        calls_after_first = web3.eth.contract.call_count
+        assert _resolve_stock_token(web3, contracts, "AMMT2") == _AMMT2_TOKEN
+        assert web3.eth.contract.call_count == calls_after_first
+
+    def test_first_token_wins_when_two_share_a_symbol(self):
+        first, second = _AMMT1_TOKEN, _AMMT2_TOKEN
+        web3, _ = self._web3(
+            [self._symbol("DUP"), self._symbol("DUP")], [first, second]
+        )
+        assert (
+            _resolve_stock_token(web3, _contracts(with_multicall=True), "DUP") == first
+        )
+
+    def test_unknown_symbol_raises_pool_not_found(self):
+        web3, _ = self._web3([self._symbol("AMMT1")], [_AMMT1_TOKEN])
+        with pytest.raises(PoolNotFound):
+            _resolve_stock_token(web3, _contracts(with_multicall=True), "NOPE")
+
+    def test_falls_back_to_one_read_per_token_when_the_batch_fails(self):
+        web3, by_address = self._web3([], [_AMMT1_TOKEN])
+        by_address.setdefault(_MULTICALL_ADDRESS, MagicMock())
+        aggregate = by_address[_MULTICALL_ADDRESS].functions.aggregate3
+        aggregate.return_value.call.side_effect = ValueError("rpc down")
+        token = by_address.setdefault(_AMMT1_TOKEN, MagicMock())
+        token.functions.symbol.return_value.call.return_value = "AMMT1"
+
+        assert (
+            _resolve_stock_token(web3, _contracts(with_multicall=True), "AMMT1")
+            == _AMMT1_TOKEN
+        )
+
+    def test_falls_back_when_the_batch_is_misaligned(self):
+        web3, by_address = self._web3(
+            [self._symbol("AMMT2")], [_AMMT1_TOKEN, _AMMT2_TOKEN]
+        )
+        first = by_address.setdefault(_AMMT1_TOKEN, MagicMock())
+        first.functions.symbol.return_value.call.return_value = "AMMT1"
+        second = by_address.setdefault(_AMMT2_TOKEN, MagicMock())
+        second.functions.symbol.return_value.call.return_value = "AMMT2"
+
+        assert (
+            _resolve_stock_token(web3, _contracts(with_multicall=True), "AMMT2")
+            == _AMMT2_TOKEN
+        )
+
+
 class TestDecodeRevert:
     def test_decodes_error_string(self):
         from web3.exceptions import ContractLogicError
@@ -1639,13 +1752,16 @@ class TestBuildAndSendTransaction:
             "blockNumber": 99,
         }
         # Re-running as eth_call reveals the reason.
-        pd._web3.eth.call.side_effect = ContractLogicError(
-            "execution reverted",
-            data="0x08c379a0"
-            "0000000000000000000000000000000000000000000000000000000000000020"
-            "0000000000000000000000000000000000000000000000000000000000000003"
-            "626164" + "00" * 29,
-        )
+        pd._web3.eth.call.side_effect = [
+            b"",
+            ContractLogicError(
+                "execution reverted",
+                data="0x08c379a0"
+                "0000000000000000000000000000000000000000000000000000000000000020"
+                "0000000000000000000000000000000000000000000000000000000000000003"
+                "626164" + "00" * 29,
+            ),
+        ]
 
         with pytest.raises(TransactionFailed) as info:
             pd._build_and_send_transaction(fn)
@@ -1696,6 +1812,146 @@ class TestBuildAndSendTransaction:
         assert "nonce" not in submitted
         assert "gas" not in submitted
         assert "gasPrice" not in submitted
+
+
+class TestPreflight:
+    _STALE_PRICE = "0x19abf40e"
+
+    def _pd(self, *, wallet: bool = False, **kwargs) -> PrimeDelta:
+        with patch("primedelta.primedelta.Web3"):
+            pd = PrimeDelta(
+                private_key="0x" + "1" * 64,
+                web3_provider_url="http://localhost:8545",
+                **kwargs,
+            )
+        pd._web3 = MagicMock()
+        pd._web3.to_checksum_address.side_effect = lambda a: a
+        pd._web3.eth.gas_price = 10**9
+        pd._web3.eth.get_transaction_count.return_value = 7
+        pd._web3.eth.wait_for_transaction_receipt.return_value = {
+            "status": 1,
+            "blockNumber": 10,
+        }
+        pd._signer = MagicMock()
+        pd._signer.address = _USER_ADDRESS
+        pd._signer.fills_gas_and_nonce = wallet
+        sent = MagicMock()
+        sent.hex.return_value = "0xfeed"
+        pd._signer.submit_transaction.return_value = sent
+        return pd
+
+    def _fn(self) -> MagicMock:
+        fn = MagicMock()
+        fn.fn_name = "buyExactInput"
+        fn.address = _ROUTER_ADDRESS
+        fn._encode_transaction_data.return_value = "0xda7a"
+        fn.build_transaction.return_value = {
+            "from": _USER_ADDRESS,
+            "to": _ROUTER_ADDRESS,
+            "data": "0xda7a",
+            "value": 0,
+            "nonce": 7,
+            "gas": 5_000_000,
+            "gasPrice": 10**9,
+        }
+        return fn
+
+    def test_revert_is_raised_before_signing(self):
+        from web3.exceptions import ContractLogicError
+
+        pd = self._pd()
+        pd._web3.eth.call.side_effect = ContractLogicError(
+            "execution reverted", data="0xdeadbeef"
+        )
+
+        with pytest.raises(TransactionFailed) as info:
+            pd._build_and_send_transaction(self._fn())
+
+        assert info.value.tx_hash is None
+        assert info.value.function_name == "buyExactInput"
+        pd._signer.submit_transaction.assert_not_called()
+
+    def test_stale_price_raises_market_closed_before_signing(self):
+        from web3.exceptions import ContractLogicError
+
+        from primedelta import MarketClosed
+
+        pd = self._pd()
+        pd._web3.eth.call.side_effect = ContractLogicError(
+            "execution reverted", data=self._STALE_PRICE
+        )
+
+        with pytest.raises(MarketClosed):
+            pd._build_and_send_transaction(self._fn())
+        pd._signer.submit_transaction.assert_not_called()
+
+    def test_revert_releases_the_reserved_nonce(self):
+        from web3.exceptions import ContractLogicError
+
+        pd = self._pd()
+        pd._web3.eth.call.side_effect = ContractLogicError(
+            "execution reverted", data="0xdeadbeef"
+        )
+        with pytest.raises(TransactionFailed):
+            pd._build_and_send_transaction(self._fn())
+        assert pd._next_nonce is None
+
+    def test_call_mirrors_the_signed_transaction(self):
+        pd = self._pd()
+        pd._build_and_send_transaction(self._fn())
+
+        call, block = pd._web3.eth.call.call_args.args
+        assert call == {
+            "from": _USER_ADDRESS,
+            "to": _ROUTER_ADDRESS,
+            "value": 0,
+            "data": "0xda7a",
+        }
+        assert block == "latest"
+        pd._signer.submit_transaction.assert_called_once()
+
+    def test_call_is_pinned_to_our_last_write(self):
+        pd = self._pd()
+        pd._last_write_block = 500
+        pd._web3.eth.block_number = 498
+        pd._build_and_send_transaction(self._fn())
+        assert pd._web3.eth.call.call_args.args[1] == 500
+
+    def test_transport_error_does_not_block_the_send(self):
+        pd = self._pd()
+        pd._web3.eth.call.side_effect = ValueError("header not found")
+        assert pd._build_and_send_transaction(self._fn()) == "0xfeed"
+        pd._signer.submit_transaction.assert_called_once()
+
+    def test_wallet_signer_is_preflighted_before_the_wallet_opens(self):
+        from web3.exceptions import ContractLogicError
+
+        pd = self._pd(wallet=True)
+        pd._web3.eth.call.side_effect = ContractLogicError(
+            "execution reverted", data=self._STALE_PRICE
+        )
+        with pytest.raises(TransactionFailed):
+            pd._build_and_send_transaction(self._fn())
+        pd._signer.submit_transaction.assert_not_called()
+
+    def test_craft_never_preflights(self):
+        pd = self._pd()
+        pd._signer.fills_gas_and_nonce = True
+        txs = pd.craft(lambda: pd._build_and_send_transaction(self._fn()))
+        assert len(txs) == 1
+        pd._web3.eth.call.assert_not_called()
+
+    def test_can_be_disabled_by_argument(self):
+        pd = self._pd(preflight=False)
+        pd._build_and_send_transaction(self._fn())
+        pd._web3.eth.call.assert_not_called()
+        pd._signer.submit_transaction.assert_called_once()
+
+    def test_can_be_disabled_by_env(self, monkeypatch):
+        monkeypatch.setenv("PRIMEDELTA_PREFLIGHT", "0")
+        pd = self._pd()
+        pd._build_and_send_transaction(self._fn())
+        pd._web3.eth.call.assert_not_called()
 
 
 class TestClaimWithdrawals:

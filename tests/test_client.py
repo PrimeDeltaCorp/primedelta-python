@@ -329,6 +329,34 @@ class TestReads:
         assert stock.quantity_decimals == quantity_decimals
         assert stock.price_decimals == price_decimals
 
+    def test_stocks_reads_every_page(self):
+        client, session = _client_with_session()
+
+        def item(symbol):
+            return {
+                "symbol": symbol,
+                "name": symbol,
+                "cusipId": "0",
+                "smartContractAddress": "0x" + "1" * 40,
+                "numberOfTokens": "1",
+            }
+
+        session.get.side_effect = [
+            _Resp(200, {"items": [item("A"), item("B")], "total": 3, "count": 2}),
+            _Resp(200, {"items": [item("C")], "total": 3, "count": 1}),
+        ]
+        assert sorted(client.stocks()) == ["A", "B", "C"]
+        pages = [call.kwargs["params"]["page"] for call in session.get.call_args_list]
+        assert pages == [1, 2]
+
+    def test_stocks_stops_on_an_empty_page(self):
+        client, session = _client_with_session()
+        session.get.side_effect = [
+            _Resp(200, {"items": [], "total": 5, "count": 0}),
+        ]
+        assert client.stocks() == {}
+        assert session.get.call_count == 1
+
     def test_prices_stream_token_minted(self):
         client, session = _client_with_session()
         session.request.return_value = _Resp(200, {"token": "abc"})

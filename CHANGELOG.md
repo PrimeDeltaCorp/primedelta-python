@@ -7,6 +7,33 @@ semantic versioning once published.
 ## [Unreleased]
 
 ### Added
+- **Every on-chain write is simulated before it is signed.** The SDK runs an
+  `eth_call` of the exact transaction, pinned to the block that holds this
+  client's last write, before it signs it or hands it to a wallet. A revert
+  raises `TransactionFailed` (`MarketClosed` for a stale oracle price) with
+  `tx_hash=None`: nothing is broadcast, no gas is spent, and a browser wallet is
+  never asked to approve a transaction that would fail. A transport error skips
+  the check, since the chain still enforces it. Turn it off with
+  `PrimeDelta(preflight=False)` or `PRIMEDELTA_PREFLIGHT=0`. `craft()` never
+  simulates.
+- **`BrowserSigner` keeps one wallet tab per session.** Its loopback server now
+  lives as long as the signer, and the page it opens stays open and long-polls
+  for the next request, so the wallet asks to connect once per session and
+  every later signature or transaction appears in that tab instead of a new
+  one. A new tab opens only when none is polling. The page refuses a request
+  for an account other than the one the session connected. `port=` (or
+  `PRIMEDELTA_BROWSER_SIGNER_PORT`) pins the loopback port so the wallet
+  remembers the connection across restarts; a busy pinned port falls back to a
+  random one. `loopback_origin` returns the page origin and `close()` stops the
+  server. A time-out now says whether the wallet ever received the request
+  ("nothing was sent") or may still complete it ("check balances and
+  transactions before retrying").
+- **Loopback sign-in on dev.** A `BrowserSigner` signs in with the SIWE domain
+  `127.0.0.1` and its loopback origin as the URI on networks whose backend
+  accepts it (only `dev` today), so MetaMask no longer marks the sign-in as
+  suspicious. `PRIMEDELTA_SIWE_LOOPBACK=1` / `0` forces it on or off; setting
+  `PRIMEDELTA_BASE_URL`, `PRIMEDELTA_APP_URL` or `PRIMEDELTA_SIWE_DOMAIN` turns
+  it off. Needs https://github.com/PrimeDeltaCorp/gitops/pull/438 deployed.
 - **AI-agent management for a main account.** `get_my_ai_agents()` lists every
   AI agent linked to the main as `AIAgent` (`sub_wallet_address`, `agent_name`,
   `status` as an `AccountStatus`, with an unknown status kept on `raw_status`).
@@ -78,6 +105,16 @@ semantic versioning once published.
   like the `FIAT_*` rows, carry symbol `cash` and a USD amount.
 
 ### Changed
+- **One read resolves every token symbol.** The first lookup of a symbol reads
+  `symbol()` of every token the router lists in one Multicall3 `aggregate3` call
+  and caches all of them, instead of one `eth_call` per token for each new
+  symbol. Without Multicall3, or when the batch fails, it falls back to the
+  per-token scan.
+- **Oracle-priced liquidity skips an approve that is already right.**
+  `add_liquidity(PriceFeedAddLiquidity)` still sets each pool allowance to
+  exactly `max_stock_amount` / `max_stablecoin_amount`, the on-chain bound on
+  what the pool may pull, but no longer re-sends an `approve` whose allowance
+  already equals that cap, for example when retrying an add that reverted.
 - **`confirm_ai_agent()` signs the approval.** It requests an approval, signs
   its `main_message` with the client's signer (EIP-191 `personal_sign`, so a
   browser wallet shows the text to the user) and confirms with the nonce and
@@ -91,6 +128,7 @@ semantic versioning once published.
   `AIAgentError`, and an approval code `AIAgentApprovalError` everywhere.
 
 ### Fixed
+- **`stocks()` reads every page.** It used to stop after the first 100 stocks.
 - **`get_account_status()` no longer raises `ValueError` on a status the SDK
   does not know.** `SUBACCOUNT_REJECTED` (an AI subaccount whose main account
   rejected it) is now `AccountStatus.SUBACCOUNT_REJECTED`, and any other new

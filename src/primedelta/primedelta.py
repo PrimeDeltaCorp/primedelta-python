@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 import uuid
 import warnings
@@ -25,6 +26,7 @@ from web3.exceptions import ContractLogicError
 from web3.middleware import ExtraDataToPOAMiddleware
 from web3.types import RPCEndpoint, TxParams
 
+from primedelta.browser import BrowserSigner
 from primedelta.contracts import ContractRef, Contracts
 from primedelta.dex.handlers import (
     _AMMPoolHandler,
@@ -50,7 +52,11 @@ from primedelta.primedelta_client import (
     _decimal_arg,
     _stablecoin_deposit_amount,
 )
-from primedelta.settings import SIWE_MESSAGE, resolve_endpoints
+from primedelta.settings import (
+    SIWE_LOOPBACK_DOMAIN,
+    SIWE_MESSAGE,
+    resolve_endpoints,
+)
 from primedelta.signer import LocalAccountSigner, Signer
 from primedelta.types import (
     AccountStatus,
@@ -94,6 +100,13 @@ _RPC_TIMEOUT = 30
 # to "latest" rather than fail the read.
 _READ_RETRIES = 3
 _READ_BACKOFF = 0.3
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off")
 
 
 def _install_chain_id_cache(web3: Any) -> None:
@@ -512,6 +525,7 @@ class PrimeDelta:
         signer: Optional[Signer] = None,
         auto_relogin: bool = True,
         on_login: Optional[Callable[["PrimeDelta"], None]] = None,
+        preflight: bool = True,
     ) -> None:
         if web3_provider_url is None:
             raise ValueError("web3_provider_url is required")
@@ -561,6 +575,7 @@ class PrimeDelta:
         # Kill switch + a lock that serializes on-chain sends from this instance
         # (one signer, one in-flight tx — the nonce manager is not concurrent).
         self._halted = False
+        self._preflight = preflight and _env_flag("PRIMEDELTA_PREFLIGHT", True)
         self._tx_lock = threading.Lock()
         # Highest block that included a send from this client — reads pin to it so
         # a lagging RPC replica can't serve pre-write state (see `_fresh_block`).
@@ -570,6 +585,7 @@ class PrimeDelta:
             account=self._signer,
             contracts_provider=self._get_contracts,
             send_tx=self._build_and_send_transaction,
+            read_fresh=self._read_at_fresh_block,
         )
         self._amm_handler = _AMMPoolHandler(
             web3=self._web3,
@@ -669,13 +685,16 @@ class PrimeDelta:
         return [self._as_unsigned(tx) for tx in captured]
 
     def login(self) -> None:
+        domain, uri = self._endpoints.siwe_domain, self._endpoints.siwe_uri
+        if self._endpoints.siwe_loopback and isinstance(self._signer, BrowserSigner):
+            domain, uri = SIWE_LOOPBACK_DOMAIN, self._signer.loopback_origin
         nonce = self._primedelta_client.get_nonce()
         issued_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         message = SiweMessage(
-            domain=self._endpoints.siwe_domain,
+            domain=domain,
             address=self._signer.address,
             statement=SIWE_MESSAGE,
-            uri=self._endpoints.siwe_uri,
+            uri=uri,
             version="1",
             chain_id=self._get_contracts().chain_id,
             nonce=nonce,
@@ -1682,30 +1701,11 @@ class PrimeDelta:
                     contract_function.build_transaction(cast(TxParams, tx_params))
                 )
             except ContractLogicError as e:
-                self._next_nonce = None
-                trace = self._try_debug_trace_call(
-                    {
-                        "from": self._signer.address,
-                        "to": to_address,
-                        "data": calldata,
-                        "value": hex(value) if value else "0x0",
-                    }
-                )
-                reason = _decode_revert(e)
-                deepest = _deepest_trace_error(trace)
-                if deepest and deepest != reason and "revert" in reason.lower():
-                    reason = f"{deepest} (top-level: {reason})"
-                exc_class = (
-                    MarketClosed if "StalePrice" in reason else TransactionFailed
-                )
-                raise exc_class(
-                    fn_name,
-                    reason,
-                    to=to_address,
-                    data=calldata,
-                    trace=trace,
+                raise self._pre_submit_revert(
+                    e, fn_name, to_address, calldata, value
                 ) from e
 
+        self._preflight_call(transaction, fn_name, to_address, calldata, value)
         tx_hash = self._signer.submit_transaction(self._web3, transaction)
         # Wait for the receipt so chained calls (e.g. approve → swap) see the
         # state change. Without this the next tx's gas estimation runs against
@@ -1741,6 +1741,56 @@ class PrimeDelta:
             )
         self._note_write(receipt)
         return _tx_hash_0x(tx_hash)
+
+    def _pre_submit_revert(
+        self,
+        error: ContractLogicError,
+        fn_name: str,
+        to_address: Optional[str],
+        calldata: Optional[str],
+        value: int,
+    ) -> TransactionFailed:
+        self._next_nonce = None
+        trace = self._try_debug_trace_call(
+            {
+                "from": self._signer.address,
+                "to": to_address,
+                "data": calldata,
+                "value": hex(value) if value else "0x0",
+            }
+        )
+        reason = _decode_revert(error)
+        deepest = _deepest_trace_error(trace)
+        if deepest and deepest != reason and "revert" in reason.lower():
+            reason = f"{deepest} (top-level: {reason})"
+        exc_class = MarketClosed if "StalePrice" in reason else TransactionFailed
+        return exc_class(fn_name, reason, to=to_address, data=calldata, trace=trace)
+
+    def _preflight_call(
+        self,
+        transaction: dict[str, Any],
+        fn_name: str,
+        to_address: Optional[str],
+        calldata: Optional[str],
+        value: int,
+    ) -> None:
+        data = transaction.get("data") or calldata
+        if not self._preflight or not data or not transaction.get("to"):
+            return
+        call = {
+            "from": transaction.get("from") or self._signer.address,
+            "to": transaction["to"],
+            "value": transaction.get("value") or 0,
+            "data": data,
+        }
+        try:
+            self._web3.eth.call(cast(TxParams, call), self._fresh_block())
+        except ContractLogicError as e:
+            raise self._pre_submit_revert(
+                e, fn_name, to_address, calldata, value
+            ) from e
+        except Exception:
+            return
 
     def _build_and_send_value_transaction(self, to: str, value: int) -> str:
         return self._send_with_nonce_retry(

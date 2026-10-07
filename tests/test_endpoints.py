@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from primedelta import PrimeDelta
+from primedelta import BrowserSigner, PrimeDelta
 from primedelta.settings import resolve_endpoints
 
 
@@ -12,8 +12,32 @@ class TestResolveEndpoints:
             "PRIMEDELTA_BASE_URL",
             "PRIMEDELTA_APP_URL",
             "PRIMEDELTA_SIWE_DOMAIN",
+            "PRIMEDELTA_SIWE_LOOPBACK",
         ):
             monkeypatch.delenv(var, raising=False)
+
+    def test_loopback_sign_in_is_on_for_dev_only(self, monkeypatch):
+        self._clear(monkeypatch)
+        assert resolve_endpoints("dev").siwe_loopback is True
+        assert resolve_endpoints("testnet").siwe_loopback is False
+        assert resolve_endpoints("mainnet").siwe_loopback is False
+
+    def test_loopback_sign_in_is_off_when_endpoints_are_overridden(self, monkeypatch):
+        for var, value in (
+            ("PRIMEDELTA_BASE_URL", "http://localhost:8000"),
+            ("PRIMEDELTA_APP_URL", "http://localhost:5173"),
+            ("PRIMEDELTA_SIWE_DOMAIN", "localhost"),
+        ):
+            self._clear(monkeypatch)
+            monkeypatch.setenv(var, value)
+            assert resolve_endpoints("dev").siwe_loopback is False
+
+    def test_loopback_sign_in_env_wins(self, monkeypatch):
+        self._clear(monkeypatch)
+        monkeypatch.setenv("PRIMEDELTA_SIWE_LOOPBACK", "1")
+        assert resolve_endpoints("testnet").siwe_loopback is True
+        monkeypatch.setenv("PRIMEDELTA_SIWE_LOOPBACK", "0")
+        assert resolve_endpoints("dev").siwe_loopback is False
 
     def test_dev_defaults(self, monkeypatch):
         self._clear(monkeypatch)
@@ -69,6 +93,7 @@ class TestLoginDomainPerNetwork:
             "PRIMEDELTA_BASE_URL",
             "PRIMEDELTA_APP_URL",
             "PRIMEDELTA_SIWE_DOMAIN",
+            "PRIMEDELTA_SIWE_LOOPBACK",
         ):
             monkeypatch.delenv(var, raising=False)
         with patch("primedelta.primedelta.Web3"):
@@ -112,3 +137,47 @@ class TestLoginDomainPerNetwork:
                 network="testnet",
             )
         assert pd._primedelta_client._base_url == "https://api.testnet.primedelta.io"
+
+
+class TestLoopbackSignIn:
+    ADDR = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+
+    def _login(self, network, monkeypatch):
+        for var in (
+            "PRIMEDELTA_BASE_URL",
+            "PRIMEDELTA_APP_URL",
+            "PRIMEDELTA_SIWE_DOMAIN",
+            "PRIMEDELTA_SIWE_LOOPBACK",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        signer = BrowserSigner(port=0)
+        signed = []
+
+        def run(op, params):
+            if op == "connect":
+                return self.ADDR
+            signed.append(params["message"])
+            return "0x" + "11" * 65
+
+        signer._run = run
+        with patch("primedelta.primedelta.Web3"):
+            pd = PrimeDelta(
+                signer=signer, web3_provider_url="http://x", network=network
+            )
+        pd._primedelta_client = MagicMock()
+        pd._primedelta_client.get_nonce.return_value = "nonce12345"
+        try:
+            pd.login()
+            origin = signer.loopback_origin
+        finally:
+            signer.close()
+        return signed[0], origin
+
+    def test_browser_signer_signs_in_on_its_loopback_origin_on_dev(self, monkeypatch):
+        message, origin = self._login("dev", monkeypatch)
+        assert message.split()[0] == "127.0.0.1"
+        assert f"URI: {origin}" in message.splitlines()
+
+    def test_browser_signer_keeps_the_app_domain_elsewhere(self, monkeypatch):
+        message, _ = self._login("testnet", monkeypatch)
+        assert message.split()[0] == "mint.testnet.primedelta.io"
