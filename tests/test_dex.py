@@ -551,7 +551,7 @@ class TestDclexHandlerLiquidity:
         handler = _DclexPoolHandler(
             web3=web3,
             account=_make_account(),
-            contracts_provider=lambda: _contracts(),
+            contracts_provider=_contracts,
             send_tx=MagicMock(return_value="0xTX"),
             read_fresh=read_fresh,
         )

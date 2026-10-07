@@ -476,9 +476,12 @@ class TestBridgeEdges:
             pytest.skip("needs a descriptor limit above 1500")
         try:
             os.fstat(1500)
-            pytest.skip("descriptor 1500 is in use")
         except OSError:
-            pass
+            in_use = False
+        else:
+            in_use = True
+        if in_use:
+            pytest.skip("descriptor 1500 is in use")
         left, right = socket.socketpair()
         high = socket.socket(fileno=os.dup2(left.fileno(), 1500))
         left.close()
