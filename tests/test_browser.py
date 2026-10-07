@@ -624,7 +624,7 @@ class TestWalletJs:
 
     def _gap_after_an_empty_poll(self, poll_ms):
         page = _render_session_page("S")
-        body = re.findall(r"<script>(.*?)</script>", page, re.S)[0]
+        body = page.split("<script>", 1)[1].split("</script>", 1)[0]
         script = (
             "const calls = []; let answered = 0;"
             "globalThis.window = {addEventListener() {}, removeEventListener() {},"
