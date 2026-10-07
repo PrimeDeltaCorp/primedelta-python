@@ -51,6 +51,9 @@ semantic versioning once published.
   `NotEnoughPoolLiquidity` when the pool can't fill the amount. The bundled
   `dclex_pool` ABI gains `getFeeCurve` / `getReserves` and a `stock` ABI holds
   `multiplier`.
+- **`oracle_token_price(symbol)`** — the USD price of one token of an
+  oracle-priced symbol: the signed share price times `multiplier()`. Use it,
+  not `oracle_price` (one share), to value a token amount after a split.
 - **`keep_alive()`** touches the backend session (`/verification-status/`)
   without signing: `True` while it lives (which extends its idle timeout),
   `False` once it has expired. It never re-logs-in, so a background heartbeat

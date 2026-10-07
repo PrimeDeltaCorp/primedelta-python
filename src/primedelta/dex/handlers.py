@@ -1079,6 +1079,15 @@ class _QuoteHandler:
             return Decimal(in_units) / Decimal(10) ** in_exp
         raise ValueError("exact must be 'input' or 'output'")
 
+    def token_multiplier(self, symbol: str) -> tuple[int, int]:
+        contracts = self._contracts_provider()
+        stock = _resolve_stock_token(self._web3, contracts, symbol)
+        token = self._contract(stock, _require_pool_abi(contracts, "stock"))
+        numerator, denominator = _call_view(
+            "Stock.multiplier", lambda: token.functions.multiplier().call()
+        )
+        return int(numerator), int(denominator)
+
     def oracle_quote(
         self, symbol: str, side: SwapSide, amount_in: Decimal, signed_update: bytes
     ) -> OracleQuote:

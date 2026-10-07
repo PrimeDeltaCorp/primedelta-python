@@ -2028,6 +2028,19 @@ class PrimeDelta:
             )
         return self._quote_handler.oracle_quote(symbol, side, amount_in, updates[0])
 
+    def oracle_token_price(self, symbol: str) -> Optional[Decimal]:
+        """USD price of one token of an oracle-priced symbol: the signed share
+        price times the token's ``multiplier()`` (shares per token), which is
+        what the oracle-priced pool values a token at. Differs from
+        ``oracle_price`` (one share) once a split has changed the multiplier.
+        ``None`` when there is no signed price (market closed). Needs a
+        logged-in session."""
+        share_price = self.oracle_price(symbol)
+        if share_price is None:
+            return None
+        numerator, denominator = self._quote_handler.token_multiplier(symbol)
+        return share_price * numerator / denominator
+
     def keep_alive(self) -> bool:
         """Touch the backend session without signing anything: True while it is
         alive (and extends its idle timeout), False once it has expired. Never

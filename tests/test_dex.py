@@ -1612,6 +1612,9 @@ class TestOracleQuote:
                 _signed_update(25_000_000_000, -8),
             )
 
+    def test_token_multiplier_reads_the_stock_token(self):
+        assert self._handler(multiplier=(3, 2)).token_multiplier("AAPL") == (3, 2)
+
     def test_unknown_pool_raises_pool_not_found(self):
         with pytest.raises(PoolNotFound):
             self._handler(pool="0x" + "0" * 40).oracle_quote(
@@ -1655,6 +1658,29 @@ class TestOracleQuoteFacade:
         ):
             with pytest.raises(OraclePriceUnavailable, match="market is closed"):
                 pd.oracle_quote("AAPL", SwapSide.STABLECOIN_TO_STOCK, Decimal("5"))
+
+    @pytest.mark.parametrize(
+        "multiplier, expected", [((1, 1), Decimal("250")), ((3, 2), Decimal("375"))]
+    )
+    def test_token_price_applies_the_multiplier(self, multiplier, expected):
+        pd = _make_primedelta()
+        with (
+            patch.object(pd, "oracle_price", return_value=Decimal("250")),
+            patch.object(
+                pd._quote_handler, "token_multiplier", return_value=multiplier
+            ) as read,
+        ):
+            assert pd.oracle_token_price("AAPL") == expected
+        read.assert_called_once_with("AAPL")
+
+    def test_token_price_is_none_without_a_signed_price(self):
+        pd = _make_primedelta()
+        with (
+            patch.object(pd, "oracle_price", return_value=None),
+            patch.object(pd._quote_handler, "token_multiplier") as read,
+        ):
+            assert pd.oracle_token_price("AAPL") is None
+        read.assert_not_called()
 
     def test_keep_alive_touches_the_session(self):
         pd = _make_primedelta()
