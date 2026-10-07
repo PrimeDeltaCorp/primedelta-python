@@ -15,12 +15,16 @@ semantic versioning once published.
   never asked to approve a transaction that would fail. A transport error skips
   the check, since the chain still enforces it. Turn it off with
   `PrimeDelta(preflight=False)` or `PRIMEDELTA_PREFLIGHT=0`. `craft()` never
-  simulates.
+  simulates. Native DEL transfers (`send_del`) are simulated too.
 - **`BrowserSigner` keeps one wallet tab per session.** Its loopback server now
   lives as long as the signer, and the page it opens stays open and long-polls
   for the next request, so the wallet asks to connect once per session and
   every later signature or transaction appears in that tab instead of a new
-  one. A new tab opens only when none is polling. The page refuses a request
+  one. A tab that is busy with a wallet prompt still counts as open; a new tab
+  opens only when none is listening, and again every 15 seconds while a request
+  waits with no tab. A closed tab's abandoned poll can't take the next request.
+  `close()` fails pending requests at once, and the signer refuses requests
+  after it. The page refuses a request
   for an account other than the one the session connected. `port=` (or
   `PRIMEDELTA_BROWSER_SIGNER_PORT`) pins the loopback port so the wallet
   remembers the connection across restarts; a busy pinned port falls back to a
@@ -107,8 +111,8 @@ semantic versioning once published.
 ### Changed
 - **One read resolves every token symbol.** The first lookup of a symbol reads
   `symbol()` of every token the router lists in one Multicall3 `aggregate3` call
-  and caches all of them, instead of one `eth_call` per token for each new
-  symbol. Without Multicall3, or when the batch fails, it falls back to the
+  and caches all of them for 10 minutes (so a renamed ticker is picked up),
+  instead of one `eth_call` per token for each new symbol. Without Multicall3, or when the batch fails, it falls back to the
   per-token scan.
 - **Oracle-priced liquidity skips an approve that is already right.**
   `add_liquidity(PriceFeedAddLiquidity)` still sets each pool allowance to

@@ -32,11 +32,16 @@ class TestResolveEndpoints:
             monkeypatch.setenv(var, value)
             assert resolve_endpoints("dev").siwe_loopback is False
 
-    def test_loopback_sign_in_env_wins(self, monkeypatch):
+    @pytest.mark.parametrize("raw", ["1", "true", "Yes", "ON"])
+    def test_loopback_sign_in_env_turns_it_on(self, monkeypatch, raw):
         self._clear(monkeypatch)
-        monkeypatch.setenv("PRIMEDELTA_SIWE_LOOPBACK", "1")
+        monkeypatch.setenv("PRIMEDELTA_SIWE_LOOPBACK", raw)
         assert resolve_endpoints("testnet").siwe_loopback is True
-        monkeypatch.setenv("PRIMEDELTA_SIWE_LOOPBACK", "0")
+
+    @pytest.mark.parametrize("raw", ["0", "false", "off", "nope"])
+    def test_loopback_sign_in_env_turns_it_off(self, monkeypatch, raw):
+        self._clear(monkeypatch)
+        monkeypatch.setenv("PRIMEDELTA_SIWE_LOOPBACK", raw)
         assert resolve_endpoints("dev").siwe_loopback is False
 
     def test_dev_defaults(self, monkeypatch):

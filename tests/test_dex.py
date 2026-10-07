@@ -530,6 +530,38 @@ class TestDclexHandlerLiquidity:
         assert (_DCLEX_POOL, 10 * 10**18) in approve_args
         assert (_DCLEX_POOL, 20 * 10**6) in approve_args
 
+    def test_the_allowance_read_is_pinned_to_our_last_write(self):
+        web3 = _make_web3_mock()
+        contract = MagicMock()
+        web3.eth.contract.return_value = contract
+        contract.functions.stockTokenToPool.return_value.call.return_value = _DCLEX_POOL
+        blocks = []
+
+        def read_fresh(read_fn):
+            blocks.append(777)
+            return read_fn(777)
+
+        handler = _DclexPoolHandler(
+            web3=web3,
+            account=_make_account(),
+            contracts_provider=lambda: _contracts(),
+            send_tx=MagicMock(return_value="0xTX"),
+            read_fresh=read_fresh,
+        )
+        handler.add_liquidity(
+            PriceFeedAddLiquidity(
+                symbol="AAPL",
+                liquidity_amount=Decimal(1),
+                max_stock_amount=Decimal("1"),
+                max_stablecoin_amount=Decimal("1"),
+            )
+        )
+        identifiers = [
+            c.kwargs["block_identifier"]
+            for c in contract.functions.allowance.return_value.call.call_args_list
+        ]
+        assert identifiers == [777, 777]
+
     def test_add_liquidity_skips_an_approve_already_set_to_the_cap(self):
         handler, web3, contract, send_tx = self._setup()
 
@@ -1392,6 +1424,67 @@ class TestResolveStockTokenMulticall:
             _resolve_stock_token(web3, _contracts(with_multicall=True), "DUP") == first
         )
 
+    def test_first_token_wins_when_the_answer_comes_from_the_cache(self):
+        first, second = _AMMT1_TOKEN, _AMMT2_TOKEN
+        web3, _ = self._web3(
+            [self._symbol("DUP"), self._symbol("DUP"), self._symbol("OTHER")],
+            [first, second, "0x" + "F" * 40],
+        )
+        contracts = _contracts(with_multicall=True)
+        _resolve_stock_token(web3, contracts, "OTHER")
+        calls = web3.eth.contract.call_count
+        assert _resolve_stock_token(web3, contracts, "DUP") == first
+        assert web3.eth.contract.call_count == calls
+
+    def test_a_failed_or_undecodable_symbol_is_skipped(self):
+        from eth_abi import encode
+
+        tokens = ["0x" + "E" * 40, "0x" + "F" * 40, _AMMT1_TOKEN]
+        web3, _ = self._web3(
+            [
+                (False, encode(["string"], ["AMMT1"])),
+                (True, b"\x01" * 32),
+                self._symbol("AMMT1"),
+            ],
+            tokens,
+        )
+        assert (
+            _resolve_stock_token(web3, _contracts(with_multicall=True), "AMMT1")
+            == _AMMT1_TOKEN
+        )
+
+    def test_cached_symbols_expire(self, monkeypatch):
+        from primedelta.dex import handlers
+
+        now = [1000.0]
+        monkeypatch.setattr(handlers.time, "monotonic", lambda: now[0])
+        web3, by_address = self._web3([self._symbol("AMMT1")], [_AMMT1_TOKEN])
+        contracts = _contracts(with_multicall=True)
+        _resolve_stock_token(web3, contracts, "AMMT1")
+        aggregate = by_address[_MULTICALL_ADDRESS].functions.aggregate3
+        assert aggregate.call_count == 1
+        now[0] += handlers._SYMBOL_TTL_SECONDS - 1
+        _resolve_stock_token(web3, contracts, "AMMT1")
+        assert aggregate.call_count == 1
+        now[0] += 2
+        _resolve_stock_token(web3, contracts, "AMMT1")
+        assert aggregate.call_count == 2
+
+    def test_a_newer_scan_replaces_a_renamed_symbol(self, monkeypatch):
+        from primedelta.dex import handlers
+
+        now = [1000.0]
+        monkeypatch.setattr(handlers.time, "monotonic", lambda: now[0])
+        tokens = [_AMMT1_TOKEN]
+        results = [self._symbol("XYZ")]
+        web3, _ = self._web3(results, tokens)
+        contracts = _contracts(with_multicall=True)
+        assert _resolve_stock_token(web3, contracts, "XYZ") == _AMMT1_TOKEN
+        tokens.append(_AMMT2_TOKEN)
+        results[:] = [self._symbol("ABC"), self._symbol("XYZ")]
+        now[0] += handlers._SYMBOL_TTL_SECONDS + 1
+        assert _resolve_stock_token(web3, contracts, "XYZ") == _AMMT2_TOKEN
+
     def test_unknown_symbol_raises_pool_not_found(self):
         web3, _ = self._web3([self._symbol("AMMT1")], [_AMMT1_TOKEN])
         with pytest.raises(PoolNotFound):
@@ -1910,6 +2003,32 @@ class TestPreflight:
         assert block == "latest"
         pd._signer.submit_transaction.assert_called_once()
 
+    @pytest.mark.parametrize("wallet", [False, True])
+    def test_call_carries_the_transaction_value(self, wallet):
+        pd = self._pd(wallet=wallet)
+        fn = self._fn()
+        fn.build_transaction.side_effect = lambda params: {
+            **fn.build_transaction.return_value,
+            "value": params["value"],
+        }
+        pd._build_and_send_transaction(fn, value=123)
+        assert pd._web3.eth.call.call_args.args[0]["value"] == 123
+
+    def test_a_value_transfer_is_simulated_too(self):
+        from web3.exceptions import ContractLogicError
+
+        pd = self._pd()
+        pd._web3.eth.call.side_effect = ContractLogicError(
+            "execution reverted", data="0xdeadbeef"
+        )
+        with pytest.raises(TransactionFailed) as info:
+            pd._build_and_send_value_transaction(_ROUTER_ADDRESS, 10**18)
+        assert info.value.function_name == "transfer"
+        call = pd._web3.eth.call.call_args.args[0]
+        assert call["value"] == 10**18 and call["data"] == "0x"
+        pd._signer.submit_transaction.assert_not_called()
+        assert pd._next_nonce is None
+
     def test_call_is_pinned_to_our_last_write(self):
         pd = self._pd()
         pd._last_write_block = 500
@@ -1947,11 +2066,19 @@ class TestPreflight:
         pd._web3.eth.call.assert_not_called()
         pd._signer.submit_transaction.assert_called_once()
 
-    def test_can_be_disabled_by_env(self, monkeypatch):
-        monkeypatch.setenv("PRIMEDELTA_PREFLIGHT", "0")
+    @pytest.mark.parametrize("raw", ["0", "false", "No", "OFF"])
+    def test_can_be_disabled_by_env(self, monkeypatch, raw):
+        monkeypatch.setenv("PRIMEDELTA_PREFLIGHT", raw)
         pd = self._pd()
         pd._build_and_send_transaction(self._fn())
         pd._web3.eth.call.assert_not_called()
+
+    @pytest.mark.parametrize("raw", ["1", "true", "yes", "on", ""])
+    def test_other_env_values_keep_it_on(self, monkeypatch, raw):
+        monkeypatch.setenv("PRIMEDELTA_PREFLIGHT", raw)
+        pd = self._pd()
+        pd._build_and_send_transaction(self._fn())
+        pd._web3.eth.call.assert_called_once()
 
 
 class TestClaimWithdrawals:

@@ -1,6 +1,8 @@
 import json
 import os
 import secrets
+import select
+import socket
 import sys
 import threading
 import time
@@ -175,6 +177,21 @@ serve();
 _PORT_ENV = "PRIMEDELTA_BROWSER_SIGNER_PORT"
 
 
+class _QuietServer(ThreadingHTTPServer):
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        pass
+
+
+def _peer_open(connection: Any) -> bool:
+    try:
+        readable, _, _ = select.select([connection], [], [], 0)
+        if not readable:
+            return True
+        return bool(connection.recv(1, socket.MSG_PEEK))
+    except (OSError, ValueError):
+        return False
+
+
 def _json_for_script(value: Any) -> str:
     return (
         json.dumps(value)
@@ -210,6 +227,8 @@ def _loopback_port(port: Optional[int]) -> int:
 class _LoopbackBridge:
     poll_seconds = 20.0
     tab_grace_seconds = 3.0
+    liveness_seconds = 1.0
+    reopen_seconds = 15.0
 
     def __init__(self, timeout: float, port: int = 0) -> None:
         self._timeout = timeout
@@ -221,6 +240,7 @@ class _LoopbackBridge:
         self._polling = 0
         self._last_poll = 0.0
         self._server: Optional[ThreadingHTTPServer] = None
+        self._closed = False
         self._origin = ""
         self._host = ""
 
@@ -235,6 +255,8 @@ class _LoopbackBridge:
 
     def _start(self) -> None:
         with self._cond:
+            if self._closed:
+                raise BrowserSignerError("the wallet signer is closed")
             if self._server is not None:
                 return
             server = self._bind(self._handler())
@@ -246,8 +268,8 @@ class _LoopbackBridge:
 
     def _bind(self, handler: type[BaseHTTPRequestHandler]) -> ThreadingHTTPServer:
         try:
-            return ThreadingHTTPServer(("127.0.0.1", self._requested_port), handler)
-        except OSError as exc:
+            return _QuietServer(("127.0.0.1", self._requested_port), handler)
+        except (OSError, OverflowError) as exc:
             if self._requested_port == 0:
                 raise
             print(
@@ -256,15 +278,27 @@ class _LoopbackBridge:
                 file=sys.stderr,
                 flush=True,
             )
-            return ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            return _QuietServer(("127.0.0.1", 0), handler)
 
     def close(self) -> None:
         with self._cond:
             server, self._server = self._server, None
+            self._closed = True
+            for job in self._jobs.values():
+                if not job["done"].is_set():
+                    job["closed"] = True
+                    job["done"].set()
+            self._queue.clear()
             self._cond.notify_all()
         if server is not None:
             server.shutdown()
             server.server_close()
+
+    def _tab_busy(self) -> bool:
+        return any(
+            job["dispatched"] and not job["done"].is_set()
+            for job in self._jobs.values()
+        )
 
     def request(
         self, op: str, params: dict[str, Any], opener: Callable[[str], None]
@@ -272,28 +306,61 @@ class _LoopbackBridge:
         self._start()
         state = secrets.token_urlsafe(16)
         done = threading.Event()
+        job: dict[str, Any] = {
+            "op": op,
+            "params": params,
+            "done": done,
+            "dispatched": False,
+            "closed": False,
+            "result": None,
+        }
         with self._cond:
-            self._jobs[state] = {
-                "op": op,
-                "params": params,
-                "done": done,
-                "dispatched": False,
-                "result": None,
-            }
+            self._jobs[state] = job
             self._queue.append(state)
             tab_ready = (
                 self._polling > 0
+                or self._tab_busy()
                 or time.monotonic() - self._last_poll < self.tab_grace_seconds
             )
             self._cond.notify_all()
+        opened_at: Optional[float] = None
         if not tab_ready:
             opener(self.page_url)
-        finished = done.wait(self._timeout)
+            opened_at = time.monotonic()
+        give_up = time.monotonic() + self._timeout
+        while not done.is_set():
+            now = time.monotonic()
+            if now >= give_up:
+                break
+            if done.wait(min(self.liveness_seconds, give_up - now)):
+                break
+            with self._cond:
+                stranded = (
+                    not job["dispatched"]
+                    and self._polling == 0
+                    and not self._tab_busy()
+                )
+            now = time.monotonic()
+            if stranded and (
+                opened_at is None or now - opened_at >= self.reopen_seconds
+            ):
+                opener(self.page_url)
+                opened_at = now
         with self._cond:
-            job = self._jobs.pop(state)
+            self._jobs.pop(state, None)
             if state in self._queue:
                 self._queue.remove(state)
-            finished = finished or done.is_set()
+            finished = done.is_set()
+        if job["closed"]:
+            raise BrowserSignerError(
+                "the wallet signer was closed"
+                + (
+                    "; the wallet may still complete the request, so check balances "
+                    "and transactions before retrying"
+                    if job["dispatched"]
+                    else "; nothing was sent to the wallet"
+                )
+            )
         if not finished:
             if job["dispatched"]:
                 raise BrowserSignerError(
@@ -308,23 +375,39 @@ class _LoopbackBridge:
             raise BrowserSignerError(payload["error"])
         return payload.get("value")
 
-    def _next_job(self) -> Optional[dict[str, Any]]:
+    def _next_job(self, alive: Callable[[], bool]) -> Optional[dict[str, Any]]:
         deadline = time.monotonic() + self.poll_seconds
         with self._cond:
             self._polling += 1
             try:
-                while not self._queue:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0 or self._server is None:
+                while True:
+                    if self._server is None or not alive():
                         return None
-                    self._cond.wait(remaining)
-                state = self._queue.pop(0)
-                job = self._jobs[state]
-                job["dispatched"] = True
-                return {"state": state, "op": job["op"], "params": job["params"]}
+                    if self._queue:
+                        state = self._queue.pop(0)
+                        job = self._jobs[state]
+                        job["dispatched"] = True
+                        return {
+                            "state": state,
+                            "op": job["op"],
+                            "params": job["params"],
+                        }
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return None
+                    self._cond.wait(min(remaining, self.liveness_seconds))
             finally:
                 self._polling -= 1
                 self._last_poll = time.monotonic()
+
+    def _requeue(self, state: str) -> None:
+        with self._cond:
+            job = self._jobs.get(state)
+            if job is None or job["done"].is_set():
+                return
+            job["dispatched"] = False
+            self._queue.insert(0, state)
+            self._cond.notify_all()
 
     def _resolve(self, state: Optional[str], payload: Any) -> bool:
         if not state or not isinstance(payload, dict):
@@ -335,6 +418,7 @@ class _LoopbackBridge:
                 return False
             job["result"] = payload
             job["done"].set()
+            self._last_poll = time.monotonic()
         return True
 
     def _authorized(self, host: Optional[str], session: Optional[str]) -> bool:
@@ -380,11 +464,15 @@ class _LoopbackBridge:
                     page = _render_session_page(bridge._session).encode()
                     self._reply(200, page, "text/html; charset=utf-8")
                 elif path == "/next":
-                    job = bridge._next_job()
+                    job = bridge._next_job(lambda: _peer_open(self.connection))
                     if job is None:
                         self._reply(204)
-                    else:
+                        return
+                    try:
                         self._reply(200, json.dumps(job).encode(), "application/json")
+                    except OSError:
+                        bridge._requeue(job["state"])
+                        raise
                 else:
                     self._reply(404)
 
@@ -490,8 +578,9 @@ class BrowserSigner:
 
 
 class _RemoteBridge:
-    """Like `_LoopbackBridge` but for a HOSTED origin: the wallet page is served
-    by the hosting app (not a per-op 127.0.0.1 server). A pending operation is
+    """For a HOSTED origin: the hosting app serves the one-shot wallet page (the
+    same wallet logic as the local signer tab) instead of a 127.0.0.1 server. A
+    pending operation is
     parked under a one-time state token; the hosting app renders it (GET /sign)
     and delivers the result (POST /result -> `resolve`). Thread-safe; supports
     concurrent users, each on their own token."""
@@ -546,9 +635,10 @@ class RemoteBrowserSigner:
     """Sign through the user's own browser wallet reached at a HOSTED HTTPS
     origin — for a hosted/remote MCP that can't open the user's *local* browser.
 
-    It reuses `BrowserSigner`'s one-shot page and one-time state token, but the
-    hosting app serves the page from ``base_url`` and decides how to send the
-    user there via the ``deliver`` callback (e.g. an MCP url-mode elicitation).
+    It serves a one-shot wallet page (the same wallet logic as `BrowserSigner`'s
+    tab) under a one-time state token, but the hosting app serves the page from
+    ``base_url`` and decides how to send the user there via the ``deliver``
+    callback (e.g. an MCP url-mode elicitation).
     The hosting app must:
       - serve ``GET /sign?state=<token>`` -> :meth:`render_page`
       - serve ``POST /result?state=<token>`` -> :meth:`resolve`

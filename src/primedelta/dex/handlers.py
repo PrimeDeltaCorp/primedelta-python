@@ -1,3 +1,4 @@
+import time
 from decimal import Decimal
 from typing import Any, Callable, Optional
 
@@ -75,8 +76,9 @@ def _approve_if_insufficient(
 # it on every quote/spot/swap — and makes those calls robust to the dev gateway
 # occasionally serving an inconsistent read that would otherwise spuriously raise
 # PoolNotFound. Only successful resolutions are cached (a miss retries next call).
-_STOCK_ADDR_CACHE: dict[tuple[int, str], str] = {}
+_STOCK_ADDR_CACHE: dict[tuple[int, str], tuple[str, float]] = {}
 _POOL_ADDR_CACHE: dict[tuple[int, str], str] = {}
+_SYMBOL_TTL_SECONDS = 600.0
 
 
 def _clear_resolution_cache() -> None:
@@ -98,11 +100,14 @@ def _resolve_stock_token(web3: Web3, contracts: "Contracts", symbol: str) -> str
     """
     cache_key = (contracts.chain_id, symbol)
     cached = _STOCK_ADDR_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
+    if cached is not None and time.monotonic() < cached[1]:
+        return cached[0]
     pool = contracts.pools.get(symbol)
     if pool is not None:
-        _STOCK_ADDR_CACHE[cache_key] = pool.stock_token_address
+        _STOCK_ADDR_CACHE[cache_key] = (
+            pool.stock_token_address,
+            time.monotonic() + _SYMBOL_TTL_SECONDS,
+        )
         return pool.stock_token_address
     router_ref = contracts.core.dex_router
     if router_ref is None:
@@ -110,7 +115,7 @@ def _resolve_stock_token(web3: Web3, contracts: "Contracts", symbol: str) -> str
     addr = _resolve_via_router(web3, contracts, router_ref, symbol)
     if addr is None:
         raise PoolNotFound(symbol)
-    _STOCK_ADDR_CACHE[cache_key] = addr
+    _STOCK_ADDR_CACHE[cache_key] = (addr, time.monotonic() + _SYMBOL_TTL_SECONDS)
     return addr
 
 
@@ -129,11 +134,14 @@ def _resolve_via_router(
     batched = _batched_symbols(web3, contracts, erc20_abi, all_tokens)
     if batched is not None:
         found: Optional[str] = None
+        seen: set[str] = set()
+        expires = time.monotonic() + _SYMBOL_TTL_SECONDS
         for addr, token_symbol in batched:
-            if token_symbol is None:
+            if token_symbol is None or token_symbol in seen:
                 continue
-            _STOCK_ADDR_CACHE.setdefault((contracts.chain_id, token_symbol), addr)
-            if found is None and token_symbol == symbol:
+            seen.add(token_symbol)
+            _STOCK_ADDR_CACHE[(contracts.chain_id, token_symbol)] = (addr, expires)
+            if token_symbol == symbol:
                 found = addr
         return found
     for addr in all_tokens:

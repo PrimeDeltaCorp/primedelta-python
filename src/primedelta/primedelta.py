@@ -1814,6 +1814,7 @@ class PrimeDelta:
             transaction["gasPrice"] = self._web3.eth.gas_price
             transaction["nonce"] = self._reserve_nonce()
             transaction["gas"] = 21_000
+        self._preflight_call({**transaction, "data": "0x"}, "transfer", to, None, value)
         tx_hash = self._signer.submit_transaction(self._web3, transaction)
         receipt = self._web3.eth.wait_for_transaction_receipt(tx_hash)
         if receipt["status"] == 0:

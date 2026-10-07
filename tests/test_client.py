@@ -349,6 +349,21 @@ class TestReads:
         pages = [call.kwargs["params"]["page"] for call in session.get.call_args_list]
         assert pages == [1, 2]
 
+    def test_stocks_stops_at_the_page_cap(self):
+        client, session = _client_with_session()
+        item = {
+            "symbol": "A",
+            "name": "A",
+            "cusipId": "0",
+            "smartContractAddress": "0x" + "1" * 40,
+            "numberOfTokens": "1",
+        }
+        session.get.return_value = _Resp(
+            200, {"items": [item], "total": 10**9, "count": 1}
+        )
+        client.stocks()
+        assert session.get.call_count == 50
+
     def test_stocks_stops_on_an_empty_page(self):
         client, session = _client_with_session()
         session.get.side_effect = [
