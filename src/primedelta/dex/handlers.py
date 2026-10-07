@@ -20,6 +20,7 @@ _STOCK_DECIMALS = Decimal(10**18)
 
 # DEFAULT_FEE_TIER from DclexRouter.sol — the oracle-free pools are created with this.
 _AMM_FEE_TIER = 3000
+_LIQUIDITY_DEADLINE_SECONDS = 600
 
 
 def _require_pool_abi(contracts: "Contracts", key: str) -> list[Any]:
@@ -78,6 +79,7 @@ def _approve_if_insufficient(
 # PoolNotFound. Only successful resolutions are cached (a miss retries next call).
 _STOCK_ADDR_CACHE: dict[tuple[int, str], tuple[str, float]] = {}
 _POOL_ADDR_CACHE: dict[tuple[int, str], str] = {}
+_POOL_BOUNDS_CACHE: dict[tuple[int, str], bool] = {}
 _SYMBOL_TTL_SECONDS = 600.0
 
 
@@ -87,6 +89,30 @@ def _clear_resolution_cache() -> None:
     process (or between tests)."""
     _STOCK_ADDR_CACHE.clear()
     _POOL_ADDR_CACHE.clear()
+    _POOL_BOUNDS_CACHE.clear()
+
+
+def _selector(signature: str) -> bytes:
+    return bytes(Web3.keccak(text=signature)[:4])
+
+
+_BOUNDED_ADD_LIQUIDITY = _selector("addLiquidity(uint256,uint256,uint256,uint256)")
+_LEGACY_ADD_LIQUIDITY = _selector("addLiquidity(uint256)")
+_PUSH4 = b"\x63"
+
+
+def _pool_takes_bounds(web3: Web3, contracts: "Contracts", pool_address: str) -> bool:
+    key = (contracts.chain_id, pool_address.lower())
+    cached = _POOL_BOUNDS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    code = bytes(web3.eth.get_code(web3.to_checksum_address(pool_address)))
+    bounded = (
+        _PUSH4 + _BOUNDED_ADD_LIQUIDITY in code
+        or _PUSH4 + _LEGACY_ADD_LIQUIDITY not in code
+    )
+    _POOL_BOUNDS_CACHE[key] = bounded
+    return bounded
 
 
 def _resolve_stock_token(web3: Web3, contracts: "Contracts", symbol: str) -> str:
@@ -539,6 +565,15 @@ class _DclexPoolHandler:
         # if it would exceed allowance (chain-enforced slippage bound).
         self._approve_at(stock_token_addr, pool_address, max_stock_units)
         self._approve(contracts.core.stablecoin, pool_address, max_stablecoin_units)
+        if _pool_takes_bounds(self._web3, contracts, pool_address):
+            return self._send_tx(
+                pool.functions.addLiquidity(
+                    liquidity_units,
+                    max_stock_units,
+                    max_stablecoin_units,
+                    self._now() + _LIQUIDITY_DEADLINE_SECONDS,
+                )
+            )
         return self._send_tx(pool.functions.addLiquidity(liquidity_units))
 
     def remove_liquidity(self, params: PriceFeedRemoveLiquidity) -> str:
@@ -549,7 +584,19 @@ class _DclexPoolHandler:
         pool_address = self._lookup_dclex_pool(router_ref, stock_token_addr)
         pool = self._dclex_pool(contracts, pool_address)
         liquidity_units = int(params.liquidity_amount)
+        if _pool_takes_bounds(self._web3, contracts, pool_address):
+            return self._send_tx(
+                pool.functions.removeLiquidity(
+                    liquidity_units,
+                    int(params.min_stock_amount * _STOCK_DECIMALS),
+                    int(params.min_stablecoin_amount * _STABLECOIN_DECIMALS),
+                    self._now() + _LIQUIDITY_DEADLINE_SECONDS,
+                )
+            )
         return self._send_tx(pool.functions.removeLiquidity(liquidity_units))
+
+    def _now(self) -> int:
+        return int(self._web3.eth.get_block("latest")["timestamp"])
 
     def _require_router(self, contracts: Contracts) -> ContractRef:
         if contracts.core.dex_router is None:

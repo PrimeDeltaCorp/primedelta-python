@@ -68,6 +68,34 @@
   },
   {
     "type": "function",
+    "name": "addLiquidity",
+    "inputs": [
+      {
+        "name": "liquidityAmount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "maxStockIn",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "maxStablecoinIn",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "deadline",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "allowance",
     "inputs": [
       {
@@ -287,6 +315,34 @@
     "inputs": [
       {
         "name": "liquidityAmount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "removeLiquidity",
+    "inputs": [
+      {
+        "name": "liquidityAmount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "minStockOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "minStablecoinOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "deadline",
         "type": "uint256",
         "internalType": "uint256"
       }

@@ -33,6 +33,9 @@ from primedelta.dex.handlers import (
     _RouterSwapHandler,
 )
 from primedelta.primedelta import _READ_RETRIES, _decode_revert
+
+_BOUNDED_ADD = bytes.fromhex("aebf3e41")
+_LEGACY_ADD = bytes.fromhex("51c6590a")
 from primedelta.types import AccountStatus
 
 
@@ -494,6 +497,7 @@ class TestDclexHandlerLiquidity:
             contracts_provider=lambda: _contracts(),
             send_tx=send_tx,
         )
+        web3.eth.get_code.return_value = b"\x00\x63" + _BOUNDED_ADD + b"\x00"
         return handler, web3, contract, send_tx
 
     def test_add_liquidity_approves_caps_and_calls_pool(self):
@@ -508,7 +512,9 @@ class TestDclexHandlerLiquidity:
         tx = handler.add_liquidity(params)
 
         assert tx == "0xTX"
-        contract.functions.addLiquidity.assert_called_once_with(30 * 10**18)
+        contract.functions.addLiquidity.assert_called_once_with(
+            30 * 10**18, 10 * 10**18, 20 * 10**6, 1_700_000_600
+        )
         approve_args = [a.args for a in contract.functions.approve.call_args_list]
         assert (_DCLEX_POOL, 10 * 10**18) in approve_args
         assert (_DCLEX_POOL, 20 * 10**6) in approve_args
@@ -595,7 +601,58 @@ class TestDclexHandlerLiquidity:
         )
         tx = handler.remove_liquidity(params)
         assert tx == "0xTX"
-        contract.functions.removeLiquidity.assert_called_once_with(5 * 10**18)
+        contract.functions.removeLiquidity.assert_called_once_with(
+            5 * 10**18, 0, 0, 1_700_000_600
+        )
+
+    def test_remove_liquidity_passes_the_floors(self):
+        handler, web3, contract, send_tx = self._setup()
+        handler.remove_liquidity(
+            PriceFeedRemoveLiquidity(
+                symbol="AAPL",
+                liquidity_amount=Decimal(5 * 10**18),
+                min_stock_amount=Decimal("0.5"),
+                min_stablecoin_amount=Decimal("120.25"),
+            )
+        )
+        contract.functions.removeLiquidity.assert_called_once_with(
+            5 * 10**18, 5 * 10**17, 120_250_000, 1_700_000_600
+        )
+
+    def test_a_legacy_pool_gets_the_one_argument_calls(self):
+        handler, web3, contract, send_tx = self._setup()
+        web3.eth.get_code.return_value = b"\x63" + _LEGACY_ADD
+        handler.add_liquidity(
+            PriceFeedAddLiquidity(
+                symbol="AAPL",
+                liquidity_amount=Decimal(30 * 10**18),
+                max_stock_amount=Decimal("10"),
+                max_stablecoin_amount=Decimal("20"),
+            )
+        )
+        handler.remove_liquidity(
+            PriceFeedRemoveLiquidity(symbol="AAPL", liquidity_amount=Decimal(5))
+        )
+        contract.functions.addLiquidity.assert_called_once_with(30 * 10**18)
+        contract.functions.removeLiquidity.assert_called_once_with(5)
+
+    def test_unknown_bytecode_gets_the_bounded_calls(self):
+        handler, web3, contract, send_tx = self._setup()
+        web3.eth.get_code.return_value = b"\x60\x80"
+        handler.remove_liquidity(
+            PriceFeedRemoveLiquidity(symbol="AAPL", liquidity_amount=Decimal(5))
+        )
+        contract.functions.removeLiquidity.assert_called_once_with(
+            5, 0, 0, 1_700_000_600
+        )
+
+    def test_the_pool_version_is_read_once(self):
+        handler, web3, contract, send_tx = self._setup()
+        for _ in range(3):
+            handler.remove_liquidity(
+                PriceFeedRemoveLiquidity(symbol="AAPL", liquidity_amount=Decimal(5))
+            )
+        web3.eth.get_code.assert_called_once()
 
     def test_lookup_raises_when_router_returns_zero(self):
         handler, web3, contract, _ = self._setup()

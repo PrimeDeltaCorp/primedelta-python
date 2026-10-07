@@ -51,6 +51,8 @@ class AMMAddLiquidity:
 class PriceFeedRemoveLiquidity:
     symbol: str
     liquidity_amount: Decimal
+    min_stock_amount: Decimal = Decimal(0)
+    min_stablecoin_amount: Decimal = Decimal(0)
     pool_type: ClassVar[PoolType] = PoolType.PRICE_FEED
 
 
