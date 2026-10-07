@@ -135,17 +135,17 @@ semantic versioning once published.
 
 ### Fixed
 - **Oracle-priced liquidity works on the current pools.** Pools deployed since
-  the July 2026 contract update (dev) only have
+  the July 2026 contract update only have
   `addLiquidity(liquidityAmount, maxStockIn, maxStablecoinIn, deadline)` and
   `removeLiquidity(liquidityAmount, minStockOut, minStablecoinOut, deadline)`;
   the SDK called the old one-argument functions, which those pools don't have,
   so every `add_liquidity(PriceFeedAddLiquidity)` / `remove_liquidity(
   PriceFeedRemoveLiquidity)` reverted. The SDK now reads each pool's bytecode
   once and calls the four-argument form, passing the caps and a 10-minute
-  deadline, and keeps the one-argument form for pools that only have it
-  (testnet today). `PriceFeedRemoveLiquidity` gains optional
-  `min_stock_amount` / `min_stablecoin_amount` floors, enforced by the pools
-  that take them.
+  deadline, and keeps the one-argument form for older pools that only have it.
+  `PriceFeedRemoveLiquidity` gains optional `min_stock_amount` /
+  `min_stablecoin_amount` floors. An older pool can't enforce them, so a
+  non-zero floor there raises `ValueError` instead of being ignored.
 - **`stocks()` reads every page.** It used to stop after the first 100 stocks.
 - **`get_account_status()` no longer raises `ValueError` on a status the SDK
   does not know.** `SUBACCOUNT_REJECTED` (an AI subaccount whose main account

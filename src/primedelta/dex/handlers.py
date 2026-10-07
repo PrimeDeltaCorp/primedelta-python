@@ -593,6 +593,11 @@ class _DclexPoolHandler:
                     self._now() + _LIQUIDITY_DEADLINE_SECONDS,
                 )
             )
+        if params.min_stock_amount > 0 or params.min_stablecoin_amount > 0:
+            raise ValueError(
+                f"the {params.symbol} pool can't enforce min_stock_amount or "
+                "min_stablecoin_amount; pass 0 for both to remove without a floor"
+            )
         return self._send_tx(pool.functions.removeLiquidity(liquidity_units))
 
     def _now(self) -> int:

@@ -636,6 +636,19 @@ class TestDclexHandlerLiquidity:
         contract.functions.addLiquidity.assert_called_once_with(30 * 10**18)
         contract.functions.removeLiquidity.assert_called_once_with(5)
 
+    @pytest.mark.parametrize("floor", ["min_stock_amount", "min_stablecoin_amount"])
+    def test_a_legacy_pool_refuses_a_floor_it_cannot_enforce(self, floor):
+        handler, web3, contract, send_tx = self._setup()
+        web3.eth.get_code.return_value = b"\x63" + _LEGACY_ADD
+        with pytest.raises(ValueError, match="can't enforce"):
+            handler.remove_liquidity(
+                PriceFeedRemoveLiquidity(
+                    symbol="AAPL", liquidity_amount=Decimal(5), **{floor: Decimal("1")}
+                )
+            )
+        contract.functions.removeLiquidity.assert_not_called()
+        send_tx.assert_not_called()
+
     def test_unknown_bytecode_gets_the_bounded_calls(self):
         handler, web3, contract, send_tx = self._setup()
         web3.eth.get_code.return_value = b"\x60\x80"
