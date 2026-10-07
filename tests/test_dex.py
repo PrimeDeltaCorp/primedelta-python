@@ -1807,8 +1807,6 @@ class TestOracleQuoteFacade:
         touch.assert_called_once_with()
 
 
-
-
 class TestResolveStockTokenMulticall:
     def _web3(self, symbol_results, all_tokens):
         web3 = _make_web3_mock()

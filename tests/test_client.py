@@ -371,6 +371,7 @@ class TestReads:
         ]
         assert client.stocks() == {}
         assert session.get.call_count == 1
+
     def test_touch_session_reports_a_live_session(self):
         client, session = _client_with_session()
         session.request.return_value = _Resp(200, {"status": "VERIFIED"})
