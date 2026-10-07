@@ -44,11 +44,13 @@ semantic versioning once published.
   oracle-priced pool.** It fetches the signed price (needs a login), prices one
   token at the share price times the token's `multiplier()` (shares per token,
   so it stays right after a split), and applies the pool's dynamic fee from
-  `getFeeCurve()` and `getReserves()`. Returns an `OracleQuote`
-  (`share_price`, `token_price`, `fee_rate`, `expected_amount_out`); feed
-  `expected_amount_out` to `min_out_from_quote`. Raises
-  `OraclePriceUnavailable` while there is no signed price (market closed) and
-  `NotEnoughPoolLiquidity` when the pool can't fill the amount. The bundled
+  `getFeeCurve()` and `getReserves()` at the trade's full size, the most any
+  deployed pool version charges, so the quote is a floor of what the swap pays.
+  Returns an `OracleQuote` (`share_price`, `token_price`, `fee_rate`,
+  `expected_amount_out`); feed `expected_amount_out` to `min_out_from_quote`.
+  Raises `ValueError` for a non-positive amount, `OraclePriceUnavailable`
+  while there is no signed price (market closed) and `NotEnoughPoolLiquidity`
+  when the pool can't fill the amount or would pay nothing. The bundled
   `dclex_pool` ABI gains `getFeeCurve` / `getReserves` and a `stock` ABI holds
   `multiplier`.
 - **`oracle_token_price(symbol)`** — the USD price of one token of an

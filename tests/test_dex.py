@@ -1535,8 +1535,8 @@ class TestOracleQuote:
         )
         assert quote.share_price == Decimal("250")
         assert quote.token_price == Decimal("250")
-        assert quote.fee_rate == Decimal("0.001483929879161782")
-        assert quote.expected_amount_out == Decimal("0.039940642804833528")
+        assert quote.fee_rate == Decimal("0.001483935742971887")
+        assert quote.expected_amount_out == Decimal("0.039940642570281124")
 
     def test_sell_matches_the_pool_formula_in_dusd_units(self):
         quote = self._handler().oracle_quote(
@@ -1559,7 +1559,8 @@ class TestOracleQuote:
         )
         assert buy.share_price == Decimal("250")
         assert buy.token_price == Decimal("500")
-        assert buy.expected_amount_out == Decimal("0.019975571177603171")
+        assert buy.fee_rate == Decimal("0.001221442885771543")
+        assert buy.expected_amount_out == Decimal("0.019975571142284569")
         assert sell.fee_rate == Decimal("0.0245")
         assert sell.expected_amount_out == Decimal("243.875")
 
@@ -1574,8 +1575,8 @@ class TestOracleQuote:
     def test_exponents_scale_like_the_contract(self, price, expo, share):
         quote = self._handler().oracle_quote(
             "AAPL",
-            SwapSide.STABLECOIN_TO_STOCK,
-            Decimal("1"),
+            SwapSide.STOCK_TO_STABLECOIN,
+            Decimal("0.5"),
             _signed_update(price, expo),
         )
         assert quote.share_price == share
@@ -1593,7 +1594,7 @@ class TestOracleQuote:
     def test_a_buy_bigger_than_the_pool_raises(self):
         from primedelta import NotEnoughPoolLiquidity
 
-        with pytest.raises(NotEnoughPoolLiquidity, match="trade less"):
+        with pytest.raises(NotEnoughPoolLiquidity, match="different amount"):
             self._handler().oracle_quote(
                 "AAPL",
                 SwapSide.STABLECOIN_TO_STOCK,
@@ -1608,6 +1609,121 @@ class TestOracleQuote:
             self._handler(reserves=(10**18, 0)).oracle_quote(
                 "AAPL",
                 SwapSide.STOCK_TO_STABLECOIN,
+                Decimal("1"),
+                _signed_update(25_000_000_000, -8),
+            )
+
+    def test_irregular_values_floor_like_the_contract(self):
+        reserves = (7_345_678_901_234_567_891, 1_234_567_891_234_567_890_123)
+        update = _signed_update(17_123_456_789, -8)
+        with patch.object(self, "_CURVE", (3 * 10**14, 7 * 10**14)):
+            handler = self._handler(multiplier=(10, 7), reserves=reserves)
+            handler_sell = self._handler(multiplier=(1, 3), reserves=reserves)
+            buy = handler.oracle_quote(
+                "AAPL", SwapSide.STABLECOIN_TO_STOCK, Decimal("12.345678"), update
+            )
+            sell = handler_sell.oracle_quote(
+                "AAPL",
+                SwapSide.STOCK_TO_STABLECOIN,
+                Decimal("0.123456789123456789"),
+                update,
+            )
+        assert buy.token_price == Decimal("244.620811271428571428")
+        assert buy.fee_rate == Decimal("0.001559750310067052")
+        assert buy.expected_amount_out == Decimal("0.050389914745374012")
+        assert sell.token_price == Decimal("57.078189296666666666")
+        assert sell.fee_rate == Decimal("0.001241461247211227")
+        assert sell.expected_amount_out == Decimal("7.037941")
+
+    @pytest.mark.parametrize("amount", [Decimal("0"), Decimal("-1")])
+    def test_a_non_positive_amount_is_rejected(self, amount):
+        with pytest.raises(ValueError, match="amount_in must be > 0"):
+            self._handler().oracle_quote(
+                "AAPL",
+                SwapSide.STABLECOIN_TO_STOCK,
+                amount,
+                _signed_update(25_000_000_000, -8),
+            )
+
+    @pytest.mark.parametrize(
+        "side, amount, reserves",
+        [
+            (SwapSide.STABLECOIN_TO_STOCK, Decimal("9"), (4 * 10**16, 1000 * 10**18)),
+            (SwapSide.STOCK_TO_STABLECOIN, Decimal("1e-15"), None),
+            (SwapSide.STABLECOIN_TO_STOCK, Decimal("1"), (0, 0)),
+            (SwapSide.STOCK_TO_STABLECOIN, Decimal("1"), (0, 0)),
+        ],
+    )
+    def test_a_quote_the_pool_would_refuse_raises(self, side, amount, reserves):
+        from primedelta import NotEnoughPoolLiquidity
+
+        with pytest.raises(NotEnoughPoolLiquidity):
+            self._handler(reserves=reserves).oracle_quote(
+                "AAPL", side, amount, _signed_update(25_000_000_000, -8)
+            )
+
+    def test_a_fee_capped_at_one_hundred_percent_raises(self):
+        from primedelta import NotEnoughPoolLiquidity
+        from primedelta.dex.handlers import _buy_fee_rate
+
+        price = 250 * 10**18
+        reserves = (4 * 10**16, 1000 * 10**18)
+        assert _buy_fee_rate(10**15, price, reserves, self._CURVE) == 10**18
+        with pytest.raises(NotEnoughPoolLiquidity):
+            self._handler(reserves=reserves).oracle_quote(
+                "AAPL",
+                SwapSide.STABLECOIN_TO_STOCK,
+                Decimal("0.25"),
+                _signed_update(25_000_000_000, -8),
+            )
+
+    def test_fee_helpers_stop_exactly_where_the_contract_reverts(self):
+        from primedelta.dex.handlers import _buy_fee_rate, _sell_fee_rate
+
+        price = 10**18
+        reserves = (10**18, 10**18)
+        curve = self._CURVE
+        assert _buy_fee_rate(10**18 - 1, price, reserves, curve) is not None
+        assert _buy_fee_rate(10**18, price, reserves, curve) is None
+        assert _sell_fee_rate(10**18 - 1, price, reserves, curve) is not None
+        assert _sell_fee_rate(10**18, price, reserves, curve) is None
+
+    def test_a_ratio_product_that_floors_to_zero_is_clamped(self):
+        from primedelta.dex.handlers import _buy_fee_rate, _sell_fee_rate
+
+        wad = 10**18
+        assert _buy_fee_rate(0, wad, (2 * wad, wad * wad), self._CURVE) == wad
+        assert _sell_fee_rate(0, wad, (wad * wad, 1), self._CURVE) == wad
+
+    @pytest.mark.parametrize("multiplier", [(0, 1)])
+    def test_a_zero_token_price_is_rejected(self, multiplier):
+        with pytest.raises(ValueError, match="no usable oracle price"):
+            self._handler(multiplier=multiplier).oracle_quote(
+                "AAPL",
+                SwapSide.STABLECOIN_TO_STOCK,
+                Decimal("1"),
+                _signed_update(25_000_000_000, -8),
+            )
+
+    def test_an_exponent_below_the_contract_range_is_rejected(self):
+        with pytest.raises(ValueError, match="not a valid USD price"):
+            self._handler().oracle_quote(
+                "AAPL",
+                SwapSide.STABLECOIN_TO_STOCK,
+                Decimal("1"),
+                _signed_update(25_000_000_000, -256),
+            )
+
+    def test_no_router_raises_router_not_configured(self):
+        contracts = _contracts(with_router=False)
+        contracts.pool_abis["stock"] = []
+        handler = _QuoteHandler(
+            web3=_make_web3_mock(), contracts_provider=lambda: contracts
+        )
+        with pytest.raises(RouterNotConfigured):
+            handler.oracle_quote(
+                "AAPL",
+                SwapSide.STABLECOIN_TO_STOCK,
                 Decimal("1"),
                 _signed_update(25_000_000_000, -8),
             )
@@ -1648,7 +1764,7 @@ class TestOracleQuoteFacade:
             "AAPL", SwapSide.STABLECOIN_TO_STOCK, Decimal("5"), update
         )
 
-    @pytest.mark.parametrize("updates", [[], [b"short"]])
+    @pytest.mark.parametrize("updates", [[], [b"short"], [b"\x00" * 43]])
     def test_no_signed_price_raises_unavailable(self, updates):
         from primedelta import OraclePriceUnavailable
 

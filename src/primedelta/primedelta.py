@@ -1987,15 +1987,15 @@ class PrimeDelta:
         return self._quote_handler.spot_price(symbol)
 
     def oracle_price(self, symbol: str) -> Optional[Decimal]:
-        """Current signed oracle USD price for an oracle-priced token —
-        the reference AAPL-class stocks lack an on-chain quote for. Decoded from
-        the same signed update the swap would submit (feedId, price:int64,
-        expo:int32, ... — FIOracle layout), so it is the price the pool values
-        against. Returns None when none is available (e.g. the market is closed).
+        """Current signed oracle USD price of one SHARE of an oracle-priced
+        token, decoded from the same signed update the swap would submit
+        (feedId, price:int64, expo:int32, ... — FIOracle layout). Returns None
+        when none is available (e.g. the market is closed).
 
-        This is a REFERENCE price, not a fee-adjusted amount-out: the oracle-priced pool
-        applies a dynamic, reserve-dependent fee on top, so budget slippage to
-        cover it when deriving a swap's min_amount_out. Needs a logged-in session.
+        The pool prices one TOKEN at this times the token's ``multiplier()``
+        (``oracle_token_price``) and charges a dynamic fee on top, so never
+        derive a swap's min_amount_out from it: use
+        ``oracle_quote(...).expected_amount_out``. Needs a logged-in session.
         """
         updates = self._primedelta_client.get_signed_price_updates([symbol])
         if not updates:
@@ -2013,13 +2013,13 @@ class PrimeDelta:
         """Estimate an exact-input swap on an oracle-priced pool before sending
         it. Prices one token at the signed oracle share price times the token's
         multiplier (shares per token, so it stays right after a split), then
-        applies the pool's dynamic fee from its fee curve and reserves. The
-        estimate follows the pool's published formula; the swap itself settles
-        on-chain, so derive ``min_amount_out`` from ``expected_amount_out`` with
-        ``min_out_from_quote`` and a slippage budget. Needs a logged-in session.
-        Raises ``OraclePriceUnavailable`` when there is no signed price (market
-        closed) and ``NotEnoughPoolLiquidity`` when the pool can't fill the
-        amount."""
+        applies the pool's dynamic fee from its fee curve and reserves, taken
+        at the trade's full size. Every deployed pool version charges that fee
+        or less, so ``expected_amount_out`` is a floor of what the swap pays;
+        derive ``min_amount_out`` from it with ``min_out_from_quote`` and a
+        slippage budget for price moves. Needs a logged-in session. Raises
+        ``OraclePriceUnavailable`` when there is no signed price (market closed)
+        and ``NotEnoughPoolLiquidity`` when the pool can't fill the amount."""
         updates = self._primedelta_client.get_signed_price_updates([symbol])
         if not updates or len(updates[0]) < 44:
             raise OraclePriceUnavailable(

@@ -1124,31 +1124,26 @@ class _QuoteHandler:
         token_price = share_price * numerator // denominator
         if token_price == 0:
             raise ValueError(f"{symbol} has no usable oracle price")
+        if amount_in <= 0:
+            raise ValueError(f"amount_in must be > 0, got {amount_in}")
         if side == SwapSide.STABLECOIN_TO_STOCK:
             exact_in = int(amount_in * Decimal(10) ** _DUSD_EXP) * 10**12
             gross = exact_in * _WAD // token_price
-            provisional = _buy_fee_rate(gross, token_price, reserves, curve)
-            fee = (
-                None
-                if provisional is None
-                else _buy_fee_rate(
-                    gross * (_WAD - provisional) // _WAD, token_price, reserves, curve
-                )
-            )
-            out_units, out_exp = gross, _STOCK_EXP
+            fee = _buy_fee_rate(gross, token_price, reserves, curve)
+            out_exp = _STOCK_EXP
         else:
             exact_in = int(amount_in * Decimal(10) ** _STOCK_EXP)
             gross = exact_in * token_price // _WAD
             fee = _sell_fee_rate(exact_in, token_price, reserves, curve)
-            out_units, out_exp = gross, _STOCK_EXP
-        if fee is None:
-            raise NotEnoughPoolLiquidity(
-                f"the {symbol} oracle-priced pool can't fill {amount_in} "
-                f"({side.value}); trade less"
-            )
-        net = out_units * (_WAD - fee) // _WAD
+            out_exp = _STOCK_EXP
+        net = 0 if fee is None or fee >= _WAD else gross * (_WAD - fee) // _WAD
         if side == SwapSide.STOCK_TO_STABLECOIN:
             net, out_exp = net // 10**12, _DUSD_EXP
+        if fee is None or net == 0:
+            raise NotEnoughPoolLiquidity(
+                f"the {symbol} oracle-priced pool can't fill {amount_in} "
+                f"({side.value}); trade a different amount"
+            )
         return OracleQuote(
             symbol=symbol,
             side=side,
