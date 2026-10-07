@@ -182,6 +182,10 @@ _PORT_ENV = "PRIMEDELTA_BROWSER_SIGNER_PORT"
 
 
 class _QuietServer(ThreadingHTTPServer):
+    def server_bind(self) -> None:
+        self.allow_reuse_address = sys.platform != "win32"
+        super().server_bind()
+
     def handle_error(self, request: Any, client_address: Any) -> None:
         pass
 

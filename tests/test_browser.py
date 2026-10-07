@@ -6,10 +6,12 @@ import shutil
 import socket
 import struct
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -579,6 +581,16 @@ class TestBridgeEdges:
     def test_a_bad_port_env_falls_back_to_a_random_port(self, monkeypatch, raw):
         monkeypatch.setenv("PRIMEDELTA_BROWSER_SIGNER_PORT", raw)
         assert _loopback_port(None) == 0
+
+    @pytest.mark.parametrize("platform, reused", [("win32", False), ("linux", True)])
+    def test_the_port_is_reusable_only_off_windows(self, monkeypatch, platform, reused):
+        monkeypatch.setattr(sys, "platform", platform)
+        server = browser._QuietServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+        try:
+            option = server.socket.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+            assert bool(option) is reused
+        finally:
+            server.server_close()
 
     def test_an_out_of_range_port_argument_falls_back(self, make_signer, capsys):
         signer, _ = make_signer(_wallet, port=70000)
