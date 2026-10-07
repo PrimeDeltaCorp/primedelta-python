@@ -622,11 +622,11 @@ class TestWalletJs:
         )
         assert out.startswith("ERR Switch your wallet to")
 
-    def test_the_session_page_backs_off_after_a_quick_empty_poll(self):
+    def _gap_after_an_empty_poll(self, poll_ms):
         page = _render_session_page("S")
         body = re.findall(r"<script>(.*?)</script>", page, re.S)[0]
         script = (
-            "const calls = [];"
+            "const calls = []; let answered = 0;"
             "globalThis.window = {addEventListener() {}, removeEventListener() {},"
             " dispatchEvent() {}, ethereum: {request: async () => []}};"
             "globalThis.Event = class { constructor(type) { this.type = type; } };"
@@ -635,14 +635,21 @@ class TestWalletJs:
             " id === 'config' ? JSON.stringify({session: 'S'}) : ''})};"
             "globalThis.fetch = async () => { calls.push(Date.now());"
             " if (calls.length > 1) throw new Error('stop');"
-            " return {status: 204, ok: false}; };"
+            f" await new Promise((r) => setTimeout(r, {poll_ms}));"
+            " answered = Date.now(); return {status: 204, ok: false}; };"
             + body
-            + "setTimeout(() => console.log(calls[1] - calls[0]), 2500);"
+            + f"setTimeout(() => console.log(calls[1] - answered), {poll_ms} + 2000);"
         )
         result = subprocess.run(
             ["node", "-e", script], capture_output=True, text=True, timeout=30
         )
-        assert int(result.stdout.strip()) >= 900
+        return int(result.stdout.strip())
+
+    def test_the_session_page_backs_off_after_a_quick_empty_poll(self):
+        assert self._gap_after_an_empty_poll(0) >= 900
+
+    def test_the_session_page_polls_again_at_once_after_a_long_poll(self):
+        assert self._gap_after_an_empty_poll(1100) < 500
 
     def test_the_connected_account_signs_whatever_its_case(self):
         out = self._run(

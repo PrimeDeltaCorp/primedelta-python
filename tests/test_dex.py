@@ -1,3 +1,4 @@
+import dataclasses
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -659,13 +660,57 @@ class TestDclexHandlerLiquidity:
             5, 0, 0, 1_700_000_600
         )
 
-    def test_the_pool_version_is_read_once(self):
+    def test_a_pool_with_both_forms_gets_the_bounded_calls(self):
         handler, web3, contract, send_tx = self._setup()
+        web3.eth.get_code.return_value = (
+            b"\x63" + _LEGACY_ADD + b"\x00\x63" + _BOUNDED_ADD + b"\x00"
+        )
+        handler.remove_liquidity(
+            PriceFeedRemoveLiquidity(symbol="AAPL", liquidity_amount=Decimal(5))
+        )
+        contract.functions.removeLiquidity.assert_called_once_with(
+            5, 0, 0, 1_700_000_600
+        )
+
+    def test_selector_bytes_outside_a_push4_do_not_count(self):
+        handler, web3, contract, send_tx = self._setup()
+        web3.eth.get_code.return_value = (
+            b"\x63" + _LEGACY_ADD + b"\x00\x00" + _BOUNDED_ADD + b"\x00"
+        )
+        handler.remove_liquidity(
+            PriceFeedRemoveLiquidity(symbol="AAPL", liquidity_amount=Decimal(5))
+        )
+        contract.functions.removeLiquidity.assert_called_once_with(5)
+
+    @pytest.mark.parametrize(
+        "code",
+        [b"\x00\x63" + _BOUNDED_ADD + b"\x00", b"\x63" + _LEGACY_ADD],
+        ids=["bounded", "legacy"],
+    )
+    def test_the_pool_version_is_read_once(self, code):
+        handler, web3, contract, send_tx = self._setup()
+        web3.eth.get_code.return_value = code
         for _ in range(3):
             handler.remove_liquidity(
                 PriceFeedRemoveLiquidity(symbol="AAPL", liquidity_amount=Decimal(5))
             )
         web3.eth.get_code.assert_called_once()
+
+    def test_each_chain_reads_its_own_pool_version(self):
+        handler, web3, contract, send_tx = self._setup()
+        handler.remove_liquidity(
+            PriceFeedRemoveLiquidity(symbol="AAPL", liquidity_amount=Decimal(5))
+        )
+        other_chain = dataclasses.replace(_contracts(), chain_id=7357)
+        handler._contracts_provider = lambda: other_chain
+        web3.eth.get_code.return_value = b"\x63" + _LEGACY_ADD
+        handler.remove_liquidity(
+            PriceFeedRemoveLiquidity(symbol="AAPL", liquidity_amount=Decimal(6))
+        )
+        assert contract.functions.removeLiquidity.call_args_list == [
+            ((5, 0, 0, 1_700_000_600),),
+            ((6,),),
+        ]
 
     def test_lookup_raises_when_router_returns_zero(self):
         handler, web3, contract, _ = self._setup()

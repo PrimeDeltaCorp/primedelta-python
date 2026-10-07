@@ -135,7 +135,7 @@ semantic versioning once published.
 
 ### Fixed
 - **Oracle-priced liquidity works on the current pools.** Pools deployed since
-  the July 2026 contract update only have
+  the August 2026 contract update only have
   `addLiquidity(liquidityAmount, maxStockIn, maxStablecoinIn, deadline)` and
   `removeLiquidity(liquidityAmount, minStockOut, minStablecoinOut, deadline)`;
   the SDK called the old one-argument functions, which those pools don't have,
