@@ -37,6 +37,7 @@ _POOL_ABIS = {
     "univ3_pool": "univ3_pool.json",
     "univ3_factory": "univ3_factory.json",
     "erc20": "erc20.json",
+    "stock": "stock.json",
 }
 
 

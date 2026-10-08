@@ -38,6 +38,7 @@ from primedelta.dex.params import (
     AddLiquidityParams,
     AMMAddLiquidity,
     AMMRemoveLiquidity,
+    OracleQuote,
     PoolType,
     PriceFeedAddLiquidity,
     PriceFeedRemoveLiquidity,
@@ -380,6 +381,11 @@ class MarketClosed(TransactionFailed):
     still catch it, but agents can catch it specifically to distinguish 'market
     closed' from a bug.
     """
+
+
+class OraclePriceUnavailable(Exception):
+    """No signed price for an oracle-priced token right now: the US market is
+    closed, or the symbol is halted or unknown to the oracle."""
 
 
 class TradingHalted(Exception):
@@ -1981,15 +1987,15 @@ class PrimeDelta:
         return self._quote_handler.spot_price(symbol)
 
     def oracle_price(self, symbol: str) -> Optional[Decimal]:
-        """Current signed oracle USD price for an oracle-priced token —
-        the reference AAPL-class stocks lack an on-chain quote for. Decoded from
-        the same signed update the swap would submit (feedId, price:int64,
-        expo:int32, ... — FIOracle layout), so it is the price the pool values
-        against. Returns None when none is available (e.g. the market is closed).
+        """Current signed oracle USD price of one SHARE of an oracle-priced
+        token, decoded from the same signed update the swap would submit
+        (feedId, price:int64, expo:int32, ... — FIOracle layout). Returns None
+        when none is available (e.g. the market is closed).
 
-        This is a REFERENCE price, not a fee-adjusted amount-out: the oracle-priced pool
-        applies a dynamic, reserve-dependent fee on top, so budget slippage to
-        cover it when deriving a swap's min_amount_out. Needs a logged-in session.
+        The pool prices one TOKEN at this times the token's ``multiplier()``
+        (``oracle_token_price``) and charges a dynamic fee on top, so never
+        derive a swap's min_amount_out from it: use
+        ``oracle_quote(...).expected_amount_out``. Needs a logged-in session.
         """
         updates = self._primedelta_client.get_signed_price_updates([symbol])
         if not updates:
@@ -2000,6 +2006,46 @@ class PrimeDelta:
         price = int.from_bytes(blob[32:40], "big", signed=True)
         expo = int.from_bytes(blob[40:44], "big", signed=True)
         return Decimal(price) * (Decimal(10) ** expo)
+
+    def oracle_quote(
+        self, symbol: str, side: SwapSide, amount_in: Decimal
+    ) -> OracleQuote:
+        """Estimate an exact-input swap on an oracle-priced pool before sending
+        it. Prices one token at the signed oracle share price times the token's
+        multiplier (shares per token, so it stays right after a split), then
+        applies the pool's dynamic fee from its fee curve and reserves, taken
+        at the trade's full size. Every deployed pool version charges that fee
+        or less, so ``expected_amount_out`` is a floor of what the swap pays;
+        derive ``min_amount_out`` from it with ``min_out_from_quote`` and a
+        slippage budget for price moves. Needs a logged-in session. Raises
+        ``OraclePriceUnavailable`` when there is no signed price (market closed)
+        and ``NotEnoughPoolLiquidity`` when the pool can't fill the amount."""
+        updates = self._primedelta_client.get_signed_price_updates([symbol])
+        if not updates or len(updates[0]) < 44:
+            raise OraclePriceUnavailable(
+                f"no signed price for {symbol}: the market is closed or the "
+                "symbol is halted"
+            )
+        return self._quote_handler.oracle_quote(symbol, side, amount_in, updates[0])
+
+    def oracle_token_price(self, symbol: str) -> Optional[Decimal]:
+        """USD price of one token of an oracle-priced symbol: the signed share
+        price times the token's ``multiplier()`` (shares per token), which is
+        what the oracle-priced pool values a token at. Differs from
+        ``oracle_price`` (one share) once a split has changed the multiplier.
+        ``None`` when there is no signed price (market closed). Needs a
+        logged-in session."""
+        share_price = self.oracle_price(symbol)
+        if share_price is None:
+            return None
+        numerator, denominator = self._quote_handler.token_multiplier(symbol)
+        return share_price * numerator / denominator
+
+    def keep_alive(self) -> bool:
+        """Touch the backend session without signing anything: True while it is
+        alive (and extends its idle timeout), False once it has expired. Never
+        re-logs-in, so a background heartbeat can't open a wallet prompt."""
+        return self._primedelta_client.touch_session()
 
     def simulate_swap(
         self,

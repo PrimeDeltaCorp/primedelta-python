@@ -977,6 +977,14 @@ class PrimeDeltaClient:
             return None
         return self._handle(response)["tokenId"]
 
+    def touch_session(self) -> bool:
+        response = self._request("GET", "/verification-status/")
+        if response.status_code == 401:
+            return False
+        if response.status_code >= 500:
+            raise BackendUnavailable(f"backend returned HTTP {response.status_code}")
+        return True
+
     def get_signed_price_updates(self, symbols: list[str]) -> list[bytes]:
         if not symbols:
             return []

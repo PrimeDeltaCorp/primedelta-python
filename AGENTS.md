@@ -40,7 +40,7 @@ quote    = pd.quote_swap("AMMT1", SwapSide.STABLECOIN_TO_STOCK,
                          Decimal("10"), exact="input")  # V3 Quoter, read-only (oracle-free tokens only)
 status   = pd.get_account_status()                      # VERIFIED / DID_MINTED / ...
 ```
-> Note: `quote_swap`/`spot_price` cover **oracle-free tokens only** (AMMT1/AMMT2/WDEL). For oracle-priced tokens (e.g. AAPL) there is no pre-trade quote today — do not trade them autonomously without an out-of-band price and a market-open check.
+> Note: `quote_swap`/`spot_price` cover **oracle-free tokens only** (AMMT1/AMMT2/WDEL). For an oracle-priced token (e.g. AAPL) use `oracle_quote(symbol, side, amount_in)` after `is_market_open()`: it prices one token at the signed share price times the token's split multiplier and applies the pool's dynamic fee, so `min_out_from_quote(q.expected_amount_out, slippage_bps)` gives a real floor. It needs a login and raises `OraclePriceUnavailable` while the market is closed.
 
 **First write — a 24/7 oracle-free swap.** Always pass a real `min_amount_out` derived from `quote_swap` — never `0`:
 ```python
@@ -73,7 +73,7 @@ txs = pd.craft(lambda: pd.swap_exact_input(
 | **Cross-dex (token↔token)** | `swap_token_to_token_exact_input` · `swap_token_to_token_exact_output` |
 | **Native DEL** | `wrap_del` · `unwrap_del` · `send_del` · `get_native_del_balance` |
 | **Non-custodial crafting** | `craft(action)` → unsigned tx(s) for an external wallet to sign; on-chain actions only (backend REST actions raise `CannotCraft`) |
-| **Quoting (read-only, oracle-free only)** | `quote_swap` (V3 Quoter) · `spot_price` (slot0) |
+| **Quoting (read-only)** | oracle-free: `quote_swap` (V3 Quoter) · `spot_price` (slot0); oracle-priced: `oracle_quote` (signed price × split multiplier, minus the pool's dynamic fee; needs a login) |
 | **Oracle-free (V3) liquidity** | `add_liquidity(AMMAddLiquidity)` · `increase_liquidity` · `remove_liquidity(AMMRemoveLiquidity)` · `collect_fees` · `burn_position` · `preview_fees` · `lp_positions` · `lp_position` |
 | **Oracle-priced liquidity** | `add_liquidity(PriceFeedAddLiquidity)` · `remove_liquidity(PriceFeedRemoveLiquidity)` |
 | **Allowances** | `allowance` · `approve` · `revoke_approval` |
@@ -98,7 +98,7 @@ Signers: `LocalAccountSigner` (raw key / keystore / mnemonic), `KmsSigner` (AWS 
 
 **4.2 DID / KYC gating.** Every custodial and on-chain equity/dUSD movement requires `DID_MINTED` and a **valid** DID (`is_valid()` → `True`). On `AccountNotVerified`: if `VERIFIED`, call `claim_digital_identity()`; if `AWAITING_MAIN_CONFIRMATION`, this is an AI agent account waiting for its main account to confirm it, so ask the owner to confirm it, do not start KYC; if `SUBACCOUNT_REJECTED`, the main account rejected this agent and unlinked it, so it may `register_ai_account()` again or finish its own KYC; if `CLOSED`, the main closed this agent: its DID is invalid, DID-gated tokens on its wallet are frozen and its Mint balances moved to the main, and only the main can `reopen_ai_agent()` it; otherwise the user must finish KYC at `verification_url()`. A revoked/blocked DID makes `is_valid()` false and reverts all trading — treat as terminal, not retryable.
 
-**4.3 Slippage / min-out. Non-negotiable.** Never call `swap_exact_input` with `min_amount_out=0` or `swap_exact_output` with unbounded `max_amount_in` in production. Derive the bound from `quote_swap` with an explicit slippage budget (or `min_out_from_quote(quote, slippage_bps)`). Some example FILES show `0` for readability — never do so in production.
+**4.3 Slippage / min-out. Non-negotiable.** Never call `swap_exact_input` with `min_amount_out=0` or `swap_exact_output` with unbounded `max_amount_in` in production. Derive the bound from `quote_swap` (oracle-free) or `oracle_quote(...).expected_amount_out` (oracle-priced) with an explicit slippage budget (`min_out_from_quote(quote, slippage_bps)`). Never derive it from `oracle_price` alone: that is the price of one *share*, and after a split one token is worth a different number of shares. Some example FILES show `0` for readability — never do so in production.
 
 **4.4 Allowance hygiene.** Prefer **exact-amount, short-lived approvals** over unbounded MAX approvals; check `allowance(symbol, spender)` first, `revoke_approval(symbol, spender)` when done. Do not leave standing infinite approvals across sessions.
 
