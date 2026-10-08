@@ -49,6 +49,8 @@ _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # the caller indefinitely. Long-lived SSE streams (stream=True) are exempt.
 _HTTP_TIMEOUT = 30.0
 _STABLECOIN_DEPOSIT_DECIMALS = 2
+_STOCKS_PAGE_SIZE = 100
+_STOCKS_MAX_PAGES = 50
 _BUSINESS_403_CODES = frozenset({"AGENT_PAUSED"})
 _EnumT = TypeVar("_EnumT", bound=Enum)
 
@@ -823,21 +825,31 @@ class PrimeDeltaClient:
         return response["orderId"]
 
     def stocks(self) -> dict[str, Stock]:
-        response = self._session_get(self._url("/stocks/"), params={"size": 100})
-        response.raise_for_status()
-        stocks_data = response.json()["items"]
-        return {
-            stock["symbol"]: Stock(
-                symbol=stock["symbol"],
-                name=stock["name"],
-                cusip=stock["cusipId"],
-                contract_address=stock["smartContractAddress"],
-                number_of_tokens_in_circulation=Decimal(stock["numberOfTokens"]),
-                quantity_decimals=stock.get("quantityDecimals"),
-                price_decimals=stock.get("priceDecimals"),
+        stocks: dict[str, Stock] = {}
+        seen = 0
+        for page in range(1, _STOCKS_MAX_PAGES + 1):
+            response = self._session_get(
+                self._url("/stocks/"),
+                params={"page": page, "size": _STOCKS_PAGE_SIZE},
             )
-            for stock in stocks_data
-        }
+            response.raise_for_status()
+            body = response.json()
+            items = body["items"]
+            for stock in items:
+                stocks[stock["symbol"]] = Stock(
+                    symbol=stock["symbol"],
+                    name=stock["name"],
+                    cusip=stock["cusipId"],
+                    contract_address=stock["smartContractAddress"],
+                    number_of_tokens_in_circulation=Decimal(stock["numberOfTokens"]),
+                    quantity_decimals=stock.get("quantityDecimals"),
+                    price_decimals=stock.get("priceDecimals"),
+                )
+            seen += len(items)
+            total = body.get("total")
+            if not items or not isinstance(total, int) or seen >= total:
+                break
+        return stocks
 
     def prices_stream_access_token(self) -> str:
         return self._get("/prices-stream-token/")["token"]

@@ -1,6 +1,8 @@
+import time
 from decimal import Decimal
 from typing import Any, Callable, Optional
 
+from eth_abi import decode as abi_decode
 from web3 import Web3
 from web3.exceptions import ContractLogicError
 
@@ -18,6 +20,7 @@ _STOCK_DECIMALS = Decimal(10**18)
 
 # DEFAULT_FEE_TIER from DclexRouter.sol — the oracle-free pools are created with this.
 _AMM_FEE_TIER = 3000
+_LIQUIDITY_DEADLINE_SECONDS = 600
 
 
 def _require_pool_abi(contracts: "Contracts", key: str) -> list[Any]:
@@ -74,8 +77,10 @@ def _approve_if_insufficient(
 # it on every quote/spot/swap — and makes those calls robust to the dev gateway
 # occasionally serving an inconsistent read that would otherwise spuriously raise
 # PoolNotFound. Only successful resolutions are cached (a miss retries next call).
-_STOCK_ADDR_CACHE: dict[tuple[int, str], str] = {}
+_STOCK_ADDR_CACHE: dict[tuple[int, str], tuple[str, float]] = {}
 _POOL_ADDR_CACHE: dict[tuple[int, str], str] = {}
+_POOL_BOUNDS_CACHE: dict[tuple[int, str], bool] = {}
+_SYMBOL_TTL_SECONDS = 600.0
 
 
 def _clear_resolution_cache() -> None:
@@ -84,6 +89,30 @@ def _clear_resolution_cache() -> None:
     process (or between tests)."""
     _STOCK_ADDR_CACHE.clear()
     _POOL_ADDR_CACHE.clear()
+    _POOL_BOUNDS_CACHE.clear()
+
+
+def _selector(signature: str) -> bytes:
+    return bytes(Web3.keccak(text=signature)[:4])
+
+
+_BOUNDED_ADD_LIQUIDITY = _selector("addLiquidity(uint256,uint256,uint256,uint256)")
+_LEGACY_ADD_LIQUIDITY = _selector("addLiquidity(uint256)")
+_PUSH4 = b"\x63"
+
+
+def _pool_takes_bounds(web3: Web3, contracts: "Contracts", pool_address: str) -> bool:
+    key = (contracts.chain_id, pool_address.lower())
+    cached = _POOL_BOUNDS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    code = bytes(web3.eth.get_code(web3.to_checksum_address(pool_address)))
+    bounded = (
+        _PUSH4 + _BOUNDED_ADD_LIQUIDITY in code
+        or _PUSH4 + _LEGACY_ADD_LIQUIDITY not in code
+    )
+    _POOL_BOUNDS_CACHE[key] = bounded
+    return bounded
 
 
 def _resolve_stock_token(web3: Web3, contracts: "Contracts", symbol: str) -> str:
@@ -97,11 +126,14 @@ def _resolve_stock_token(web3: Web3, contracts: "Contracts", symbol: str) -> str
     """
     cache_key = (contracts.chain_id, symbol)
     cached = _STOCK_ADDR_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
+    if cached is not None and time.monotonic() < cached[1]:
+        return cached[0]
     pool = contracts.pools.get(symbol)
     if pool is not None:
-        _STOCK_ADDR_CACHE[cache_key] = pool.stock_token_address
+        _STOCK_ADDR_CACHE[cache_key] = (
+            pool.stock_token_address,
+            time.monotonic() + _SYMBOL_TTL_SECONDS,
+        )
         return pool.stock_token_address
     router_ref = contracts.core.dex_router
     if router_ref is None:
@@ -109,7 +141,7 @@ def _resolve_stock_token(web3: Web3, contracts: "Contracts", symbol: str) -> str
     addr = _resolve_via_router(web3, contracts, router_ref, symbol)
     if addr is None:
         raise PoolNotFound(symbol)
-    _STOCK_ADDR_CACHE[cache_key] = addr
+    _STOCK_ADDR_CACHE[cache_key] = (addr, time.monotonic() + _SYMBOL_TTL_SECONDS)
     return addr
 
 
@@ -125,6 +157,19 @@ def _resolve_via_router(
         all_tokens = router.functions.allStockTokens().call()
     except Exception:
         return None
+    batched = _batched_symbols(web3, contracts, erc20_abi, all_tokens)
+    if batched is not None:
+        found: Optional[str] = None
+        seen: set[str] = set()
+        expires = time.monotonic() + _SYMBOL_TTL_SECONDS
+        for addr, token_symbol in batched:
+            if token_symbol is None or token_symbol in seen:
+                continue
+            seen.add(token_symbol)
+            _STOCK_ADDR_CACHE[(contracts.chain_id, token_symbol)] = (addr, expires)
+            if token_symbol == symbol:
+                found = addr
+        return found
     for addr in all_tokens:
         try:
             stock = web3.eth.contract(
@@ -136,6 +181,38 @@ def _resolve_via_router(
         except Exception:
             continue
     return None
+
+
+def _batched_symbols(
+    web3: Web3, contracts: "Contracts", erc20_abi: list[Any], addresses: list[str]
+) -> Optional[list[tuple[str, Optional[str]]]]:
+    multicall = contracts.core.multicall3
+    if multicall is None or not addresses:
+        return None
+    try:
+        symbol_call = web3.eth.contract(abi=erc20_abi).encode_abi(
+            abi_element_identifier="symbol"
+        )
+        aggregator = web3.eth.contract(
+            address=web3.to_checksum_address(multicall.address), abi=multicall.abi
+        )
+        results = aggregator.functions.aggregate3(
+            [(web3.to_checksum_address(addr), True, symbol_call) for addr in addresses]
+        ).call()
+    except Exception:
+        return None
+    if len(results) != len(addresses):
+        return None
+    symbols: list[tuple[str, Optional[str]]] = []
+    for addr, (ok, raw) in zip(addresses, results):
+        token_symbol: Optional[str] = None
+        if ok and raw:
+            try:
+                token_symbol = abi_decode(["string"], bytes(raw))[0]
+            except Exception:
+                token_symbol = None
+        symbols.append((addr, token_symbol))
+    return symbols
 
 
 class PoolNotFound(Exception):
@@ -464,11 +541,13 @@ class _DclexPoolHandler:
         account: Any,
         contracts_provider: Callable[[], Contracts],
         send_tx: Callable[..., str],
+        read_fresh: Optional[Callable[[Callable[[Any], Any]], Any]] = None,
     ) -> None:
         self._web3 = web3
         self._account = account
         self._contracts_provider = contracts_provider
         self._send_tx = send_tx
+        self._read_fresh = read_fresh or (lambda read_fn: read_fn("latest"))
 
     def add_liquidity(self, params: PriceFeedAddLiquidity) -> str:
         contracts = self._contracts_provider()
@@ -486,6 +565,15 @@ class _DclexPoolHandler:
         # if it would exceed allowance (chain-enforced slippage bound).
         self._approve_at(stock_token_addr, pool_address, max_stock_units)
         self._approve(contracts.core.stablecoin, pool_address, max_stablecoin_units)
+        if _pool_takes_bounds(self._web3, contracts, pool_address):
+            return self._send_tx(
+                pool.functions.addLiquidity(
+                    liquidity_units,
+                    max_stock_units,
+                    max_stablecoin_units,
+                    self._now() + _LIQUIDITY_DEADLINE_SECONDS,
+                )
+            )
         return self._send_tx(pool.functions.addLiquidity(liquidity_units))
 
     def remove_liquidity(self, params: PriceFeedRemoveLiquidity) -> str:
@@ -496,7 +584,24 @@ class _DclexPoolHandler:
         pool_address = self._lookup_dclex_pool(router_ref, stock_token_addr)
         pool = self._dclex_pool(contracts, pool_address)
         liquidity_units = int(params.liquidity_amount)
+        if _pool_takes_bounds(self._web3, contracts, pool_address):
+            return self._send_tx(
+                pool.functions.removeLiquidity(
+                    liquidity_units,
+                    int(params.min_stock_amount * _STOCK_DECIMALS),
+                    int(params.min_stablecoin_amount * _STABLECOIN_DECIMALS),
+                    self._now() + _LIQUIDITY_DEADLINE_SECONDS,
+                )
+            )
+        if params.min_stock_amount > 0 or params.min_stablecoin_amount > 0:
+            raise ValueError(
+                f"the {params.symbol} pool can't enforce min_stock_amount or "
+                "min_stablecoin_amount; pass 0 for both to remove without a floor"
+            )
         return self._send_tx(pool.functions.removeLiquidity(liquidity_units))
+
+    def _now(self) -> int:
+        return int(self._web3.eth.get_block("latest")["timestamp"])
 
     def _require_router(self, contracts: Contracts) -> ContractRef:
         if contracts.core.dex_router is None:
@@ -535,18 +640,26 @@ class _DclexPoolHandler:
         token = self._web3.eth.contract(
             address=self._web3.to_checksum_address(token_ref.address), abi=token_ref.abi
         )
-        self._send_tx(
-            token.functions.approve(self._web3.to_checksum_address(spender), amount)
-        )
+        self._set_allowance(token, spender, amount)
 
     def _approve_at(self, token_address: str, spender: str, amount: int) -> None:
         token = self._web3.eth.contract(
             address=self._web3.to_checksum_address(token_address),
             abi=_require_pool_abi(self._contracts_provider(), "erc20"),
         )
-        self._send_tx(
-            token.functions.approve(self._web3.to_checksum_address(spender), amount)
+        self._set_allowance(token, spender, amount)
+
+    def _set_allowance(self, token: Any, spender: str, amount: int) -> None:
+        spender = self._web3.to_checksum_address(spender)
+        owner = self._web3.to_checksum_address(self._account.address)
+        current = self._read_fresh(
+            lambda block: token.functions.allowance(owner, spender).call(
+                block_identifier=block
+            )
         )
+        if current == amount:
+            return
+        self._send_tx(token.functions.approve(spender, amount))
 
 
 class _AMMPoolHandler:
