@@ -3,6 +3,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
+from web3 import Web3
 
 from primedelta import NotEnoughFunds, PrimeDelta
 from primedelta.primedelta_client import APIError
@@ -18,6 +19,9 @@ _BANK_ACCOUNT = FiatWithdrawalBankAccount(
     bic="AAAACATT",
     bank_address="2 Bay St, Toronto",
 )
+
+
+_RECIPIENT = "0x" + "ab" * 20
 
 
 def _pd():
@@ -145,6 +149,50 @@ class TestAllowancesAndSend:
         pd, _ = self._pd()
         assert pd.send_del("0xTO", Decimal("0.001")) == "0xVAL"
         pd._build_and_send_value_transaction.assert_called_once_with("0xTO", 10**15)
+
+    def test_transfer_token_sends_whole_units_to_the_checksummed_recipient(self):
+        pd, erc20 = self._pd()
+        pd._web3.to_checksum_address.side_effect = Web3.to_checksum_address
+
+        assert pd.transfer_token("dUSD", _RECIPIENT, Decimal("10.5")) == "0xTX"
+
+        pd._token_ref.assert_called_once_with("dUSD")
+        pd._erc20.assert_called_once_with("0xTOKEN")
+        erc20.functions.transfer.assert_called_once_with(
+            Web3.to_checksum_address(_RECIPIENT), 10_500_000
+        )
+
+    def test_an_lp_token_is_sent_from_its_pool(self):
+        pd, erc20 = self._pd()
+        pd._dclex_handler = MagicMock()
+        pd._dclex_handler.pool_address.return_value = "0xPOOL"
+
+        pd.transfer_token("GOOG-LP", _RECIPIENT, Decimal("1.5"))
+
+        pd._dclex_handler.pool_address.assert_called_once_with("GOOG")
+        pd._token_ref.assert_not_called()
+        pd._erc20.assert_called_once_with("0xPOOL")
+        erc20.functions.transfer.assert_called_once_with(_RECIPIENT, 15 * 10**17)
+
+    @pytest.mark.parametrize(
+        "amount",
+        [Decimal("0.0000001"), Decimal("0"), Decimal("-1"), Decimal("NaN")],
+    )
+    def test_transfer_token_refuses_amounts_the_token_cannot_hold(self, amount):
+        pd, erc20 = self._pd()
+
+        with pytest.raises(ValueError, match="at most 6 decimal places"):
+            pd.transfer_token("dUSD", _RECIPIENT, amount)
+        pd._build_and_send_transaction.assert_not_called()
+
+    @pytest.mark.parametrize("to", ["0x123", "not-an-address", _RECIPIENT[:-1] + "G"])
+    def test_transfer_token_refuses_a_malformed_recipient(self, to):
+        pd, erc20 = self._pd()
+
+        with pytest.raises(ValueError, match="is not an address"):
+            pd.transfer_token("dUSD", to, Decimal("1"))
+        pd._token_ref.assert_not_called()
+        pd._build_and_send_transaction.assert_not_called()
 
     def test_value_transaction_local_fills_gas_and_nonce(self):
         pd = _pd()

@@ -7,6 +7,13 @@ semantic versioning once published.
 ## [Unreleased]
 
 ### Added
+- **Send tokens to another address.** `transfer_token(token_symbol, to, amount)`
+  sends dUSD, a stock token, an oracle-priced pool's LP token (`"GOOG-LP"`) or
+  an oracle-free token from the wallet to any address. The amount is in token
+  units and may not carry more decimals than the token has; a malformed
+  recipient is refused before anything is built. Like every write it is
+  simulated first, so a transfer the token refuses (a recipient without a
+  valid DID, a short balance) never reaches the wallet.
 - **Read your LP tokens in oracle-priced pools.** There was no way to see a
   holding such as `GOOG-LP`, so removing liquidity meant guessing the raw
   `liquidity_amount`. `price_feed_lp_positions()` lists every oracle-priced

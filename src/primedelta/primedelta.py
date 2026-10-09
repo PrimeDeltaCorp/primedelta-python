@@ -2116,6 +2116,32 @@ class PrimeDelta:
     def send_del(self, to: str, amount: Decimal) -> str:
         return self._build_and_send_value_transaction(to, int(amount * Decimal(10**18)))
 
+    def transfer_token(self, token_symbol: str, to: str, amount: Decimal) -> str:
+        """Send ``amount`` of ``token_symbol`` from this wallet to ``to``: dUSD, a
+        stock token, an oracle-priced pool's LP token (``"GOOG-LP"``) or an
+        oracle-free token. The transfer is simulated before it is signed, so one
+        the token refuses (a recipient without a valid DID, a short balance)
+        never reaches the wallet."""
+        if not Web3.is_address(to):
+            raise ValueError(f"{to!r} is not an address")
+        address, decimals = self._transfer_token_ref(token_symbol)
+        units = Decimal(amount).scaleb(decimals)
+        if not units.is_finite() or units <= 0 or units != units.to_integral_value():
+            raise ValueError(
+                f"amount must be positive with at most {decimals} decimal places, "
+                f"got {amount}"
+            )
+        return self._build_and_send_transaction(
+            self._erc20(address).functions.transfer(
+                self._web3.to_checksum_address(to), int(units)
+            )
+        )
+
+    def _transfer_token_ref(self, token_symbol: str) -> tuple[str, int]:
+        if token_symbol.endswith("-LP"):
+            return self._dclex_handler.pool_address(token_symbol[: -len("-LP")]), 18
+        return self._token_ref(token_symbol)
+
     def _token_ref(self, token_symbol: str) -> tuple[str, int]:
         from primedelta.dex.handlers import _resolve_stock_token
 

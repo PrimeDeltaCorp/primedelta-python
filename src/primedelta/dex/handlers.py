@@ -627,11 +627,15 @@ class _DclexPoolHandler:
             )
         return self._send_tx(pool.functions.removeLiquidity(liquidity_units))
 
-    def lp_position(self, symbol: str) -> PriceFeedLPPosition:
+    def pool_address(self, symbol: str) -> str:
         contracts = self._contracts_provider()
         router_ref = self._require_router(contracts)
         stock_token_addr = self._require_stock_token(contracts, symbol)
-        pool_address = self._lookup_dclex_pool(router_ref, stock_token_addr)
+        return self._lookup_dclex_pool(router_ref, stock_token_addr)
+
+    def lp_position(self, symbol: str) -> PriceFeedLPPosition:
+        pool_address = self.pool_address(symbol)
+        contracts = self._contracts_provider()
         return self._read_positions(contracts, [(symbol, pool_address)])[0]
 
     def lp_positions(self) -> list[PriceFeedLPPosition]:

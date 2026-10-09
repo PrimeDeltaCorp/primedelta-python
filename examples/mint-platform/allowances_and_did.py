@@ -29,6 +29,13 @@ print("revoke:", revoke_tx)
 send_tx = primedelta.send_del(primedelta._signer.address, Decimal("0.001"))
 print("sent 0.001 DEL to self:", send_tx)
 
+# Any token moves the same way: dUSD, a stock token, an LP token ("TSLA-LP") or
+# an oracle-free token. Stock and LP tokens only move between verified wallets.
+transfer_tx = primedelta.transfer_token(
+    "dUSD", primedelta._signer.address, Decimal("0.01")
+)
+print("sent 0.01 dUSD to self:", transfer_tx)
+
 # On-chain Digital Identity reads.
 print("DID token id:", primedelta.did_token_id())
 print("is pro:", primedelta.is_pro())
