@@ -54,6 +54,7 @@ from primedelta.primedelta_client import (
     _stablecoin_deposit_amount,
 )
 from primedelta.settings import (
+    DEFAULT_NETWORK,
     SIWE_LOOPBACK_DOMAIN,
     SIWE_MESSAGE,
     resolve_endpoints,
@@ -101,6 +102,8 @@ _RPC_TIMEOUT = 30
 # to "latest" rather than fail the read.
 _READ_RETRIES = 3
 _READ_BACKOFF = 0.3
+
+_LOCAL_STACK = ("dev", 31337)
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -310,6 +313,10 @@ class DigitalIdentityAlreadyClaimed(Exception):
 
 
 class WithdrawalNotFound(Exception):
+    pass
+
+
+class NetworkMismatch(Exception):
     pass
 
 
@@ -527,7 +534,7 @@ class PrimeDelta:
         self,
         private_key: Optional[str] = None,
         web3_provider_url: Optional[str] = None,
-        network: str = "dev",
+        network: str = DEFAULT_NETWORK,
         signer: Optional[Signer] = None,
         auto_relogin: bool = True,
         on_login: Optional[Callable[["PrimeDelta"], None]] = None,
@@ -555,6 +562,8 @@ class PrimeDelta:
         # roughly doubling round-trips on a remote RPC. Cache it at the provider
         # so a read costs one round-trip, not three.
         _install_chain_id_cache(self._web3)
+        self._network = network
+        self._chain_verified = False
         # Backend + SIWE endpoints follow the network (env vars override).
         self._endpoints = resolve_endpoints(network)
         self._primedelta_client = PrimeDeltaClient(base_url=self._endpoints.base_url)
@@ -616,6 +625,24 @@ class PrimeDelta:
     def _get_contracts(self) -> Contracts:
         return self._contracts
 
+    def _verify_chain(self) -> None:
+        if self._chain_verified:
+            return
+        expected = self._get_contracts().chain_id
+        try:
+            actual = self._web3.eth.chain_id
+        except Exception:
+            return
+        if not isinstance(actual, int):
+            return
+        if actual != expected and (self._network, actual) != _LOCAL_STACK:
+            raise NetworkMismatch(
+                f"the RPC is chain {actual}, but network={self._network!r} "
+                f"expects chain {expected} — pass the network that matches "
+                "your RPC, or fix web3_provider_url."
+            )
+        self._chain_verified = True
+
     @contextmanager
     def _crafting_scope(self) -> Iterator[list[dict[str, Any]]]:
         if self._crafting is not None:
@@ -661,7 +688,7 @@ class PrimeDelta:
 
             txs = pd.craft(
                 lambda: pd.swap_exact_input(
-                    "AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("10"), Decimal("0")
+                    "WDEL", SwapSide.STOCK_TO_STABLECOIN, Decimal("1"), Decimal("0")
                 )
             )
 
@@ -686,11 +713,13 @@ class PrimeDelta:
         fund-moving call on the same client would be captured instead of
         broadcast. Use a separate client per thread, or don't overlap them.
         """
+        self._verify_chain()
         with self._crafting_scope() as captured:
             action()
         return [self._as_unsigned(tx) for tx in captured]
 
     def login(self) -> None:
+        self._verify_chain()
         domain, uri = self._endpoints.siwe_domain, self._endpoints.siwe_uri
         if self._endpoints.siwe_loopback and isinstance(self._signer, BrowserSigner):
             domain, uri = SIWE_LOOPBACK_DOMAIN, self._signer.loopback_origin
@@ -1635,6 +1664,7 @@ class PrimeDelta:
 
         if self._halted:
             raise TradingHalted("trading is halted; call resume() to re-enable")
+        self._verify_chain()
         # Serialize sends per instance so concurrent callers can't collide on
         # the (non-thread-safe) local nonce counter.
         with self._tx_lock:

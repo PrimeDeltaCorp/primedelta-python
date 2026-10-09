@@ -2358,7 +2358,7 @@ class TestBuildAndSendTransaction:
         assert submitted["to"] == "0xC0FFEE"
         assert submitted["data"] == "0xda7a"
         assert submitted["value"] == 0
-        assert submitted["chainId"] == 2028
+        assert submitted["chainId"] == 7357
         assert "nonce" not in submitted
         assert "gas" not in submitted
         assert "gasPrice" not in submitted

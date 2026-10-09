@@ -4,12 +4,14 @@ from decimal import Decimal
 from dotenv import find_dotenv, load_dotenv
 
 from primedelta import PrimeDelta, SwapSide
+from primedelta.settings import DEFAULT_NETWORK
 
 load_dotenv(find_dotenv(".env.local") or find_dotenv(".env"))
 
 primedelta = PrimeDelta(
     private_key=os.environ["PRIMEDELTA_TEST_PRIVATE_KEY"],
     web3_provider_url=os.environ["PRIMEDELTA_PROVIDER_URL"],
+    network=os.environ.get("PRIMEDELTA_NETWORK", DEFAULT_NETWORK),
 )
 primedelta.login()
 
@@ -45,29 +47,6 @@ print(f"AAPL → WDEL: {aapl_to_wdel_tx}")
 
 wdel_after_sell = primedelta.get_onchain_stock_balance("WDEL")
 unwrap_tx = primedelta.unwrap_del(wdel_after_sell)
-print(f"WDEL → DEL (unwrap): {unwrap_tx}")
-
-# DEL → AMMT1: wrap then AMM ↔ AMM swap.
-primedelta.wrap_del(Decimal("0.5"))
-wdel_now = primedelta.get_onchain_stock_balance("WDEL")
-del_to_ammt1_tx = primedelta.swap_token_to_token_exact_input(
-    input_symbol="WDEL",
-    output_symbol="AMMT1",
-    amount_in=wdel_now,
-    min_amount_out=Decimal("0"),
-)
-print(f"DEL → AMMT1: {del_to_ammt1_tx}")
-
-# AMMT1 → DEL: AMM ↔ AMM swap to WDEL, then unwrap.
-ammt1_balance = primedelta.get_onchain_stock_balance("AMMT1")
-ammt1_to_wdel_tx = primedelta.swap_token_to_token_exact_input(
-    input_symbol="AMMT1",
-    output_symbol="WDEL",
-    amount_in=ammt1_balance / 2,
-    min_amount_out=Decimal("0"),
-)
-print(f"AMMT1 → WDEL: {ammt1_to_wdel_tx}")
-unwrap_tx = primedelta.unwrap_del(primedelta.get_onchain_stock_balance("WDEL"))
 print(f"WDEL → DEL (unwrap): {unwrap_tx}")
 
 # DEL → dUSD and dUSD → DEL also work — they use the simple buy/sell paths

@@ -6,6 +6,33 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+### Added
+- **The client checks that the RPC is on the network's chain.** Before the
+  first `login()`, send or `craft()`, it compares the RPC's chain id with the
+  bundled network's and raises `NetworkMismatch` if they differ, instead of
+  pairing one network's contracts with another chain. A local Anvil stack
+  (chain 31337) is accepted only with `network="dev"`. If the RPC can't be
+  reached the check is skipped, and it runs again on the next call.
+
+### Changed
+- **Breaking: `PrimeDelta()` defaults to `testnet`, the public network**,
+  instead of the internal `dev` network. A client built without `network=` now
+  loads `networks/testnet.json` (chain 7357), calls
+  `https://api.testnet.primedelta.io` and signs in on
+  `mint.testnet.primedelta.io`. The fallback URLs in `primedelta.settings`
+  (`PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL`) follow it. `network="dev"`
+  still works; a caller that relied on the old default must now pass it.
+  Migration: an env file that points at dev (a `besu.dev` RPC, `api.dev` /
+  `mint.dev` URLs) needs `network="dev"` in code, or `PRIMEDELTA_NETWORK=dev`
+  for the integration tests and examples. Without it the client now raises
+  `NetworkMismatch` at the first login, send or `craft()`. `.env.example`
+  targets testnet and leaves the backend URLs to `network`; the scheduled
+  drift job sets `PRIMEDELTA_NETWORK=dev`.
+- **The quick starts and the DEX examples use WDEL**, the only oracle-free
+  token on testnet: AMMT1 and AMMT2 are not deployed there. Swaps need
+  liquidity in the testnet WDEL/dUSD pool. `v3_lifecycle.py` reads the pool's
+  current tick and places its range on the dUSD side of it.
+
 ### Fixed
 - **Signing in again on a live session no longer fails with 403.** `login()`
   posted to `/users/verify/` without the `X-CSRFToken`, `Origin` and `Referer`

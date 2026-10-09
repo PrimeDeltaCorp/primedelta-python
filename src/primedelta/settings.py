@@ -8,20 +8,6 @@ SIWE_MESSAGE: str = (
 )
 USDC_ASSET_TYPE: str = "USDC"
 
-PRIMEDELTA_BASE_URL: str = os.getenv(
-    "PRIMEDELTA_BASE_URL", "https://api.dev.primedelta.io"
-)
-PRIMEDELTA_APP_URL: str = os.getenv(
-    "PRIMEDELTA_APP_URL", "https://mint.dev.primedelta.io"
-)
-SIWE_URI: str = PRIMEDELTA_APP_URL
-# Backend may strip the port (e.g. accepts "localhost" not "localhost:5173").
-# Override via PRIMEDELTA_SIWE_DOMAIN when the backend's allowed domain differs.
-SIWE_DOMAIN: str = os.getenv(
-    "PRIMEDELTA_SIWE_DOMAIN",
-    PRIMEDELTA_APP_URL.replace("https://", "").replace("http://", ""),
-)
-
 # Per-network default endpoints so `PrimeDelta(network=...)` targets the right
 # backend without manual env. Env vars, when set, override for ALL networks
 # (they are process-global) — that keeps the local-stack / integration-harness
@@ -37,6 +23,22 @@ _NETWORK_ENDPOINTS: dict[str, tuple[str, str]] = {
         "https://mint.primedelta.io",
     ),
 }
+
+DEFAULT_NETWORK: str = "testnet"
+
+PRIMEDELTA_BASE_URL: str = os.getenv(
+    "PRIMEDELTA_BASE_URL", _NETWORK_ENDPOINTS[DEFAULT_NETWORK][0]
+)
+PRIMEDELTA_APP_URL: str = os.getenv(
+    "PRIMEDELTA_APP_URL", _NETWORK_ENDPOINTS[DEFAULT_NETWORK][1]
+)
+SIWE_URI: str = PRIMEDELTA_APP_URL
+# Backend may strip the port (e.g. accepts "localhost" not "localhost:5173").
+# Override via PRIMEDELTA_SIWE_DOMAIN when the backend's allowed domain differs.
+SIWE_DOMAIN: str = os.getenv(
+    "PRIMEDELTA_SIWE_DOMAIN",
+    PRIMEDELTA_APP_URL.replace("https://", "").replace("http://", ""),
+)
 
 
 _SIWE_LOOPBACK_NETWORKS = frozenset({"dev"})
