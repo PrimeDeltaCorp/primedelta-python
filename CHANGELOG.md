@@ -10,17 +10,21 @@ semantic versioning once published.
 
 ### Added
 - **Send tokens to another address.** `transfer_token(token_symbol, to, amount)`
-  sends dUSD, a stock token, an oracle-priced pool's LP token (`"GOOG-LP"`) or
-  an oracle-free token from the wallet to any address. The amount is in token
-  units and may not carry more decimals than the token has; a malformed
-  recipient is refused before anything is built. Like every write it is
-  simulated first, so a transfer the token refuses (a recipient without a
-  valid DID, a short balance) never reaches the wallet.
+  sends dUSD, a stock token, an oracle-priced pool's LP token (`"GOOG-LP"`,
+  with the stock's current symbol) or an oracle-free token from the wallet to
+  any address. The amount is in token units and may not carry more decimals
+  than the token has; a malformed recipient, or a mixed-case one with a wrong
+  checksum, is refused before anything is built. Like every write it is
+  simulated before it is signed (unless preflight is off or it is crafted), so
+  a transfer the token refuses (a recipient without a valid DID, a short
+  balance) fails before the wallet is asked.
 - **Read your LP tokens in oracle-priced pools.** There was no way to see a
   holding such as `GOOG-LP`, so removing liquidity meant guessing the raw
   `liquidity_amount`. `price_feed_lp_positions()` lists every oracle-priced
-  pool the wallet holds LP tokens in, and `price_feed_lp_position(symbol)`
-  reads one pool (zero amounts when it holds none). Each `PriceFeedLPPosition`
+  pool registered with the router that the wallet holds LP tokens in, and
+  `price_feed_lp_position(symbol)` reads one pool (zero amounts when it holds
+  none). LP left in a pool the router no longer lists, after a pool redeploy,
+  is not found. Each `PriceFeedLPPosition`
   carries the LP balance, the raw `liquidity_amount` that
   `PriceFeedRemoveLiquidity` takes, the share of the pool, and the stock and
   dUSD a full removal pays out now, rounded down the way the pool rounds. All
@@ -28,6 +32,10 @@ semantic versioning once published.
   last write.
 
 ### Fixed
+- **A mistyped address no longer goes through.** `send_del`, `approve` and
+  `revoke_approval` accepted a mixed-case address with a wrong checksum and
+  sent to whatever address the typo spelled. Like `transfer_token`, they now
+  raise `ValueError`; an all-lowercase or all-uppercase address still works.
 - **A fractional `liquidity_amount` is refused instead of truncated.**
   Oracle-priced `add_liquidity` and `remove_liquidity` take raw LP units
   (`10**18` is one LP token), and a value like `1.5` was cut down to one raw

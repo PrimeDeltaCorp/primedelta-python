@@ -3,6 +3,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 from eth_abi import encode
 from web3.exceptions import ContractLogicError
 
@@ -769,7 +770,11 @@ class TestDclexHandlerLpPositions:
             if address is None:
                 encoder = MagicMock()
                 encoder.encode_abi.side_effect = (
-                    lambda abi_element_identifier, args=(): abi_element_identifier
+                    lambda abi_element_identifier, args=(): (
+                        f"{abi_element_identifier}:{args[0]}"
+                        if args
+                        else abi_element_identifier
+                    )
                 )
                 return encoder
             contract = by_address.setdefault(address, MagicMock())
@@ -807,7 +812,7 @@ class TestDclexHandlerLpPositions:
     @staticmethod
     def _pool(pool, lp_symbol, balance, supply, stock_reserve, stablecoin_reserve):
         return {
-            (pool, "balanceOf"): _ok(["uint256"], balance),
+            (pool, f"balanceOf:{_USER_ADDRESS}"): _ok(["uint256"], balance),
             (pool, "totalSupply"): _ok(["uint256"], supply),
             (pool, "getReserves"): _ok(
                 ["uint256", "uint256"], stock_reserve, stablecoin_reserve
@@ -853,11 +858,11 @@ class TestDclexHandlerLpPositions:
         )
         [(calls, block)] = aggregated
         assert block == 777
-        assert [(target, data) for target, _, data in calls] == [
-            (_POOL_A, "balanceOf"),
-            (_POOL_A, "totalSupply"),
-            (_POOL_A, "getReserves"),
-            (_POOL_A, "symbol"),
+        assert calls == [
+            (_POOL_A, True, f"balanceOf:{_USER_ADDRESS}"),
+            (_POOL_A, True, "totalSupply"),
+            (_POOL_A, True, "getReserves"),
+            (_POOL_A, True, "symbol"),
         ]
 
     def test_a_pool_without_lp_reads_as_zero(self):
@@ -870,10 +875,19 @@ class TestDclexHandlerLpPositions:
         assert (position.pool_share, position.stock_amount) == (0, 0)
         assert position.stablecoin_amount == 0
 
-    def test_a_symbol_without_an_oracle_pool_raises(self):
+    def test_a_symbol_without_an_oracle_pool_raises_naming_it(self):
         handler, _, _ = self._handler({}, routes={_AAPL_TOKEN: _NO_POOL})
 
-        with pytest.raises(PoolNotFound):
+        with pytest.raises(PoolNotFound, match="pool registered for AAPL$"):
+            handler.lp_position("AAPL")
+
+    @pytest.mark.parametrize("read", ["totalSupply", "getReserves", "symbol"])
+    def test_a_single_read_raises_when_any_pool_read_fails(self, read):
+        answers = self._pool(_POOL_A, "AAPL-LP", 0, 0, 0, 0)
+        del answers[(_POOL_A, read)]
+        handler, _, _ = self._handler(answers, routes={_AAPL_TOKEN: _POOL_A})
+
+        with pytest.raises(RuntimeError, match="AAPL pool"):
             handler.lp_position("AAPL")
 
     def test_lists_the_held_pools_in_two_reads(self):
@@ -886,23 +900,26 @@ class TestDclexHandlerLpPositions:
         }
         tokens = [_AAPL_TOKEN, _GOOG_TOKEN, _AMMT1_TOKEN]
         handler, web3, aggregated = self._handler(answers, tokens)
+        web3.to_checksum_address.side_effect = lambda a: a.upper().replace("0X", "0x")
 
         positions = handler.lp_positions()
 
+        assert all(allow is True for calls, _ in aggregated for _, allow, _ in calls)
         router = web3.eth.contract(address=_ROUTER_ADDRESS, abi=[])
         router.functions.allStockTokens.return_value.call.assert_called_once_with(
             block_identifier=777
         )
         assert [(p.symbol, p.lp_symbol) for p in positions] == [("AAPL", "AAPL-LP")]
-        assert positions[0].pool_address.lower() == _POOL_A.lower()
+        assert positions[0].pool_address == _POOL_A.upper().replace("0X", "0x")
         assert positions[0].stock_amount == Decimal("4.285714285714285717")
         assert [block for _, block in aggregated] == [777, 777]
         read_pools = {target.lower() for target, _, _ in aggregated[1][0]}
         assert read_pools == {_POOL_A.lower(), _POOL_B.lower()}
 
-    def test_a_token_without_a_readable_symbol_keeps_its_position(self):
+    @pytest.mark.parametrize("unreadable", [None, ""])
+    def test_a_token_without_a_readable_symbol_keeps_its_position(self, unreadable):
         answers = {
-            **self._listed(_NAMELESS_TOKEN, _POOL_C, None),
+            **self._listed(_NAMELESS_TOKEN, _POOL_C, unreadable),
             **self._pool(_POOL_C, "X-LP", 10**18, 2 * 10**18, 10**18, 10**18),
         }
         handler, _, _ = self._handler(answers, [_NAMELESS_TOKEN])
@@ -912,12 +929,38 @@ class TestDclexHandlerLpPositions:
         assert (position.symbol, position.lp_symbol) == (_NAMELESS_TOKEN, "X-LP")
         assert position.lp_balance == 1
 
-    def test_an_unreadable_pool_raises_instead_of_dropping_the_position(self):
+    @pytest.mark.parametrize(
+        "read",
+        [f"balanceOf:{_USER_ADDRESS}", "totalSupply", "getReserves", "symbol"],
+    )
+    def test_an_unreadable_held_pool_raises_instead_of_dropping_it(self, read):
         answers = {**self._listed(_AAPL_TOKEN, _POOL_A, "AAPL"), **self._aapl()}
-        del answers[(_POOL_A, "getReserves")]
+        del answers[(_POOL_A, read)]
         handler, _, _ = self._handler(answers, [_AAPL_TOKEN])
 
         with pytest.raises(RuntimeError, match="AAPL pool"):
+            handler.lp_positions()
+
+    def test_an_unreadable_empty_pool_does_not_hide_the_held_ones(self):
+        answers = {
+            **self._listed(_AAPL_TOKEN, _POOL_A, "AAPL"),
+            **self._aapl(),
+            **self._listed(_GOOG_TOKEN, _POOL_B, "GOOG"),
+            (_POOL_B, f"balanceOf:{_USER_ADDRESS}"): _ok(["uint256"], 0),
+        }
+        handler, _, _ = self._handler(answers, [_GOOG_TOKEN, _AAPL_TOKEN])
+
+        assert [p.symbol for p in handler.lp_positions()] == ["AAPL"]
+
+    def test_a_network_error_is_not_mistaken_for_a_revert(self):
+        handler, web3, _ = self._handler(
+            self._listed(_AAPL_TOKEN, _POOL_A, "AAPL"),
+            [_AAPL_TOKEN],
+            with_multicall=False,
+        )
+        web3.eth.call.side_effect = requests.ConnectionError("reset by peer")
+
+        with pytest.raises(requests.ConnectionError):
             handler.lp_positions()
 
     def test_an_unreadable_router_entry_raises(self):
@@ -979,7 +1022,15 @@ class TestDclexLiquidityAmountUnits:
 
     @pytest.mark.parametrize("action", ["add_liquidity", "remove_liquidity"])
     @pytest.mark.parametrize(
-        "amount", [Decimal("1.5"), Decimal("0"), Decimal("-1"), Decimal("NaN")]
+        "amount",
+        [
+            Decimal("1.5"),
+            Decimal("0"),
+            Decimal("-1"),
+            Decimal("NaN"),
+            Decimal("sNaN"),
+            "abc",
+        ],
     )
     def test_anything_but_a_positive_whole_number_is_refused_before_sending(
         self, action, amount

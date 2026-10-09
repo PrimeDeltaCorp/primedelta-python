@@ -1,5 +1,5 @@
 import time
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Optional
 
 from eth_abi import decode as abi_decode
@@ -34,7 +34,10 @@ def _require_pool_abi(contracts: "Contracts", key: str) -> list[Any]:
 
 
 def _lp_units(amount: Any) -> int:
-    value = Decimal(amount)
+    try:
+        value = Decimal(str(amount))
+    except (InvalidOperation, ValueError, TypeError):
+        value = Decimal("NaN")
     if not value.is_finite() or value <= 0 or value != value.to_integral_value():
         raise ValueError(
             "liquidity_amount is a whole number of raw LP units (10**18 is one LP "
@@ -631,7 +634,12 @@ class _DclexPoolHandler:
         contracts = self._contracts_provider()
         router_ref = self._require_router(contracts)
         stock_token_addr = self._require_stock_token(contracts, symbol)
-        return self._lookup_dclex_pool(router_ref, stock_token_addr)
+        try:
+            return self._lookup_dclex_pool(router_ref, stock_token_addr)
+        except PoolNotFound:
+            raise PoolNotFound(
+                f"no oracle-priced pool registered for {symbol}"
+            ) from None
 
     def lp_position(self, symbol: str) -> PriceFeedLPPosition:
         pool_address = self.pool_address(symbol)
@@ -644,11 +652,7 @@ class _DclexPoolHandler:
         pools = self._read_fresh(
             lambda block: self._oracle_pools(contracts, router_ref, block)
         )
-        return [
-            position
-            for position in self._read_positions(contracts, pools)
-            if position.liquidity_amount > 0
-        ]
+        return self._read_positions(contracts, pools, held_only=True)
 
     def _oracle_pools(
         self, contracts: Contracts, router_ref: ContractRef, block: Any
@@ -678,11 +682,19 @@ class _DclexPoolHandler:
             if not int(pool[0], 16):
                 continue
             symbol = _decoded(results[2 * index + 1], "string")
-            pools.append((symbol[0] if symbol and symbol[0] else token, pool[0]))
+            pools.append(
+                (
+                    symbol[0] if symbol and symbol[0] else token,
+                    self._web3.to_checksum_address(pool[0]),
+                )
+            )
         return pools
 
     def _read_positions(
-        self, contracts: Contracts, pools: list[tuple[str, str]]
+        self,
+        contracts: Contracts,
+        pools: list[tuple[str, str]],
+        held_only: bool = False,
     ) -> list[PriceFeedLPPosition]:
         if not pools:
             return []
@@ -704,10 +716,17 @@ class _DclexPoolHandler:
         results = self._read_fresh(
             lambda block: self._aggregate(contracts, calls, block)
         )
-        return [
-            _lp_position(symbol, pool, results[4 * index : 4 * index + 4])
-            for index, (symbol, pool) in enumerate(pools)
-        ]
+        positions = []
+        for index, (symbol, pool) in enumerate(pools):
+            reads = results[4 * index : 4 * index + 4]
+            if held_only:
+                balance = _decoded(reads[0], "uint256")
+                if balance is None:
+                    raise RuntimeError(f"could not read the {symbol} pool at {pool}")
+                if balance[0] == 0:
+                    continue
+            positions.append(_lp_position(symbol, pool, reads))
+        return positions
 
     def _aggregate(
         self, contracts: Contracts, calls: list[tuple[str, bool, Any]], block: Any

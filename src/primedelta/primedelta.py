@@ -6,7 +6,7 @@ import warnings
 from contextlib import contextmanager
 from dataclasses import fields
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, localcontext
 from importlib import resources
 from typing import Any, Callable, Iterator, Optional, cast
 
@@ -387,6 +387,39 @@ class MarketClosed(TransactionFailed):
 class OraclePriceUnavailable(Exception):
     """No signed price for an oracle-priced token right now: the US market is
     closed, or the symbol is halted or unknown to the oracle."""
+
+
+def _checked_address(address: str, label: str) -> str:
+    if not isinstance(address, str) or not Web3.is_address(address):
+        raise ValueError(f"{label} {address!r} is not an address")
+    body = address[2:]
+    if body not in (body.lower(), body.upper()) and not Web3.is_checksum_address(
+        address
+    ):
+        raise ValueError(
+            f"{label} {address!r} has a wrong checksum (letter case): check it for "
+            "a typo"
+        )
+    return Web3.to_checksum_address(address)
+
+
+def _token_units(amount: Any, decimals: int) -> int:
+    try:
+        value = Decimal(str(amount))
+    except (InvalidOperation, ValueError, TypeError):
+        raise ValueError(f"amount {amount!r} is not a number") from None
+    if not value.is_finite():
+        raise ValueError(f"amount {amount!r} is not a finite number")
+    with localcontext() as context:
+        context.prec = 100
+        units = value.scaleb(decimals)
+        whole = units == units.to_integral_value()
+    if not whole or units <= 0 or units >= 2**256:
+        raise ValueError(
+            f"amount must be positive with at most {decimals} decimal places, "
+            f"got {amount}"
+        )
+    return int(units)
 
 
 class TradingHalted(Exception):
@@ -1610,7 +1643,9 @@ class PrimeDelta:
         return self._dclex_handler.lp_position(symbol)
 
     def price_feed_lp_positions(self) -> list[PriceFeedLPPosition]:
-        """Every oracle-priced pool this wallet holds LP tokens in."""
+        """Every oracle-priced pool registered with the router that this wallet
+        holds LP tokens in. LP left in a pool the router no longer lists (after a
+        pool redeploy) is not found here."""
         return self._dclex_handler.lp_positions()
 
     def _npm_contract(self) -> Any:
@@ -2097,44 +2132,38 @@ class PrimeDelta:
         return Decimal(raw) / Decimal(10**decimals)
 
     def approve(self, token_symbol: str, spender: str, amount: Decimal) -> str:
+        spender = _checked_address(spender, "spender")
         address, decimals = self._token_ref(token_symbol)
         return self._build_and_send_transaction(
             self._erc20(address).functions.approve(
-                self._web3.to_checksum_address(spender),
-                int(amount * Decimal(10**decimals)),
+                spender, int(amount * Decimal(10**decimals))
             )
         )
 
     def revoke_approval(self, token_symbol: str, spender: str) -> str:
+        spender = _checked_address(spender, "spender")
         address, _ = self._token_ref(token_symbol)
         return self._build_and_send_transaction(
-            self._erc20(address).functions.approve(
-                self._web3.to_checksum_address(spender), 0
-            )
+            self._erc20(address).functions.approve(spender, 0)
         )
 
     def send_del(self, to: str, amount: Decimal) -> str:
+        to = _checked_address(to, "recipient")
         return self._build_and_send_value_transaction(to, int(amount * Decimal(10**18)))
 
     def transfer_token(self, token_symbol: str, to: str, amount: Decimal) -> str:
         """Send ``amount`` of ``token_symbol`` from this wallet to ``to``: dUSD, a
-        stock token, an oracle-priced pool's LP token (``"GOOG-LP"``) or an
-        oracle-free token. The transfer is simulated before it is signed, so one
-        the token refuses (a recipient without a valid DID, a short balance)
-        never reaches the wallet."""
-        if not Web3.is_address(to):
-            raise ValueError(f"{to!r} is not an address")
+        stock token, an oracle-priced pool's LP token (``"<SYMBOL>-LP"`` with the
+        stock's current symbol, e.g. ``"GOOG-LP"``) or an oracle-free token. A
+        mixed-case ``to`` must carry a valid checksum. The transfer is simulated
+        before it is signed (unless preflight is off or it is crafted), so one the
+        token refuses (a recipient without a valid DID, a short balance) fails
+        before the wallet is asked."""
+        to = _checked_address(to, "recipient")
         address, decimals = self._transfer_token_ref(token_symbol)
-        units = Decimal(amount).scaleb(decimals)
-        if not units.is_finite() or units <= 0 or units != units.to_integral_value():
-            raise ValueError(
-                f"amount must be positive with at most {decimals} decimal places, "
-                f"got {amount}"
-            )
+        units = _token_units(amount, decimals)
         return self._build_and_send_transaction(
-            self._erc20(address).functions.transfer(
-                self._web3.to_checksum_address(to), int(units)
-            )
+            self._erc20(address).functions.transfer(to, units)
         )
 
     def _transfer_token_ref(self, token_symbol: str) -> tuple[str, int]:
