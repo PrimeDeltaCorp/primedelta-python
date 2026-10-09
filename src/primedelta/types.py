@@ -232,6 +232,22 @@ class Price:
 
 
 @dataclass(frozen=True)
+class PriceFeedLPPosition:
+    """LP tokens held in an oracle-priced pool. ``liquidity_amount`` is the raw
+    amount ``PriceFeedRemoveLiquidity`` takes; ``stock_amount`` and
+    ``stablecoin_amount`` are what removing all of it pays out now."""
+
+    symbol: str
+    lp_symbol: str
+    pool_address: str
+    liquidity_amount: Decimal
+    lp_balance: Decimal
+    pool_share: Decimal
+    stock_amount: Decimal
+    stablecoin_amount: Decimal
+
+
+@dataclass(frozen=True)
 class LPPosition:
     """Uniswap V3 NonfungiblePositionManager position info."""
 

@@ -3,6 +3,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
+from web3 import Web3
 
 from primedelta import NotEnoughFunds, PrimeDelta
 from primedelta.primedelta_client import APIError
@@ -18,6 +19,10 @@ _BANK_ACCOUNT = FiatWithdrawalBankAccount(
     bic="AAAACATT",
     bank_address="2 Bay St, Toronto",
 )
+
+
+_RECIPIENT = "0x" + "ab" * 20
+_SPENDER = Web3.to_checksum_address("0x" + "c" * 40)
 
 
 def _pd():
@@ -133,18 +138,140 @@ class TestAllowancesAndSend:
 
     def test_approve_scales_and_sends(self):
         pd, erc20 = self._pd()
-        assert pd.approve("dUSD", "0xSPENDER", Decimal("5")) == "0xTX"
-        erc20.functions.approve.assert_called_once_with("0xSPENDER", 5_000_000)
+        assert pd.approve("dUSD", _SPENDER, Decimal("5")) == "0xTX"
+        erc20.functions.approve.assert_called_once_with(_SPENDER, 5_000_000)
 
     def test_revoke_approval_sends_zero(self):
         pd, erc20 = self._pd()
-        pd.revoke_approval("dUSD", "0xSPENDER")
-        erc20.functions.approve.assert_called_once_with("0xSPENDER", 0)
+        pd.revoke_approval("dUSD", _SPENDER)
+        erc20.functions.approve.assert_called_once_with(_SPENDER, 0)
 
     def test_send_del_scales_by_1e18(self):
         pd, _ = self._pd()
-        assert pd.send_del("0xTO", Decimal("0.001")) == "0xVAL"
-        pd._build_and_send_value_transaction.assert_called_once_with("0xTO", 10**15)
+        assert pd.send_del(_RECIPIENT, Decimal("0.001")) == "0xVAL"
+        pd._build_and_send_value_transaction.assert_called_once_with(
+            Web3.to_checksum_address(_RECIPIENT), 10**15
+        )
+
+    def test_transfer_token_sends_whole_units_to_the_checksummed_recipient(self):
+        pd, erc20 = self._pd()
+        pd._web3.to_checksum_address.side_effect = Web3.to_checksum_address
+
+        assert pd.transfer_token("dUSD", _RECIPIENT, Decimal("10.5")) == "0xTX"
+
+        pd._token_ref.assert_called_once_with("dUSD")
+        pd._erc20.assert_called_once_with("0xTOKEN")
+        erc20.functions.transfer.assert_called_once_with(
+            Web3.to_checksum_address(_RECIPIENT), 10_500_000
+        )
+
+    def test_an_lp_token_is_sent_from_its_pool(self):
+        pd, erc20 = self._pd()
+        pd._dclex_handler = MagicMock()
+        pd._dclex_handler.pool_address.return_value = "0xPOOL"
+
+        pd.transfer_token("GOOG-LP", _RECIPIENT, Decimal("1.5"))
+
+        pd._dclex_handler.pool_address.assert_called_once_with("GOOG")
+        pd._token_ref.assert_not_called()
+        pd._erc20.assert_called_once_with("0xPOOL")
+        erc20.functions.transfer.assert_called_once_with(
+            Web3.to_checksum_address(_RECIPIENT), 15 * 10**17
+        )
+
+    @pytest.mark.parametrize(
+        "amount",
+        [Decimal("0.0000001"), Decimal("0"), Decimal("-1"), Decimal("NaN")],
+    )
+    def test_transfer_token_refuses_amounts_the_token_cannot_hold(self, amount):
+        pd, erc20 = self._pd()
+
+        with pytest.raises(
+            ValueError, match="at most 6 decimal places|not a finite number"
+        ):
+            pd.transfer_token("dUSD", _RECIPIENT, amount)
+        pd._build_and_send_transaction.assert_not_called()
+
+    def test_a_mixed_case_address_with_a_wrong_checksum_is_refused(self):
+        pd, erc20 = self._pd()
+        typo = "0x0aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
+        for send in (
+            lambda: pd.transfer_token("dUSD", typo, Decimal("1")),
+            lambda: pd.send_del(typo, Decimal("1")),
+            lambda: pd.approve("dUSD", typo, Decimal("1")),
+            lambda: pd.revoke_approval("dUSD", typo),
+        ):
+            with pytest.raises(ValueError, match="wrong checksum"):
+                send()
+        pd._build_and_send_transaction.assert_not_called()
+        pd._build_and_send_value_transaction.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "to",
+        [
+            "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+            "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed",
+            "0x5AAEB6053F3E94C9B9A09F33669435E7EF1BEAED",
+        ],
+    )
+    def test_a_checksummed_or_single_case_address_is_accepted(self, to):
+        pd, erc20 = self._pd()
+
+        pd.transfer_token("dUSD", to, Decimal("1"))
+
+        erc20.functions.transfer.assert_called_once_with(
+            "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed", 1_000_000
+        )
+
+    @pytest.mark.parametrize(
+        "amount, units",
+        [
+            (Decimal("12345678901.123456789012345678"), 12345678901123456789012345678),
+            (Decimal("1"), 10**18),
+            (0.5, 5 * 10**17),
+        ],
+    )
+    def test_an_18_decimal_amount_converts_exactly(self, amount, units):
+        pd, erc20 = self._pd()
+        pd._token_ref.return_value = ("0xTOKEN", 18)
+
+        pd.transfer_token("AAPL", _RECIPIENT, amount)
+
+        assert erc20.functions.transfer.call_args.args[1] == units
+
+    @pytest.mark.parametrize(
+        "amount, error",
+        [
+            (Decimal("1234567890.1234567890123456789"), "at most 18 decimal places"),
+            (Decimal("1E+80"), "at most 18 decimal places"),
+            ("abc", "not a number"),
+            (Decimal("sNaN"), "not a finite number"),
+            (Decimal("Infinity"), "not a finite number"),
+        ],
+    )
+    def test_an_18_decimal_amount_the_token_cannot_hold_is_refused(self, amount, error):
+        pd, erc20 = self._pd()
+        pd._token_ref.return_value = ("0xTOKEN", 18)
+
+        with pytest.raises(ValueError, match=error):
+            pd.transfer_token("AAPL", _RECIPIENT, amount)
+        pd._build_and_send_transaction.assert_not_called()
+
+    def test_a_float_amount_is_read_as_written(self):
+        pd, erc20 = self._pd()
+
+        pd.transfer_token("dUSD", _RECIPIENT, 0.1)
+
+        assert erc20.functions.transfer.call_args.args[1] == 100_000
+
+    @pytest.mark.parametrize("to", ["0x123", "not-an-address", _RECIPIENT[:-1] + "G"])
+    def test_transfer_token_refuses_a_malformed_recipient(self, to):
+        pd, erc20 = self._pd()
+
+        with pytest.raises(ValueError, match="is not an address"):
+            pd.transfer_token("dUSD", to, Decimal("1"))
+        pd._token_ref.assert_not_called()
+        pd._build_and_send_transaction.assert_not_called()
 
     def test_value_transaction_local_fills_gas_and_nonce(self):
         pd = _pd()

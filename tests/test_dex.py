@@ -3,6 +3,9 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
+from eth_abi import encode
+from web3.exceptions import ContractLogicError
 
 from primedelta import (
     AccountNotVerified,
@@ -37,7 +40,7 @@ from primedelta.primedelta import _READ_RETRIES, _decode_revert
 
 _BOUNDED_ADD = bytes.fromhex("aebf3e41")
 _LEGACY_ADD = bytes.fromhex("51c6590a")
-from primedelta.types import AccountStatus
+from primedelta.types import AccountStatus, PriceFeedLPPosition
 
 
 @pytest.fixture(autouse=True)
@@ -727,6 +730,329 @@ class TestDclexHandlerLiquidity:
                     max_stablecoin_amount=Decimal("1000"),
                 )
             )
+
+
+_POOL_A = "0x" + "C" * 39 + "A"
+_POOL_B = "0x" + "C" * 39 + "B"
+_POOL_C = "0x" + "C" * 39 + "D"
+_GOOG_TOKEN = "0x" + "F" * 40
+_NAMELESS_TOKEN = "0x" + "E" * 39 + "1"
+_NO_POOL = "0x" + "0" * 40
+
+
+def _ok(types, *values):
+    return True, encode(types, list(values))
+
+
+class TestDclexHandlerLpPositions:
+    def _handler(self, answers, tokens=(), *, with_multicall=True, routes=None):
+        web3 = _make_web3_mock()
+        answers = {
+            (target.lower(), data): result for (target, data), result in answers.items()
+        }
+        by_address = {}
+        aggregated = []
+
+        def aggregate3(calls):
+            read = MagicMock()
+
+            def call(block_identifier):
+                aggregated.append((list(calls), block_identifier))
+                return [
+                    answers.get((target.lower(), data), (False, b""))
+                    for target, _, data in calls
+                ]
+
+            read.call.side_effect = call
+            return read
+
+        def make_contract(address=None, abi=None):
+            if address is None:
+                encoder = MagicMock()
+                encoder.encode_abi.side_effect = (
+                    lambda abi_element_identifier, args=(): (
+                        f"{abi_element_identifier}:{args[0]}"
+                        if args
+                        else abi_element_identifier
+                    )
+                )
+                return encoder
+            contract = by_address.setdefault(address, MagicMock())
+            if address == _ROUTER_ADDRESS:
+                contract.functions.allStockTokens.return_value.call.return_value = list(
+                    tokens
+                )
+                contract.functions.stockTokenToPool.side_effect = lambda token: (
+                    MagicMock(call=MagicMock(return_value=(routes or {})[token]))
+                )
+                contract.encode_abi.side_effect = (
+                    lambda abi_element_identifier, args=(): f"{abi_element_identifier}:{args[0]}"
+                )
+            elif address == _MULTICALL_ADDRESS:
+                contract.functions.aggregate3.side_effect = aggregate3
+            return contract
+
+        def single_read(tx, block):
+            ok, raw = answers.get((tx["to"].lower(), tx["data"]), (False, b""))
+            if not ok:
+                raise ContractLogicError("execution reverted")
+            return raw
+
+        web3.eth.contract.side_effect = make_contract
+        web3.eth.call.side_effect = single_read
+        handler = _DclexPoolHandler(
+            web3=web3,
+            account=_make_account(),
+            contracts_provider=lambda: _contracts(with_multicall=with_multicall),
+            send_tx=MagicMock(),
+            read_fresh=lambda read_fn: read_fn(777),
+        )
+        return handler, web3, aggregated
+
+    @staticmethod
+    def _pool(pool, lp_symbol, balance, supply, stock_reserve, stablecoin_reserve):
+        return {
+            (pool, f"balanceOf:{_USER_ADDRESS}"): _ok(["uint256"], balance),
+            (pool, "totalSupply"): _ok(["uint256"], supply),
+            (pool, "getReserves"): _ok(
+                ["uint256", "uint256"], stock_reserve, stablecoin_reserve
+            ),
+            (pool, "symbol"): _ok(["string"], lp_symbol),
+        }
+
+    @staticmethod
+    def _listed(token, pool, symbol):
+        answers = {
+            (_ROUTER_ADDRESS, f"stockTokenToPool:{token}"): _ok(["address"], pool)
+        }
+        if symbol is not None:
+            answers[(token, "symbol")] = _ok(["string"], symbol)
+        return answers
+
+    def _aapl(self, balance=3 * 10**18 + 1):
+        return self._pool(
+            _POOL_A,
+            "AAPL-LP",
+            balance,
+            7 * 10**18,
+            10 * 10**18 + 5,
+            1234567890999999999999,
+        )
+
+    def test_a_position_pays_out_what_the_pool_would_round_down_to(self):
+        handler, _, aggregated = self._handler(
+            self._aapl(), routes={_AAPL_TOKEN: _POOL_A}
+        )
+
+        position = handler.lp_position("AAPL")
+
+        assert position == PriceFeedLPPosition(
+            symbol="AAPL",
+            lp_symbol="AAPL-LP",
+            pool_address=_POOL_A,
+            liquidity_amount=Decimal(3 * 10**18 + 1),
+            lp_balance=Decimal("3.000000000000000001"),
+            pool_share=Decimal(3 * 10**18 + 1) / Decimal(7 * 10**18),
+            stock_amount=Decimal("4.285714285714285717"),
+            stablecoin_amount=Decimal("529.100524"),
+        )
+        [(calls, block)] = aggregated
+        assert block == 777
+        assert calls == [
+            (_POOL_A, True, f"balanceOf:{_USER_ADDRESS}"),
+            (_POOL_A, True, "totalSupply"),
+            (_POOL_A, True, "getReserves"),
+            (_POOL_A, True, "symbol"),
+        ]
+
+    def test_a_pool_without_lp_reads_as_zero(self):
+        answers = self._pool(_POOL_A, "AAPL-LP", 0, 0, 0, 0)
+        handler, _, _ = self._handler(answers, routes={_AAPL_TOKEN: _POOL_A})
+
+        position = handler.lp_position("AAPL")
+
+        assert position.liquidity_amount == 0
+        assert (position.pool_share, position.stock_amount) == (0, 0)
+        assert position.stablecoin_amount == 0
+
+    def test_a_symbol_without_an_oracle_pool_raises_naming_it(self):
+        handler, _, _ = self._handler({}, routes={_AAPL_TOKEN: _NO_POOL})
+
+        with pytest.raises(PoolNotFound, match="pool registered for AAPL$"):
+            handler.lp_position("AAPL")
+
+    @pytest.mark.parametrize("read", ["totalSupply", "getReserves", "symbol"])
+    def test_a_single_read_raises_when_any_pool_read_fails(self, read):
+        answers = self._pool(_POOL_A, "AAPL-LP", 0, 0, 0, 0)
+        del answers[(_POOL_A, read)]
+        handler, _, _ = self._handler(answers, routes={_AAPL_TOKEN: _POOL_A})
+
+        with pytest.raises(RuntimeError, match="AAPL pool"):
+            handler.lp_position("AAPL")
+
+    def test_lists_the_held_pools_in_two_reads(self):
+        answers = {
+            **self._listed(_AAPL_TOKEN, _POOL_A, "AAPL"),
+            **self._aapl(),
+            **self._listed(_GOOG_TOKEN, _POOL_B, "GOOG"),
+            **self._pool(_POOL_B, "GOOG-LP", 0, 10**18, 10**18, 10**18),
+            **self._listed(_AMMT1_TOKEN, _NO_POOL, "AMMT1"),
+        }
+        tokens = [_AAPL_TOKEN, _GOOG_TOKEN, _AMMT1_TOKEN]
+        handler, web3, aggregated = self._handler(answers, tokens)
+        web3.to_checksum_address.side_effect = lambda a: a.upper().replace("0X", "0x")
+
+        positions = handler.lp_positions()
+
+        assert all(allow is True for calls, _ in aggregated for _, allow, _ in calls)
+        router = web3.eth.contract(address=_ROUTER_ADDRESS, abi=[])
+        router.functions.allStockTokens.return_value.call.assert_called_once_with(
+            block_identifier=777
+        )
+        assert [(p.symbol, p.lp_symbol) for p in positions] == [("AAPL", "AAPL-LP")]
+        assert positions[0].pool_address == _POOL_A.upper().replace("0X", "0x")
+        assert positions[0].stock_amount == Decimal("4.285714285714285717")
+        assert [block for _, block in aggregated] == [777, 777]
+        read_pools = {target.lower() for target, _, _ in aggregated[1][0]}
+        assert read_pools == {_POOL_A.lower(), _POOL_B.lower()}
+
+    @pytest.mark.parametrize("unreadable", [None, ""])
+    def test_a_token_without_a_readable_symbol_keeps_its_position(self, unreadable):
+        answers = {
+            **self._listed(_NAMELESS_TOKEN, _POOL_C, unreadable),
+            **self._pool(_POOL_C, "X-LP", 10**18, 2 * 10**18, 10**18, 10**18),
+        }
+        handler, _, _ = self._handler(answers, [_NAMELESS_TOKEN])
+
+        [position] = handler.lp_positions()
+
+        assert (position.symbol, position.lp_symbol) == (_NAMELESS_TOKEN, "X-LP")
+        assert position.lp_balance == 1
+
+    @pytest.mark.parametrize(
+        "read",
+        [f"balanceOf:{_USER_ADDRESS}", "totalSupply", "getReserves", "symbol"],
+    )
+    def test_an_unreadable_held_pool_raises_instead_of_dropping_it(self, read):
+        answers = {**self._listed(_AAPL_TOKEN, _POOL_A, "AAPL"), **self._aapl()}
+        del answers[(_POOL_A, read)]
+        handler, _, _ = self._handler(answers, [_AAPL_TOKEN])
+
+        with pytest.raises(RuntimeError, match="AAPL pool"):
+            handler.lp_positions()
+
+    def test_an_unreadable_empty_pool_does_not_hide_the_held_ones(self):
+        answers = {
+            **self._listed(_AAPL_TOKEN, _POOL_A, "AAPL"),
+            **self._aapl(),
+            **self._listed(_GOOG_TOKEN, _POOL_B, "GOOG"),
+            (_POOL_B, f"balanceOf:{_USER_ADDRESS}"): _ok(["uint256"], 0),
+        }
+        handler, _, _ = self._handler(answers, [_GOOG_TOKEN, _AAPL_TOKEN])
+
+        assert [p.symbol for p in handler.lp_positions()] == ["AAPL"]
+
+    def test_a_network_error_is_not_mistaken_for_a_revert(self):
+        handler, web3, _ = self._handler(
+            self._listed(_AAPL_TOKEN, _POOL_A, "AAPL"),
+            [_AAPL_TOKEN],
+            with_multicall=False,
+        )
+        web3.eth.call.side_effect = requests.ConnectionError("reset by peer")
+
+        with pytest.raises(requests.ConnectionError):
+            handler.lp_positions()
+
+    def test_an_unreadable_router_entry_raises(self):
+        handler, _, _ = self._handler({}, [_AAPL_TOKEN])
+
+        with pytest.raises(RuntimeError, match=_AAPL_TOKEN):
+            handler.lp_positions()
+
+    def test_without_multicall_every_read_is_its_own_call_at_the_same_block(self):
+        answers = {
+            **self._listed(_AAPL_TOKEN, _POOL_A, "AAPL"),
+            **self._aapl(),
+            **self._listed(_NAMELESS_TOKEN, _POOL_C, None),
+            **self._pool(_POOL_C, "X-LP", 10**18, 2 * 10**18, 10**18, 10**18),
+        }
+        handler, web3, aggregated = self._handler(
+            answers, [_AAPL_TOKEN, _NAMELESS_TOKEN], with_multicall=False
+        )
+
+        positions = handler.lp_positions()
+
+        assert [(p.symbol, p.stablecoin_amount) for p in positions] == [
+            ("AAPL", Decimal("529.100524")),
+            (_NAMELESS_TOKEN, Decimal("0.5")),
+        ]
+        assert aggregated == []
+        assert {c.args[1] for c in web3.eth.call.call_args_list} == {777}
+        assert web3.eth.call.call_count == 2 * 2 + 2 * 4
+
+
+class TestDclexLiquidityAmountUnits:
+    def _handler(self):
+        web3 = _make_web3_mock()
+        contract = MagicMock()
+        web3.eth.contract.return_value = contract
+        contract.functions.stockTokenToPool.return_value.call.return_value = _DCLEX_POOL
+        web3.eth.get_code.return_value = b"\x63" + _BOUNDED_ADD
+        send_tx = MagicMock(return_value="0xTX")
+        handler = _DclexPoolHandler(
+            web3=web3,
+            account=_make_account(),
+            contracts_provider=_contracts,
+            send_tx=send_tx,
+        )
+        return handler, contract, send_tx
+
+    @staticmethod
+    def _add(amount):
+        return PriceFeedAddLiquidity(
+            symbol="AAPL",
+            liquidity_amount=amount,
+            max_stock_amount=Decimal("1"),
+            max_stablecoin_amount=Decimal("1"),
+        )
+
+    @staticmethod
+    def _remove(amount):
+        return PriceFeedRemoveLiquidity(symbol="AAPL", liquidity_amount=amount)
+
+    @pytest.mark.parametrize("action", ["add_liquidity", "remove_liquidity"])
+    @pytest.mark.parametrize(
+        "amount",
+        [
+            Decimal("1.5"),
+            Decimal("0"),
+            Decimal("-1"),
+            Decimal("NaN"),
+            Decimal("sNaN"),
+            "abc",
+        ],
+    )
+    def test_anything_but_a_positive_whole_number_is_refused_before_sending(
+        self, action, amount
+    ):
+        handler, contract, send_tx = self._handler()
+        params = (
+            self._add(amount) if action == "add_liquidity" else self._remove(amount)
+        )
+
+        with pytest.raises(ValueError, match="whole number of raw LP units"):
+            getattr(handler, action)(params)
+        send_tx.assert_not_called()
+
+    @pytest.mark.parametrize("amount", [10**18, Decimal("1E+18")])
+    def test_whole_units_pass_through_as_ints(self, amount):
+        handler, contract, _ = self._handler()
+
+        handler.add_liquidity(self._add(amount))
+        handler.remove_liquidity(self._remove(amount))
+
+        assert contract.functions.addLiquidity.call_args.args[0] == 10**18
+        assert contract.functions.removeLiquidity.call_args.args[0] == 10**18
 
 
 class TestAMMHandlerLiquidity:
@@ -2246,10 +2572,22 @@ class TestReadAfterWrite:
         pd._web3.eth.get_transaction_receipt.side_effect = TransactionNotFound("x")
         assert pd.tx_status("0xabc") is None
 
-    def test_facade_wires_fresh_read_executor_into_swap_and_amm_handlers(self):
+    def test_facade_wires_fresh_read_executor_into_every_pool_handler(self):
         pd = _make_primedelta()
         assert pd._router_swapper._read_fresh == pd._read_at_fresh_block
         assert pd._amm_handler._read_fresh == pd._read_at_fresh_block
+        assert pd._dclex_handler._read_fresh == pd._read_at_fresh_block
+
+    def test_facade_reads_oracle_pool_lp_through_the_pool_handler(self):
+        pd = _make_primedelta()
+        held = [MagicMock(name="AAPL")]
+        with (
+            patch.object(pd._dclex_handler, "lp_positions", return_value=held),
+            patch.object(pd._dclex_handler, "lp_position", return_value=held[0]) as one,
+        ):
+            assert pd.price_feed_lp_positions() == held
+            assert pd.price_feed_lp_position("AAPL") is held[0]
+        one.assert_called_once_with("AAPL")
 
 
 class TestBuildAndSendTransaction:
