@@ -6,6 +6,8 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-09
+
 ### Added
 - **Send tokens to another address.** `transfer_token(token_symbol, to, amount)`
   sends dUSD, a stock token, an oracle-priced pool's LP token (`"GOOG-LP"`) or
