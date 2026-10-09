@@ -79,7 +79,7 @@ The router accepts dUSD on one side (`buyExact*`/`sellExact*`) or two non-dUSD t
 
 ### Liquidity
 
-- [Oracle-priced pool liquidity](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/liquidity_pricefeed.py) — `add_liquidity` / `remove_liquidity` with `PriceFeedAddLiquidity` / `PriceFeedRemoveLiquidity`
+- [Oracle-priced pool liquidity](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/liquidity_pricefeed.py) — `add_liquidity` / `remove_liquidity` with `PriceFeedAddLiquidity` / `PriceFeedRemoveLiquidity`, and `price_feed_lp_position` / `price_feed_lp_positions` to read the LP tokens you hold
 - [Oracle-free (Uniswap V3) liquidity](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/liquidity_amm.py) — concentrated-range positions via `AMMAddLiquidity` / `AMMRemoveLiquidity`
 - [Full V3 position lifecycle](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/v3_lifecycle.py) — `add` → `increase_liquidity` → `preview_fees` → `burn_position`
 

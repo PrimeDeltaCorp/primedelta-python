@@ -80,6 +80,7 @@ from primedelta.types import (
     Portfolio,
     PortfolioHistory,
     Price,
+    PriceFeedLPPosition,
     Stock,
     Transfer,
     TxStatus,
@@ -1602,6 +1603,15 @@ class PrimeDelta:
             tokens_owed_0=p[10],
             tokens_owed_1=p[11],
         )
+
+    def price_feed_lp_position(self, symbol: str) -> PriceFeedLPPosition:
+        """This wallet's LP tokens in the oracle-priced ``symbol`` pool and what
+        removing all of them pays out now; zero amounts when it holds none."""
+        return self._dclex_handler.lp_position(symbol)
+
+    def price_feed_lp_positions(self) -> list[PriceFeedLPPosition]:
+        """Every oracle-priced pool this wallet holds LP tokens in."""
+        return self._dclex_handler.lp_positions()
 
     def _npm_contract(self) -> Any:
         from primedelta.dex.handlers import PositionManagerNotConfigured

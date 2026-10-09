@@ -15,9 +15,11 @@ from primedelta.dex.params import (
     PriceFeedRemoveLiquidity,
     SwapSide,
 )
+from primedelta.types import PriceFeedLPPosition
 
 _STABLECOIN_DECIMALS = Decimal(10**6)
 _STOCK_DECIMALS = Decimal(10**18)
+_LP_DECIMALS = Decimal(10**18)
 
 # DEFAULT_FEE_TIER from DclexRouter.sol — the oracle-free pools are created with this.
 _AMM_FEE_TIER = 3000
@@ -29,6 +31,26 @@ def _require_pool_abi(contracts: "Contracts", key: str) -> list[Any]:
     if abi is None:
         raise RuntimeError(f"{key!r} ABI missing from /contracts/ payload")
     return abi
+
+
+def _lp_units(amount: Any) -> int:
+    value = Decimal(amount)
+    if not value.is_finite() or value <= 0 or value != value.to_integral_value():
+        raise ValueError(
+            "liquidity_amount is a whole number of raw LP units (10**18 is one LP "
+            f"token), got {amount}"
+        )
+    return int(value)
+
+
+def _decoded(result: Any, *types: str) -> Optional[tuple[Any, ...]]:
+    ok, raw = result
+    if not ok or not raw:
+        return None
+    try:
+        return tuple(abi_decode(list(types), bytes(raw)))
+    except Exception:
+        return None
 
 
 def _call_view(fn_name: str, call_fn: Callable[[], Any]) -> Any:
@@ -555,6 +577,7 @@ class _DclexPoolHandler:
         self._read_fresh = read_fresh or (lambda read_fn: read_fn("latest"))
 
     def add_liquidity(self, params: PriceFeedAddLiquidity) -> str:
+        liquidity_units = _lp_units(params.liquidity_amount)
         contracts = self._contracts_provider()
         router_ref = self._require_router(contracts)
         stock_token_addr = self._require_stock_token(contracts, params.symbol)
@@ -562,7 +585,6 @@ class _DclexPoolHandler:
         pool_address = self._lookup_dclex_pool(router_ref, stock_token_addr)
         pool = self._dclex_pool(contracts, pool_address)
 
-        liquidity_units = int(params.liquidity_amount)
         max_stock_units = int(params.max_stock_amount * _STOCK_DECIMALS)
         max_stablecoin_units = int(params.max_stablecoin_amount * _STABLECOIN_DECIMALS)
 
@@ -582,13 +604,13 @@ class _DclexPoolHandler:
         return self._send_tx(pool.functions.addLiquidity(liquidity_units))
 
     def remove_liquidity(self, params: PriceFeedRemoveLiquidity) -> str:
+        liquidity_units = _lp_units(params.liquidity_amount)
         contracts = self._contracts_provider()
         router_ref = self._require_router(contracts)
         stock_token_addr = self._require_stock_token(contracts, params.symbol)
 
         pool_address = self._lookup_dclex_pool(router_ref, stock_token_addr)
         pool = self._dclex_pool(contracts, pool_address)
-        liquidity_units = int(params.liquidity_amount)
         if _pool_takes_bounds(self._web3, contracts, pool_address):
             return self._send_tx(
                 pool.functions.removeLiquidity(
@@ -604,6 +626,102 @@ class _DclexPoolHandler:
                 "min_stablecoin_amount; pass 0 for both to remove without a floor"
             )
         return self._send_tx(pool.functions.removeLiquidity(liquidity_units))
+
+    def lp_position(self, symbol: str) -> PriceFeedLPPosition:
+        contracts = self._contracts_provider()
+        router_ref = self._require_router(contracts)
+        stock_token_addr = self._require_stock_token(contracts, symbol)
+        pool_address = self._lookup_dclex_pool(router_ref, stock_token_addr)
+        return self._read_positions(contracts, [(symbol, pool_address)])[0]
+
+    def lp_positions(self) -> list[PriceFeedLPPosition]:
+        contracts = self._contracts_provider()
+        router_ref = self._require_router(contracts)
+        pools = self._read_fresh(
+            lambda block: self._oracle_pools(contracts, router_ref, block)
+        )
+        return [
+            position
+            for position in self._read_positions(contracts, pools)
+            if position.liquidity_amount > 0
+        ]
+
+    def _oracle_pools(
+        self, contracts: Contracts, router_ref: ContractRef, block: Any
+    ) -> list[tuple[str, str]]:
+        router_address = self._web3.to_checksum_address(router_ref.address)
+        router = self._web3.eth.contract(address=router_address, abi=router_ref.abi)
+        tokens = [
+            self._web3.to_checksum_address(token)
+            for token in router.functions.allStockTokens().call(block_identifier=block)
+        ]
+        symbol_call = self._web3.eth.contract(
+            abi=_require_pool_abi(contracts, "erc20")
+        ).encode_abi(abi_element_identifier="symbol")
+        calls: list[tuple[str, bool, Any]] = []
+        for token in tokens:
+            pool_call = router.encode_abi(
+                abi_element_identifier="stockTokenToPool", args=[token]
+            )
+            calls.append((router_address, True, pool_call))
+            calls.append((token, True, symbol_call))
+        results = self._aggregate(contracts, calls, block)
+        pools: list[tuple[str, str]] = []
+        for index, token in enumerate(tokens):
+            pool = _decoded(results[2 * index], "address")
+            if pool is None:
+                raise RuntimeError(f"could not read the pool registered for {token}")
+            if not int(pool[0], 16):
+                continue
+            symbol = _decoded(results[2 * index + 1], "string")
+            pools.append((symbol[0] if symbol and symbol[0] else token, pool[0]))
+        return pools
+
+    def _read_positions(
+        self, contracts: Contracts, pools: list[tuple[str, str]]
+    ) -> list[PriceFeedLPPosition]:
+        if not pools:
+            return []
+        owner = self._web3.to_checksum_address(self._account.address)
+        encoder = self._web3.eth.contract(
+            abi=_require_pool_abi(contracts, "dclex_pool")
+        )
+        reads = [
+            encoder.encode_abi(abi_element_identifier="balanceOf", args=[owner]),
+            encoder.encode_abi(abi_element_identifier="totalSupply"),
+            encoder.encode_abi(abi_element_identifier="getReserves"),
+            encoder.encode_abi(abi_element_identifier="symbol"),
+        ]
+        calls: list[tuple[str, bool, Any]] = [
+            (self._web3.to_checksum_address(pool), True, data)
+            for _, pool in pools
+            for data in reads
+        ]
+        results = self._read_fresh(
+            lambda block: self._aggregate(contracts, calls, block)
+        )
+        return [
+            _lp_position(symbol, pool, results[4 * index : 4 * index + 4])
+            for index, (symbol, pool) in enumerate(pools)
+        ]
+
+    def _aggregate(
+        self, contracts: Contracts, calls: list[tuple[str, bool, Any]], block: Any
+    ) -> list[tuple[bool, Any]]:
+        multicall = contracts.core.multicall3
+        if multicall is None:
+            return [self._single_read(target, data, block) for target, _, data in calls]
+        aggregator = self._web3.eth.contract(
+            address=self._web3.to_checksum_address(multicall.address),
+            abi=multicall.abi,
+        )
+        return aggregator.functions.aggregate3(calls).call(block_identifier=block)
+
+    def _single_read(self, target: str, data: Any, block: Any) -> tuple[bool, Any]:
+        try:
+            return True, self._web3.eth.call({"to": target, "data": data}, block)
+        except ContractLogicError:
+            return False, b""
 
     def _now(self) -> int:
         return int(self._web3.eth.get_block("latest")["timestamp"])
@@ -665,6 +783,29 @@ class _DclexPoolHandler:
         if current == amount:
             return
         self._send_tx(token.functions.approve(spender, amount))
+
+
+def _lp_position(symbol: str, pool: str, results: list[Any]) -> PriceFeedLPPosition:
+    balance = _decoded(results[0], "uint256")
+    supply = _decoded(results[1], "uint256")
+    reserves = _decoded(results[2], "uint256", "uint256")
+    lp_symbol = _decoded(results[3], "string")
+    if balance is None or supply is None or reserves is None or lp_symbol is None:
+        raise RuntimeError(f"could not read the {symbol} pool at {pool}")
+    liquidity, total = balance[0], supply[0]
+    stock_reserve, stablecoin_reserve = reserves
+    stock = liquidity * stock_reserve // total if total else 0
+    stablecoin = liquidity * stablecoin_reserve // total // 10**12 if total else 0
+    return PriceFeedLPPosition(
+        symbol=symbol,
+        lp_symbol=lp_symbol[0],
+        pool_address=pool,
+        liquidity_amount=Decimal(liquidity),
+        lp_balance=Decimal(liquidity) / _LP_DECIMALS,
+        pool_share=Decimal(liquidity) / Decimal(total) if total else Decimal(0),
+        stock_amount=Decimal(stock) / _STOCK_DECIMALS,
+        stablecoin_amount=Decimal(stablecoin) / _STABLECOIN_DECIMALS,
+    )
 
 
 class _AMMPoolHandler:

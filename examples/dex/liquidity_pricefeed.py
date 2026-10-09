@@ -51,6 +51,15 @@ add_tx = primedelta.add_liquidity(
 )
 print(f"add:    {add_tx}")
 
+# Read the TSLA-LP holding: lp_balance is in LP tokens, liquidity_amount is the
+# same holding in the raw units remove_liquidity takes, and stock_amount /
+# stablecoin_amount are what removing all of it pays out now.
+position = primedelta.price_feed_lp_position("TSLA")
+print(
+    f"{position.lp_symbol}: {position.lp_balance} "
+    f"(redeems {position.stock_amount} TSLA + {position.stablecoin_amount} dUSD)"
+)
+
 # Burn the LP shares back to underlying stock + stablecoin.
 remove_tx = primedelta.remove_liquidity(
     PriceFeedRemoveLiquidity(

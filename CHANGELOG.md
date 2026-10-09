@@ -6,7 +6,24 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+### Added
+- **Read your LP tokens in oracle-priced pools.** There was no way to see a
+  holding such as `GOOG-LP`, so removing liquidity meant guessing the raw
+  `liquidity_amount`. `price_feed_lp_positions()` lists every oracle-priced
+  pool the wallet holds LP tokens in, and `price_feed_lp_position(symbol)`
+  reads one pool (zero amounts when it holds none). Each `PriceFeedLPPosition`
+  carries the LP balance, the raw `liquidity_amount` that
+  `PriceFeedRemoveLiquidity` takes, the share of the pool, and the stock and
+  dUSD a full removal pays out now, rounded down the way the pool rounds. All
+  pools are read in two Multicall3 calls pinned to the block of the client's
+  last write.
+
 ### Fixed
+- **A fractional `liquidity_amount` is refused instead of truncated.**
+  Oracle-priced `add_liquidity` and `remove_liquidity` take raw LP units
+  (`10**18` is one LP token), and a value like `1.5` was cut down to one raw
+  unit, so the transaction moved next to nothing. They now raise `ValueError`
+  before anything is sent, as they do for zero or a negative amount.
 - **Signing in again on a live session no longer fails with 403.** `login()`
   posted to `/users/verify/` without the `X-CSRFToken`, `Origin` and `Referer`
   headers every other write sends. Signing in on a fresh client worked, but a
