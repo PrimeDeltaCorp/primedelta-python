@@ -89,11 +89,16 @@ class TestLogin:
 
         client.login(message="m", signature="s", nonce="n")
 
-        tokens = [
-            call.kwargs["headers"]["X-CSRFToken"]
+        verify = client._url("/users/verify/")
+        body = {"message": "m", "signature": "s", "nonce": "n"}
+        sent = [
+            (*call.args, call.kwargs["data"], call.kwargs["headers"]["X-CSRFToken"])
             for call in session.request.call_args_list
         ]
-        assert tokens == ["stale", "fresh"]
+        assert sent == [
+            ("POST", verify, body, "stale"),
+            ("POST", verify, body, "fresh"),
+        ]
         assert client._csrf_token is None
 
     def test_a_second_forbidden_login_raises(self):
@@ -124,6 +129,7 @@ class TestLogin:
 
         with pytest.raises(UserSignedMessageVerificationError):
             client.login(message="m", signature="bad", nonce="n")
+        session.request.assert_called_once()
 
 
 class TestCsrf:
