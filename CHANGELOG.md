@@ -6,6 +6,16 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+### Fixed
+- **Signing in again on a live session no longer fails with 403.** `login()`
+  posted to `/users/verify/` without the `X-CSRFToken`, `Origin` and `Referer`
+  headers every other write sends. Signing in on a fresh client worked, but a
+  second `login()` while the session was still valid (a script that signs in
+  before each batch, or switching accounts) failed Django's CSRF Referer check
+  with `403 CSRF Failed: Referer checking failed`. The login now goes through
+  the same request path as other writes, and a stale CSRF token is refetched
+  once.
+
 ## [0.3.0] - 2026-10-08
 
 ### Added

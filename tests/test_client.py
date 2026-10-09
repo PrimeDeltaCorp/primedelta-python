@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
+from primedelta import primedelta_client
 from primedelta.primedelta_client import (
     APIError,
     AuthorizationError,
@@ -56,30 +57,79 @@ def _client_with_session():
 
 
 class TestLogin:
-    def test_verify_posted_without_csrf_and_no_token_stored(self):
+    def test_verify_carries_csrf_origin_and_referer(self):
         client, session = _client_with_session()
-        session.post.return_value = _Resp(204)
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(204)
 
         client.login(message="m", signature="s", nonce="n")
 
-        session.post.assert_called_once()
-        args, kwargs = session.post.call_args
-        assert args[0].endswith("/users/verify/")
+        session.request.assert_called_once()
+        method, url = session.request.call_args.args
+        kwargs = session.request.call_args.kwargs
+        assert method == "POST"
+        assert url.endswith("/users/verify/")
         assert kwargs["data"] == {"message": "m", "signature": "s", "nonce": "n"}
-        assert "headers" not in kwargs or "X-CSRFToken" not in (
-            kwargs.get("headers") or {}
-        )
-        session.get.assert_not_called()
+        assert kwargs["headers"] == {
+            "X-CSRFToken": "tok",
+            "Origin": client._origin(),
+            "Referer": client._origin() + "/",
+        }
+        session.post.assert_not_called()
         assert client._csrf_token is None
+
+    def test_a_relogin_with_a_stale_token_retries_once_with_a_fresh_one(self):
+        client, session = _client_with_session()
+        client._csrf_token = "stale"
+        session.get.return_value = _Resp(200, {"csrfToken": "fresh"})
+        session.request.side_effect = [
+            _Resp(403, {"detail": ["CSRF Failed: CSRF token incorrect."]}),
+            _Resp(204),
+        ]
+
+        client.login(message="m", signature="s", nonce="n")
+
+        verify = client._url("/users/verify/")
+        body = {"message": "m", "signature": "s", "nonce": "n"}
+        sent = [
+            (*call.args, call.kwargs["data"], call.kwargs["headers"]["X-CSRFToken"])
+            for call in session.request.call_args_list
+        ]
+        assert sent == [
+            ("POST", verify, body, "stale"),
+            ("POST", verify, body, "fresh"),
+        ]
+        assert client._csrf_token is None
+
+    def test_a_second_forbidden_login_raises(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(403, {"detail": ["CSRF Failed"]})
+
+        with pytest.raises(requests.HTTPError):
+            client.login(message="m", signature="s", nonce="n")
+        assert session.request.call_count == 2
+
+    def test_a_business_refusal_is_not_retried(self):
+        client, session = _client_with_session()
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        code = next(iter(primedelta_client._BUSINESS_403_CODES))
+        session.request.return_value = _Resp(403, {"errorCode": code})
+
+        with pytest.raises(requests.HTTPError):
+            client.login(message="m", signature="s", nonce="n")
+        session.request.assert_called_once()
 
     def test_raises_on_message_verification_error(self):
         client, session = _client_with_session()
-        session.post.return_value = _Resp(
+        session.get.return_value = _Resp(200, {"csrfToken": "tok"})
+        session.request.return_value = _Resp(
             400, {"errorCode": "MESSAGE_VERIFICATION_ERROR"}
         )
 
         with pytest.raises(UserSignedMessageVerificationError):
             client.login(message="m", signature="bad", nonce="n")
+        session.request.assert_called_once()
 
 
 class TestCsrf:
