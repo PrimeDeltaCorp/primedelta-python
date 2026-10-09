@@ -35,30 +35,30 @@ pd.login()                               # SIWE over a cookie session
 **First reads (no funds moved; some need no login at all):**
 ```python
 open_now = pd.is_market_open()                         # oracle-priced tokens trade only when True
-px       = pd.spot_price("AMMT1")                       # slot0 spot, read-only (oracle-free tokens only)
-quote    = pd.quote_swap("AMMT1", SwapSide.STABLECOIN_TO_STOCK,
-                         Decimal("10"), exact="input")  # V3 Quoter, read-only (oracle-free tokens only)
+kind     = pd.instrument_kind("WDEL")                   # "amm": oracle-free, trades 24/7
+px       = pd.spot_price("WDEL")                        # slot0 spot, read-only (oracle-free tokens only)
 status   = pd.get_account_status()                      # VERIFIED / DID_MINTED / ...
 ```
-> Note: `quote_swap`/`spot_price` cover **oracle-free tokens only** (AMMT1/AMMT2/WDEL). For an oracle-priced token (e.g. AAPL) use `oracle_quote(symbol, side, amount_in)` after `is_market_open()`: it prices one token at the signed share price times the token's split multiplier and applies the pool's dynamic fee, so `min_out_from_quote(q.expected_amount_out, slippage_bps)` gives a real floor. It needs a login and raises `OraclePriceUnavailable` while the market is closed.
+> Note: `quote_swap`/`spot_price` cover **oracle-free tokens only** (WDEL). For an oracle-priced token (e.g. AAPL) use `oracle_quote(symbol, side, amount_in)` after `is_market_open()`: it prices one token at the signed share price times the token's split multiplier and applies the pool's dynamic fee, so `min_out_from_quote(q.expected_amount_out, slippage_bps)` gives a real floor. It needs a login and raises `OraclePriceUnavailable` while the market is closed.
 
-**First write — a 24/7 oracle-free swap.** Always pass a real `min_amount_out` derived from `quote_swap` — never `0`:
+**First write — wrap DEL, then a 24/7 oracle-free swap.** `wrap_del` turns native DEL into WDEL 1:1 and needs no login. Swaps need liquidity in the testnet WDEL/dUSD pool: while the pool is empty, `quote_swap` and the swap revert. Always pass a real `min_amount_out` derived from `quote_swap` — never `0`:
 ```python
-expected = pd.quote_swap("AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("10"))
+pd.wrap_del(Decimal("1"))
+expected = pd.quote_swap("WDEL", SwapSide.STOCK_TO_STABLECOIN, Decimal("1"))
 min_out  = expected * Decimal("0.99")                   # 1% slippage budget
 tx = pd.swap_exact_input(
-    "AMMT1", SwapSide.STABLECOIN_TO_STOCK,
-    amount_in=Decimal("10"),
+    "WDEL", SwapSide.STOCK_TO_STABLECOIN,
+    amount_in=Decimal("1"),
     min_amount_out=min_out,
 )                                                        # returns 0x-tx-hash; receipt already mined
-got = pd.get_onchain_stock_balance("AMMT1")             # bypasses backend indexer lag
+got = pd.get_onchain_stablecoin_balance()               # bypasses backend indexer lag
 ```
 `swap_exact_input` requires `login()` **and** a minted DID (`DID_MINTED`). If you only have `VERIFIED`, call `pd.claim_digital_identity()` first. KYC happens in the web app — `pd.verification_url()`.
 
 **Non-custodial variant.** To hand the same swap to an external wallet instead of broadcasting it, wrap it in `craft`:
 ```python
 txs = pd.craft(lambda: pd.swap_exact_input(
-    "AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("10"), min_out))
+    "WDEL", SwapSide.STOCK_TO_STABLECOIN, Decimal("1"), min_out))
 # txs == [{from,to,value,data,chainId}, ...] — e.g. [approve, swap], in send order.
 # gas/nonce are left for the signing wallet. Sign promptly: oracle-lane calldata
 # embeds a signed price + deadline that expire.
@@ -93,7 +93,7 @@ Signers: `LocalAccountSigner` (raw key / keystore / mnemonic), `KmsSigner` (AWS 
 
 **4.1 Market hours — oracle-priced vs oracle-free.**
 - **Oracle-priced / PRICE_FEED tokens** (real equities, e.g. `AAPL`) trade only while the **US market is open** — and "trade" means every oracle-priced action, not just swaps: an oracle swap **and** `add_liquidity(PriceFeedAddLiquidity)` / `remove_liquidity(PriceFeedRemoveLiquidity)` price against the signed oracle, so all revert off-hours. Each oracle action fetches a fresh broker-signed price and submits it with the tx. Outside market hours the backend returns **no signed prices** and the pool **reverts** (`0x19abf40e` StalePrice → `MarketClosed`). Always gate oracle swaps *and* oracle-priced liquidity on `pd.is_market_open()` and treat that revert as "market closed," not a bug.
-- **Oracle-free tokens** (`AMMT1`, `AMMT2`, `WDEL`) trade **24/7** — no signed price, no market-hours gate.
+- **Oracle-free tokens** (`WDEL`) trade **24/7** — no signed price, no market-hours gate.
 - Do **not** try to obtain closed-market oracle-priced-token exposure by routing through oracle-free proxies or any other path (see §5).
 
 **4.2 DID / KYC gating.** Every custodial and on-chain equity/dUSD movement requires `DID_MINTED` and a **valid** DID (`is_valid()` → `True`). On `AccountNotVerified`: if `VERIFIED`, call `claim_digital_identity()`; if `AWAITING_MAIN_CONFIRMATION`, this is an AI agent account waiting for its main account to confirm it, so ask the owner to confirm it, do not start KYC; if `SUBACCOUNT_REJECTED`, the main account rejected this agent and unlinked it, so it may `register_ai_account()` again or finish its own KYC; if `CLOSED`, the main closed this agent: its DID is invalid, DID-gated tokens on its wallet are frozen and its Mint balances moved to the main, and only the main can `reopen_ai_agent()` it; otherwise the user must finish KYC at `verification_url()`. A revoked/blocked DID makes `is_valid()` false and reverts all trading — treat as terminal, not retryable.
@@ -106,13 +106,13 @@ Signers: `LocalAccountSigner` (raw key / keystore / mnemonic), `KmsSigner` (AWS 
 
 **4.6 Error handling.** Catch explicitly:
 - `TransactionFailed` — on-chain revert / failed mine. Attributes `.reason` (decoded `Error(string)`/`Panic`), `.tx_hash`, `.to`, `.data` (replay with `cast call`), `.trace`. Selector `0x19abf40e` = stale/absent oracle price → market closed.
-- `AccountNotVerified` (DID/KYC gate), `NotEnoughFunds` (`INSUFFICIENT_FUNDS`), `InvalidOrderInput` (`INVALID_QUANTITY[_PRECISION]` / `INVALID_PRICE[_PRECISION]` — round quantity/price to the stock's `quantity_decimals` / `price_decimals` and keep both above zero), `AIAgentError` (an AI-agent call was refused; `error_code` says why) with `AIAgentApprovalError` (the approval expired, was used, or a signature does not match: request a new one) and `AIAgentTransferError` (fund/return refused; `REQUEST_ID_CONFLICT` means the `request_id` was already used for a different transfer) and `AIAgentPolicyError` (an AI agent's order broke the rules its main set — `AGENT_PAUSED`, `AGENT_SYMBOL_NOT_ALLOWED` with `allowed_symbols`, `AGENT_ORDER_LIMIT_EXCEEDED` / `AGENT_DAILY_LIMIT_EXCEEDED` with `limit_usd` / `remaining_usd` / `order_value_usd`; read `get_ai_agent_policy()` before ordering and don't retry until the main changes the rules or the UTC day resets at `resets_at`), `NotLoggedIn` (re-`login()`), `CannotCraft` (a backend REST action was wrapped in `craft` — it can't be crafted; call it directly or don't craft it), and config gaps `WdelNotConfigured` / `PoolNotFound` / `RouterNotConfigured` / `QuoterNotConfigured` / `PositionManagerNotConfigured` — not transient. Do not blind-retry a deterministic revert.
+- `AccountNotVerified` (DID/KYC gate), `NotEnoughFunds` (`INSUFFICIENT_FUNDS`), `InvalidOrderInput` (`INVALID_QUANTITY[_PRECISION]` / `INVALID_PRICE[_PRECISION]` — round quantity/price to the stock's `quantity_decimals` / `price_decimals` and keep both above zero), `AIAgentError` (an AI-agent call was refused; `error_code` says why) with `AIAgentApprovalError` (the approval expired, was used, or a signature does not match: request a new one) and `AIAgentTransferError` (fund/return refused; `REQUEST_ID_CONFLICT` means the `request_id` was already used for a different transfer) and `AIAgentPolicyError` (an AI agent's order broke the rules its main set — `AGENT_PAUSED`, `AGENT_SYMBOL_NOT_ALLOWED` with `allowed_symbols`, `AGENT_ORDER_LIMIT_EXCEEDED` / `AGENT_DAILY_LIMIT_EXCEEDED` with `limit_usd` / `remaining_usd` / `order_value_usd`; read `get_ai_agent_policy()` before ordering and don't retry until the main changes the rules or the UTC day resets at `resets_at`), `NotLoggedIn` (re-`login()`), `CannotCraft` (a backend REST action was wrapped in `craft` — it can't be crafted; call it directly or don't craft it), and config gaps `NetworkMismatch` (the RPC is on another chain than `network`) / `WdelNotConfigured` / `PoolNotFound` / `RouterNotConfigured` / `QuoterNotConfigured` / `PositionManagerNotConfigured` — not transient. Do not blind-retry a deterministic revert.
 
 **4.7 Idempotency.** Methods return a **tx hash** or a **server-side id** (`order_id`, `withdrawal_id`). The SDK does **not** dedupe backend requests — before retrying a call that may have partially succeeded, check state first (`get_order_status`, `open_orders`, `claimable_withdrawals`, `get_onchain_*_balance`). Persist submitted hashes/ids; reconcile on restart. Deposits/withdrawals are two-phase (`request_*` → `claim_*`) — treat the id as the idempotency key. `fund_ai_agent` / `return_to_main` are the exception: the backend dedupes them by `request_id`, so pass your own, persist it, and reuse it to retry (an omitted one is a fresh UUID4 per call, which never dedupes).
 
 **4.8 Reads vs writes.** `quote_swap`, `spot_price`, `preview_fees` (your own positions only), on-chain balance reads, and DID reads are cheap and read-only — use them liberally before writing. Prefer `get_onchain_*_balance` right after a swap; the backend portfolio indexer lags.
 
-**4.9 Networks.** Never point a mainnet key at a dev/testnet config or vice-versa. `network=` selects the whole stack. Verify `network` and the resolved chain match your intent before the first write.
+**4.9 Networks.** Never point a mainnet key at a dev/testnet config or vice-versa. `network=` (default `"testnet"`) selects the bundled contracts and chain id and the default backend URL and SIWE domain. It does not select the RPC: that is `web3_provider_url`. `PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL` / `PRIMEDELTA_SIWE_DOMAIN`, when set, override the backend and SIWE domain for every network. Before the first login, send or `craft` the client compares the RPC's chain id with the network's and raises `NetworkMismatch` if they differ; still verify `network`, the RPC and the backend match your intent before the first write.
 
 ## 5. Fair use & anti-abuse policy
 PrimeDelta welcomes automated, legitimate trading agents and does **not** tolerate market abuse. PrimeDelta is a KYC-gated venue for tokenized equities. By trading through this API you accept:

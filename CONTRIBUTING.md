@@ -33,6 +33,8 @@ export PRIMEDELTA_TEST_PRIVATE_KEY=0x...        # a funded, VERIFIED_MINTED wall
 pytest tests/integration -m integration
 ```
 
+The DEX integration tests (`tests/integration/test_dex_integration.py`) swap and add liquidity, so they need liquidity in the testnet pools; they fail while a pool is empty. For the local stack, `.env.local.example` sets `PRIMEDELTA_NETWORK=dev`: the chain check accepts Anvil's chain 31337 only with `network="dev"`.
+
 `network=` (default `testnet`) selects the backend + SIWE domain automatically; the `PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL` env vars override for local stacks.
 
 ## Formatting

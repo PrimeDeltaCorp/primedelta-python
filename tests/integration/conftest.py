@@ -6,7 +6,7 @@ import requests
 from dotenv import load_dotenv
 from web3 import Web3
 
-# Prefer .env.local when present (local stack), fall back to .env (default/dev).
+# Prefer .env.local when present (local stack), fall back to .env (testnet).
 _repo_root = Path(__file__).resolve().parents[2]
 _env_local = _repo_root / ".env.local"
 _env = _repo_root / ".env"
@@ -15,7 +15,8 @@ if _env_local.exists():
 elif _env.exists():
     load_dotenv(_env, override=True)
 
-from primedelta import PrimeDelta  # noqa: E402
+from primedelta import PrimeDelta, networks  # noqa: E402
+from primedelta.settings import DEFAULT_NETWORK  # noqa: E402
 from primedelta.types import AccountStatus  # noqa: E402
 
 
@@ -41,7 +42,7 @@ def provider_url():
 
 @pytest.fixture(scope="session")
 def network():
-    return os.getenv("PRIMEDELTA_NETWORK", "testnet")
+    return os.getenv("PRIMEDELTA_NETWORK", DEFAULT_NETWORK)
 
 
 @pytest.fixture(scope="session")
@@ -218,11 +219,18 @@ def _bootstrap_test_account(test_private_key, provider_url, network):
     w3 = Web3(Web3.HTTPProvider(provider_url))
     test_address = w3.eth.account.from_key(test_private_key).address
 
-    if w3.eth.chain_id != 31337:
+    chain_id = w3.eth.chain_id
+    if chain_id != 31337:
         # Real chain (dev/testnet): funding + FakeVerification are local-only.
         # The wallet must already be provisioned (funded + KYC + DID) — assert
         # that and otherwise skip the session cleanly instead of trying to
         # anvil-fund a live chain.
+        expected = networks.load(network).chain_id
+        if chain_id != expected:
+            pytest.fail(
+                f"PRIMEDELTA_PROVIDER_URL is chain {chain_id}, but "
+                f"PRIMEDELTA_NETWORK={network!r} expects chain {expected}"
+            )
         sdk = PrimeDelta(
             private_key=test_private_key,
             web3_provider_url=provider_url,
