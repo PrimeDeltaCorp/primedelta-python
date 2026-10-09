@@ -25,15 +25,15 @@ pytest tests --ignore=tests/integration --cov=primedelta --cov-report=term-missi
 
 Coverage is gated at **85%** (`[tool.coverage.report] fail_under`).
 
-Integration tests hit a live backend + chain and **self-skip** without credentials. To run them against dev, export:
+Integration tests hit a live backend + chain and **self-skip** without credentials. They pass `PRIMEDELTA_NETWORK` (default `testnet`) to `PrimeDelta(network=...)`. To run them against testnet, export:
 
 ```bash
-export PRIMEDELTA_PROVIDER_URL=https://besu.dev.primedelta.io
+export PRIMEDELTA_PROVIDER_URL=https://chain.testnet.primedelta.io
 export PRIMEDELTA_TEST_PRIVATE_KEY=0x...        # a funded, VERIFIED_MINTED wallet
 pytest tests/integration -m integration
 ```
 
-`network=` selects the backend + SIWE domain automatically (dev/testnet); the `PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL` env vars override for local stacks.
+`network=` (default `testnet`) selects the backend + SIWE domain automatically; the `PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL` env vars override for local stacks.
 
 ## Formatting
 

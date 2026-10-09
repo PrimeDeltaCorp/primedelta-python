@@ -6,6 +6,17 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+### Changed
+- **`PrimeDelta()` defaults to `testnet`, the public network**, instead of the
+  internal `dev` network. A client built without `network=` now loads
+  `networks/testnet.json` (chain 7357), calls
+  `https://api.testnet.primedelta.io` and signs in on
+  `mint.testnet.primedelta.io`. The fallback URLs in `primedelta.settings`
+  (`PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL`) follow it. `network="dev"`
+  still works; a caller that relied on the old default must now pass it. The
+  integration tests and the examples pass `PRIMEDELTA_NETWORK` (default
+  `testnet`) as `network=`, and the scheduled drift job sets it to `dev`.
+
 ### Fixed
 - **Signing in again on a live session no longer fails with 403.** `login()`
   posted to `/users/verify/` without the `X-CSRFToken`, `Origin` and `Referer`

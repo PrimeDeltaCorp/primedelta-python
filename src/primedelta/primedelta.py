@@ -54,6 +54,7 @@ from primedelta.primedelta_client import (
     _stablecoin_deposit_amount,
 )
 from primedelta.settings import (
+    DEFAULT_NETWORK,
     SIWE_LOOPBACK_DOMAIN,
     SIWE_MESSAGE,
     resolve_endpoints,
@@ -527,7 +528,7 @@ class PrimeDelta:
         self,
         private_key: Optional[str] = None,
         web3_provider_url: Optional[str] = None,
-        network: str = "dev",
+        network: str = DEFAULT_NETWORK,
         signer: Optional[Signer] = None,
         auto_relogin: bool = True,
         on_login: Optional[Callable[["PrimeDelta"], None]] = None,

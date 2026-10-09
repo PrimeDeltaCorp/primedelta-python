@@ -45,6 +45,7 @@ jobs:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     env:
+      PRIMEDELTA_NETWORK: dev
       PRIMEDELTA_PROVIDER_URL: ${{ secrets.PRIMEDELTA_PROVIDER_URL }}
       PRIMEDELTA_BASE_URL: ${{ secrets.PRIMEDELTA_BASE_URL }}
       PRIMEDELTA_APP_URL: ${{ secrets.PRIMEDELTA_APP_URL }}

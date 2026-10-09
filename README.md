@@ -26,6 +26,7 @@ from primedelta import PrimeDelta, SwapSide
 primedelta = PrimeDelta(
     private_key=...,
     web3_provider_url=...,
+    network="testnet",
 )
 primedelta.login()
 
@@ -92,7 +93,7 @@ A `Signer` is the whole wallet dependency (`address`, `sign_message`, submit-a-t
 
 ## Networks
 
-Addresses and ABIs ship inside the package under [`networks/`](https://github.com/PrimeDeltaCorp/primedelta-python/tree/main/src/primedelta/networks/). Pass `network="testnet"` to `PrimeDelta(...)` — the backend base URL and SIWE signing domain follow the network automatically (no extra env). `PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL` env vars still override for local stacks. To pin a different deployment, edit the network's JSON file.
+Addresses and ABIs ship inside the package under [`networks/`](https://github.com/PrimeDeltaCorp/primedelta-python/tree/main/src/primedelta/networks/). `network` defaults to `"testnet"`, the public network — the backend base URL and SIWE signing domain follow the network automatically (no extra env). `PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL` env vars still override for local stacks. To pin a different deployment, edit the network's JSON file.
 
 ## Development
 

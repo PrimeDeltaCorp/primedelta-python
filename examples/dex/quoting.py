@@ -16,6 +16,7 @@ load_dotenv(find_dotenv(".env.local") or find_dotenv(".env"))
 primedelta = PrimeDelta(
     private_key=os.environ["PRIMEDELTA_TEST_PRIVATE_KEY"],
     web3_provider_url=os.environ["PRIMEDELTA_PROVIDER_URL"],
+    network=os.environ.get("PRIMEDELTA_NETWORK", "testnet"),
 )
 
 # Spot price of AMMT1 in dUSD (from the pool's slot0).

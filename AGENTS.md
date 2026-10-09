@@ -20,7 +20,7 @@ Install (Python ≥ 3.10):
 ```bash
 pip install primedelta          # add primedelta[kms] for AWS KMS signer
 ```
-Construct the client. `web3_provider_url` is **required**; `network` selects addresses/ABIs/backend URL (e.g. `"testnet"`):
+Construct the client. `web3_provider_url` is **required**; `network` selects addresses/ABIs/backend URL (default `"testnet"`):
 ```python
 from decimal import Decimal
 from primedelta import PrimeDelta, SwapSide
