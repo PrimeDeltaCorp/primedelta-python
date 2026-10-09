@@ -358,10 +358,11 @@ class PrimeDeltaClient:
         return response.json()["nonce"]
 
     def login(self, message: str, signature: str, nonce: str) -> None:
-        response = self._session.post(
-            self._url("/users/verify/"),
-            data={"message": message, "signature": signature, "nonce": nonce},
-        )
+        data = {"message": message, "signature": signature, "nonce": nonce}
+        response = self._request("POST", "/users/verify/", data=data)
+        if response.status_code == 403 and not self._is_business_refusal(response):
+            self._csrf_token = None
+            response = self._request("POST", "/users/verify/", data=data)
         if response.status_code == 400:
             if self._error_code(response) == "MESSAGE_VERIFICATION_ERROR":
                 raise UserSignedMessageVerificationError()
