@@ -2,10 +2,15 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
+from web3 import Web3
 
 from primedelta import CannotCraft, PrimeDelta
 from primedelta.primedelta import TransactionFailed
 from primedelta.types import FiatWithdrawalBankAccount, OrderSide
+
+_TO = Web3.to_checksum_address("0x" + "a" * 40)
+_SPENDER = Web3.to_checksum_address("0x" + "c" * 40)
+_RECIPIENT = Web3.to_checksum_address("0x" + "d" * 40)
 
 
 def _pd():
@@ -24,12 +29,12 @@ class TestCraft:
         pd = _pd()
         chain_id = pd._get_contracts().chain_id
 
-        txs = pd.craft(lambda: pd.send_del("0xTO", Decimal("0.001")))
+        txs = pd.craft(lambda: pd.send_del(_TO, Decimal("0.001")))
 
         assert txs == [
             {
                 "from": "0xME",
-                "to": "0xTO",
+                "to": _TO,
                 "value": 10**15,
                 "data": "0x",
                 "chainId": chain_id,
@@ -48,7 +53,7 @@ class TestCraft:
         fn.fn_name = "approve"
         fn._encode_transaction_data.return_value = "0xAPPROVE"
 
-        txs = pd.craft(lambda: pd.approve("dUSD", "0xSPENDER", Decimal("5")))
+        txs = pd.craft(lambda: pd.approve("dUSD", _SPENDER, Decimal("5")))
 
         assert txs == [
             {
@@ -59,7 +64,7 @@ class TestCraft:
                 "chainId": pd._get_contracts().chain_id,
             }
         ]
-        erc20.functions.approve.assert_called_once_with("0xSPENDER", 5_000_000)
+        erc20.functions.approve.assert_called_once_with(_SPENDER, 5_000_000)
         pd._signer.submit_transaction.assert_not_called()
 
     def test_multi_step_action_captures_distinct_txs_in_order(self):
@@ -73,8 +78,8 @@ class TestCraft:
         fn._encode_transaction_data.return_value = "0xAPPROVE"
 
         def approve_then_transfer():
-            pd.approve("dUSD", "0xSPENDER", Decimal("5"))
-            pd.send_del("0xRECIPIENT", Decimal("0.001"))
+            pd.approve("dUSD", _SPENDER, Decimal("5"))
+            pd.send_del(_RECIPIENT, Decimal("0.001"))
 
         txs = pd.craft(approve_then_transfer)
 
@@ -91,7 +96,7 @@ class TestCraft:
             },
             {
                 "from": "0xME",
-                "to": "0xRECIPIENT",
+                "to": _RECIPIENT,
                 "value": 10**15,
                 "data": "0x",
                 "chainId": chain_id,
@@ -110,11 +115,11 @@ class TestCraft:
         fn.w3.eth.contract.return_value.encode_abi.side_effect = ValueError("bad abi")
 
         with pytest.raises(TransactionFailed):
-            pd.craft(lambda: pd.approve("dUSD", "0xSPENDER", Decimal("5")))
+            pd.craft(lambda: pd.approve("dUSD", _SPENDER, Decimal("5")))
 
     def test_crafting_flag_reset_after_action(self):
         pd = _pd()
-        pd.craft(lambda: pd.send_del("0xTO", Decimal("0.001")))
+        pd.craft(lambda: pd.send_del(_TO, Decimal("0.001")))
         assert pd._crafting is None
 
     def test_crafting_flag_reset_after_exception(self):
