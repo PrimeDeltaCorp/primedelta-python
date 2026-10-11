@@ -56,6 +56,18 @@ class TestChainGuard:
             pd.send_del(_ADDR, Decimal("1"))
         pd._signer.submit_transaction.assert_not_called()
 
+    def test_a_token_transfer_refuses_an_rpc_on_another_chain(self):
+        pd, _ = _pd("testnet", 2028)
+        with pytest.raises(NetworkMismatch):
+            pd.transfer_token("dUSD", _ADDR, Decimal("1"))
+        pd._signer.submit_transaction.assert_not_called()
+        pd._web3.eth.send_raw_transaction.assert_not_called()
+
+    def test_a_token_transfer_goes_through_on_the_right_chain(self):
+        pd, _ = _pd("testnet", 7357)
+        txs = pd.craft(lambda: pd.transfer_token("dUSD", _ADDR, Decimal("1")))
+        assert [tx["chainId"] for tx in txs] == [7357]
+
     def test_craft_refuses_an_rpc_on_another_chain(self):
         pd, _ = _pd("testnet", 2028)
         action = MagicMock()
