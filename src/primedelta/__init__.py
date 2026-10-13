@@ -26,6 +26,7 @@ from .primedelta import (
     DigitalIdentityAlreadyClaimed,
     InvalidOrderInput,
     MarketClosed,
+    NetworkMismatch,
     NotEnoughFunds,
     OraclePriceUnavailable,
     PrimeDelta,

@@ -129,7 +129,7 @@ class TestPoolParsing:
 
 
 class TestPrimeDeltaContractsLoading:
-    def test_loads_dev_network_by_default(self):
+    def test_loads_testnet_network_by_default(self):
         with patch("primedelta.primedelta.Web3"):
             primedelta = PrimeDelta(
                 private_key="0x" + "1" * 64,
@@ -138,10 +138,20 @@ class TestPrimeDeltaContractsLoading:
 
         contracts = primedelta._get_contracts()
         assert isinstance(contracts, Contracts)
-        assert contracts.chain_id == 2028  # value pinned in networks/dev.json
+        assert contracts.chain_id == 7357
         assert contracts.core.dex_router is not None
         # Pools are discovered on-chain — the local config doesn't ship a list.
         assert contracts.pools == {}
+
+    def test_loads_dev_network_when_asked(self):
+        with patch("primedelta.primedelta.Web3"):
+            primedelta = PrimeDelta(
+                private_key="0x" + "1" * 64,
+                web3_provider_url="http://localhost:8545",
+                network="dev",
+            )
+
+        assert primedelta._get_contracts().chain_id == 2028
 
     def test_unknown_network_raises(self):
         with patch("primedelta.primedelta.Web3"):

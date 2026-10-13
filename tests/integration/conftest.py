@@ -6,7 +6,7 @@ import requests
 from dotenv import load_dotenv
 from web3 import Web3
 
-# Prefer .env.local when present (local stack), fall back to .env (default/dev).
+# Prefer .env.local when present (local stack), fall back to .env (testnet).
 _repo_root = Path(__file__).resolve().parents[2]
 _env_local = _repo_root / ".env.local"
 _env = _repo_root / ".env"
@@ -15,7 +15,8 @@ if _env_local.exists():
 elif _env.exists():
     load_dotenv(_env, override=True)
 
-from primedelta import PrimeDelta  # noqa: E402
+from primedelta import PrimeDelta, networks  # noqa: E402
+from primedelta.settings import DEFAULT_NETWORK  # noqa: E402
 from primedelta.types import AccountStatus  # noqa: E402
 
 
@@ -37,6 +38,11 @@ def provider_url():
     if not url:
         pytest.skip("PRIMEDELTA_PROVIDER_URL not set in .env")
     return url
+
+
+@pytest.fixture(scope="session")
+def network():
+    return os.getenv("PRIMEDELTA_NETWORK", DEFAULT_NETWORK)
 
 
 @pytest.fixture(scope="session")
@@ -66,8 +72,10 @@ def test_symbol():
 
 
 @pytest.fixture
-def primedelta(test_private_key, provider_url) -> PrimeDelta:
-    return PrimeDelta(private_key=test_private_key, web3_provider_url=provider_url)
+def primedelta(test_private_key, provider_url, network) -> PrimeDelta:
+    return PrimeDelta(
+        private_key=test_private_key, web3_provider_url=provider_url, network=network
+    )
 
 
 @pytest.fixture
@@ -78,9 +86,11 @@ def primedelta_logged_in(primedelta) -> PrimeDelta:
 
 
 @pytest.fixture
-def unverified_primedelta(unverified_private_key, provider_url) -> PrimeDelta:
+def unverified_primedelta(unverified_private_key, provider_url, network) -> PrimeDelta:
     return PrimeDelta(
-        private_key=unverified_private_key, web3_provider_url=provider_url
+        private_key=unverified_private_key,
+        web3_provider_url=provider_url,
+        network=network,
     )
 
 
@@ -124,7 +134,9 @@ _ANVIL_DEPLOYER_KEY = (
 )
 
 
-def _fund_test_account_eth_and_stablecoin(test_address: str, provider_url: str) -> None:
+def _fund_test_account_eth_and_stablecoin(
+    test_address: str, provider_url: str, network: str
+) -> None:
     """Top up the test account with ETH for gas + stablecoin for swaps/liquidity."""
     w3 = Web3(Web3.HTTPProvider(provider_url))
     deployer = w3.eth.account.from_key(_ANVIL_DEPLOYER_KEY)
@@ -148,6 +160,7 @@ def _fund_test_account_eth_and_stablecoin(test_address: str, provider_url: str) 
     contracts = PrimeDelta(
         private_key=test_private_key_or_skip(),
         web3_provider_url=provider_url,
+        network=network,
     )._get_contracts()
     stablecoin = w3.eth.contract(
         address=w3.to_checksum_address(contracts.core.stablecoin.address),
@@ -191,7 +204,7 @@ def _wait_for_did_minted(sdk: PrimeDelta, timeout_s: float = 30.0) -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _bootstrap_test_account(test_private_key, provider_url):
+def _bootstrap_test_account(test_private_key, provider_url, network):
     """Ensure the test account is funded + VERIFIED + DID_MINTED on a fresh stack.
 
     Funds ETH (from Anvil deployer) and stablecoin (USDCMock.mint is unrestricted),
@@ -206,12 +219,23 @@ def _bootstrap_test_account(test_private_key, provider_url):
     w3 = Web3(Web3.HTTPProvider(provider_url))
     test_address = w3.eth.account.from_key(test_private_key).address
 
-    if w3.eth.chain_id != 31337:
+    chain_id = w3.eth.chain_id
+    if chain_id != 31337:
         # Real chain (dev/testnet): funding + FakeVerification are local-only.
         # The wallet must already be provisioned (funded + KYC + DID) — assert
         # that and otherwise skip the session cleanly instead of trying to
         # anvil-fund a live chain.
-        sdk = PrimeDelta(private_key=test_private_key, web3_provider_url=provider_url)
+        expected = networks.load(network).chain_id
+        if chain_id != expected:
+            pytest.fail(
+                f"PRIMEDELTA_PROVIDER_URL is chain {chain_id}, but "
+                f"PRIMEDELTA_NETWORK={network!r} expects chain {expected}"
+            )
+        sdk = PrimeDelta(
+            private_key=test_private_key,
+            web3_provider_url=provider_url,
+            network=network,
+        )
         sdk.login()
         try:
             if sdk.get_account_status() != AccountStatus.DID_MINTED:
@@ -224,9 +248,11 @@ def _bootstrap_test_account(test_private_key, provider_url):
         return
 
     # Local Anvil (31337): full bootstrap.
-    _fund_test_account_eth_and_stablecoin(test_address, provider_url)
+    _fund_test_account_eth_and_stablecoin(test_address, provider_url, network)
 
-    sdk = PrimeDelta(private_key=test_private_key, web3_provider_url=provider_url)
+    sdk = PrimeDelta(
+        private_key=test_private_key, web3_provider_url=provider_url, network=network
+    )
     sdk.login()
     try:
         status = sdk.get_account_status()

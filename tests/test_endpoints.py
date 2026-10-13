@@ -1,9 +1,18 @@
+import importlib.util
+import inspect
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from primedelta import BrowserSigner, PrimeDelta
-from primedelta.settings import resolve_endpoints
+from primedelta import BrowserSigner, PrimeDelta, settings
+from primedelta.settings import DEFAULT_NETWORK, resolve_endpoints
+
+_ENDPOINT_ENV = (
+    "PRIMEDELTA_BASE_URL",
+    "PRIMEDELTA_APP_URL",
+    "PRIMEDELTA_SIWE_DOMAIN",
+    "PRIMEDELTA_SIWE_LOOPBACK",
+)
 
 
 class TestResolveEndpoints:
@@ -186,3 +195,41 @@ class TestLoopbackSignIn:
     def test_browser_signer_keeps_the_app_domain_elsewhere(self, monkeypatch):
         message, _ = self._login("testnet", monkeypatch)
         assert message.split()[0] == "mint.testnet.primedelta.io"
+
+
+class TestDefaultNetwork:
+    def _pd(self, monkeypatch, **kwargs):
+        for var in _ENDPOINT_ENV:
+            monkeypatch.delenv(var, raising=False)
+        with patch("primedelta.primedelta.Web3"):
+            return PrimeDelta(
+                private_key="0x" + "1" * 64, web3_provider_url="http://x", **kwargs
+            )
+
+    def test_the_default_network_is_testnet(self):
+        assert DEFAULT_NETWORK == "testnet"
+        assert inspect.signature(PrimeDelta).parameters["network"].default == "testnet"
+
+    def test_a_client_without_a_network_targets_testnet(self, monkeypatch):
+        pd = self._pd(monkeypatch)
+        assert pd._primedelta_client._base_url == "https://api.testnet.primedelta.io"
+        assert pd._endpoints.siwe_domain == "mint.testnet.primedelta.io"
+        assert pd._endpoints.siwe_loopback is False
+        assert pd._get_contracts().chain_id == 7357
+
+    def test_dev_still_works_when_asked_for(self, monkeypatch):
+        pd = self._pd(monkeypatch, network="dev")
+        assert pd._primedelta_client._base_url == "https://api.dev.primedelta.io"
+        assert pd._endpoints.siwe_domain == "mint.dev.primedelta.io"
+        assert pd._get_contracts().chain_id == 2028
+
+    def test_the_module_fallback_urls_are_testnet(self, monkeypatch):
+        for var in _ENDPOINT_ENV:
+            monkeypatch.delenv(var, raising=False)
+        spec = importlib.util.spec_from_file_location("_settings", settings.__file__)
+        assert spec is not None and spec.loader is not None
+        fresh = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fresh)
+        assert fresh.PRIMEDELTA_BASE_URL == "https://api.testnet.primedelta.io"
+        assert fresh.PRIMEDELTA_APP_URL == "https://mint.testnet.primedelta.io"
+        assert fresh.SIWE_DOMAIN == "mint.testnet.primedelta.io"

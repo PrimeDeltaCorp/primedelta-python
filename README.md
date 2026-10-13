@@ -25,20 +25,36 @@ from primedelta import PrimeDelta, SwapSide
 
 primedelta = PrimeDelta(
     private_key=...,
-    web3_provider_url=...,
+    web3_provider_url="https://chain.testnet.primedelta.io",
+    network="testnet",
 )
-primedelta.login()
 
-# Buy AMMT1 with 10 dUSD on the 24/7 oracle-free pool. Quote first, then derive a real
+primedelta.is_market_open()
+primedelta.stocks()
+primedelta.instrument_kind("WDEL")
+primedelta.spot_price("WDEL")
+
+primedelta.login()
+primedelta.wrap_del(Decimal("1"))
+
+# Sell 1 WDEL for dUSD on the 24/7 oracle-free pool. Quote first, then derive a real
 # min_amount_out from a slippage budget — never pass Decimal("0") in production.
-quote = primedelta.quote_swap("AMMT1", SwapSide.STABLECOIN_TO_STOCK, Decimal("10"))
+quote = primedelta.quote_swap("WDEL", SwapSide.STOCK_TO_STABLECOIN, Decimal("1"))
 tx = primedelta.swap_exact_input(
-    "AMMT1",
-    SwapSide.STABLECOIN_TO_STOCK,
-    amount_in=Decimal("10"),
+    "WDEL",
+    SwapSide.STOCK_TO_STABLECOIN,
+    amount_in=Decimal("1"),
     min_amount_out=primedelta.min_out_from_quote(quote, slippage_bps=100),  # 1%
 )
 ```
+
+The reads before `login()` need no login. WDEL is native DEL wrapped 1:1 and the
+only oracle-free token on testnet (`instrument_kind("WDEL") == "amm"`), so it
+trades 24/7. The first write is `wrap_del`;
+`primedelta.craft(lambda: primedelta.wrap_del(Decimal("1")))` returns the same
+transaction unsigned instead of sending it. Swaps need liquidity in the testnet
+WDEL/dUSD pool: while the pool is empty, `quote_swap` and `swap_exact_input`
+revert.
 
 > Oracle-priced tokens (e.g. `AAPL`) trade only in US market hours; the SDK
 > classifies instruments via `instrument_kind(symbol)` and raises `MarketClosed`
@@ -67,8 +83,8 @@ If an AI agent operates this SDK to trade, read [**AGENTS.md**](https://github.c
 The router accepts dUSD on one side (`buyExact*`/`sellExact*`) or two non-dUSD tokens routed through dUSD (`swapExact*`, 2-hop). The SDK picks the right entrypoint per call.
 
 - [dUSD ↔ stock (AAPL)](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/swap.py) — `swap_exact_input` / `swap_exact_output` with `SwapSide`
-- [dUSD ↔ oracle-free token (AMMT1, AMMT2)](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/swap_amm.py) — same API, oracle-free symbol
-- [Cross-dex token ↔ token](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/swap_cross_dex.py) — `swap_token_to_token_exact_input` / `swap_token_to_token_exact_output` for oracle-free↔oracle-free, oracle-free↔stock, stock↔stock
+- [dUSD ↔ oracle-free token (WDEL)](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/swap_amm.py) — same API, oracle-free symbol
+- [Cross-dex token ↔ token](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/swap_cross_dex.py) — `swap_token_to_token_exact_input` / `swap_token_to_token_exact_output` for oracle-free↔stock (WDEL↔AAPL) and stock↔stock
 - [Native DEL swaps](https://github.com/PrimeDeltaCorp/primedelta-python/blob/main/examples/dex/swap_native.py) — `wrap_del` / `unwrap_del` plus regular swap on WDEL
 
 > The stablecoin is **dUSD** on chain. `SwapSide.STABLECOIN_TO_STOCK` and `SwapSide.STOCK_TO_STABLECOIN` are the two single-hop directions; cross-dex swaps use the dedicated `swap_token_to_token_*` methods instead of `SwapSide`.
@@ -92,7 +108,7 @@ A `Signer` is the whole wallet dependency (`address`, `sign_message`, submit-a-t
 
 ## Networks
 
-Addresses and ABIs ship inside the package under [`networks/`](https://github.com/PrimeDeltaCorp/primedelta-python/tree/main/src/primedelta/networks/). Pass `network="testnet"` to `PrimeDelta(...)` — the backend base URL and SIWE signing domain follow the network automatically (no extra env). `PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL` env vars still override for local stacks. To pin a different deployment, edit the network's JSON file.
+Addresses and ABIs ship inside the package under [`networks/`](https://github.com/PrimeDeltaCorp/primedelta-python/tree/main/src/primedelta/networks/). `network` defaults to `"testnet"`, the public network — the backend base URL and SIWE signing domain follow the network automatically (no extra env). `PRIMEDELTA_BASE_URL` / `PRIMEDELTA_APP_URL` env vars still override for local stacks. Before the first login, send or `craft`, the client checks that `web3_provider_url` is on the network's chain and raises `NetworkMismatch` if it is not. To pin a different deployment, edit the network's JSON file.
 
 ## Development
 

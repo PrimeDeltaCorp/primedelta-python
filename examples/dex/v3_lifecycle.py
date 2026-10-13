@@ -1,9 +1,10 @@
 """Full AMM (Uniswap-V3) position lifecycle: add -> increase -> preview -> burn.
 
-The ticks below sit entirely under the current tick, so the position holds only
-token1 (dUSD is token1 on the dev AMMT1 pool) — handy when the wallet is short on
-the stock leg. Token ordering is per-pool (by address); pick ticks around the
-live tick, or widen/centre the range for a two-sided position.
+The range is read from the WDEL/dUSD pool at runtime and sits entirely on the
+dUSD side of the current tick, so the position holds only dUSD — handy when the
+wallet holds no WDEL. WDEL is token0 and dUSD is token1 in the testnet pool, so
+that side is below the current tick. Token ordering is per-pool (by address);
+widen or centre the range for a two-sided position.
 """
 
 import os
@@ -12,21 +13,49 @@ from decimal import Decimal
 from dotenv import find_dotenv, load_dotenv
 
 from primedelta import AMMAddLiquidity, PrimeDelta
+from primedelta.settings import DEFAULT_NETWORK
 
 load_dotenv(find_dotenv(".env.local") or find_dotenv(".env"))
 
 primedelta = PrimeDelta(
     private_key=os.environ["PRIMEDELTA_TEST_PRIVATE_KEY"],
     web3_provider_url=os.environ["PRIMEDELTA_PROVIDER_URL"],
+    network=os.environ.get("PRIMEDELTA_NETWORK", DEFAULT_NETWORK),
 )
 primedelta.login()
 
-# Open a single-sided dUSD position on the AMMT1 pool.
+w3 = primedelta._web3
+contracts = primedelta._get_contracts()
+dusd = w3.to_checksum_address(contracts.core.stablecoin.address)
+npm = w3.eth.contract(
+    address=w3.to_checksum_address(contracts.core.position_manager.address),
+    abi=contracts.core.position_manager.abi,
+)
+factory = w3.eth.contract(
+    address=npm.functions.factory().call(), abi=contracts.pool_abis["univ3_factory"]
+)
+pool = w3.eth.contract(
+    address=factory.functions.getPool(
+        w3.to_checksum_address(contracts.core.wdel.address), dusd, 3000
+    ).call(),
+    abi=contracts.pool_abis["univ3_pool"],
+)
+tick = pool.functions.slot0().call()[1]
+spacing = pool.functions.tickSpacing().call()
+if pool.functions.token1().call() == dusd:
+    tick_upper = (tick // spacing - 1) * spacing
+    tick_lower = tick_upper - 100 * spacing
+else:
+    tick_lower = (tick // spacing + 2) * spacing
+    tick_upper = tick_lower + 100 * spacing
+print("current tick:", tick, "range:", tick_lower, tick_upper)
+
+# Open a single-sided dUSD position on the WDEL pool.
 add_tx = primedelta.add_liquidity(
     AMMAddLiquidity(
-        symbol="AMMT1",
-        tick_lower=-260040,
-        tick_upper=-253080,
+        symbol="WDEL",
+        tick_lower=tick_lower,
+        tick_upper=tick_upper,
         amount_stock_desired=Decimal("0"),
         amount_stablecoin_desired=Decimal("10"),
         amount_stock_min=Decimal("0"),

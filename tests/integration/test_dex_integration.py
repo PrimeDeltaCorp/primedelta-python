@@ -2,7 +2,7 @@
 
 Requires:
 - PRIMEDELTA_TEST_PRIVATE_KEY: verified + DID-minted account, has gas + stablecoin + stock
-- PRIMEDELTA_PROVIDER_URL, PRIMEDELTA_BASE_URL, PRIMEDELTA_APP_URL set in .env
+- PRIMEDELTA_PROVIDER_URL and PRIMEDELTA_NETWORK set in .env
 - /contracts/ endpoint deployed on the target backend
 - Pools registered for PRIMEDELTA_TEST_SYMBOL (default AAPL)
 
@@ -50,7 +50,7 @@ def _ensure_stock_balance(
 
 @pytest.mark.integration
 class TestContractsRegistry:
-    def test_bundled_dev_config_is_complete(self, primedelta):
+    def test_bundled_network_config_is_complete(self, primedelta):
         contracts = primedelta._get_contracts()
         assert contracts.chain_id > 0
         assert contracts.core.stablecoin.address.startswith("0x")
