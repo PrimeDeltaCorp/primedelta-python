@@ -1730,7 +1730,8 @@ class PrimeDelta:
                     else:
                         self._next_nonce = None
                     time.sleep(1.0 + attempt)  # back off: 1s, 2s, 3s, 4s, 5s
-            assert last_error is not None
+            if last_error is None:
+                raise RuntimeError("nonce retry loop ended without an error to raise")
             raise last_error
 
     def _build_and_send_transaction(
