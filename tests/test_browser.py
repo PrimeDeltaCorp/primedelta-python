@@ -134,6 +134,11 @@ class TestBrowserSigner:
         assert signer.accounts() == [ADDR, to_checksum_address(other)]
         assert [job["op"] for job in tab.jobs] == ["accounts"]
 
+    def test_accounts_is_empty_when_the_wallet_returns_none(self, make_signer):
+        signer, _ = make_signer(lambda job: (None, None))
+
+        assert signer.accounts() == []
+
     def test_an_account_view_signs_as_that_account_through_the_same_tab(
         self, make_signer
     ):

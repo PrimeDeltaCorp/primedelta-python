@@ -61,7 +61,7 @@ async function perform(provider, op, params) {
   if (op === "accounts") return accounts;
   const expected = String(params.address || (params.tx && params.tx.from) || "").toLowerCase();
   if (expected && !accounts.some((a) => String(a).toLowerCase() === expected)) {
-    throw new Error("Switch your wallet to " + expected + ", the account this session signed in with");
+    throw new Error("Switch your wallet to " + expected + ", or connect that account to this page: PrimeDelta asked to act as it");
   }
   if (op === "personal_sign") {
     return await provider.request({method: "personal_sign", params: [utf8ToHex(params.message), params.address]});
@@ -122,7 +122,7 @@ const CONFIG = JSON.parse(document.getElementById("config").textContent);
     + """
 const LABELS = {
   connect: "Connect your wallet in the wallet popup.",
-  accounts: "Connect the accounts PrimeDelta may use in the wallet popup.",
+  accounts: "Checking which accounts PrimeDelta may use…",
   personal_sign: "Sign the PrimeDelta sign-in message in your wallet.",
   send: "Review and confirm the transaction in your wallet.",
 };
