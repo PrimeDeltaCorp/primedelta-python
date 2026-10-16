@@ -2655,6 +2655,30 @@ class TestReadAfterWrite:
         assert pd._amm_handler._read_fresh == pd._read_at_fresh_block
         assert pd._dclex_handler._read_fresh == pd._read_at_fresh_block
 
+    @pytest.mark.parametrize(
+        "last, multiplier, expected",
+        [
+            (Decimal("350.5"), (1, 1), Decimal("350.5")),
+            (Decimal("350"), (2, 1), Decimal("700")),
+            (Decimal("350"), (1, 4), Decimal("87.5")),
+            (None, (1, 1), None),
+            (Decimal("0"), (1, 1), None),
+        ],
+    )
+    def test_last_token_price_scales_the_brokerage_share_price(
+        self, last, multiplier, expected
+    ):
+        pd = _make_primedelta()
+        cost = MagicMock(last_price=last)
+        with (
+            patch.object(pd, "market_sell_cost", return_value=cost) as sell,
+            patch.object(
+                pd._quote_handler, "token_multiplier", return_value=multiplier
+            ),
+        ):
+            assert pd.last_token_price("TSLA") == expected
+        sell.assert_called_once_with("TSLA", Decimal(1))
+
     def test_facade_quotes_an_lp_add_through_the_pool_handler(self):
         pd = _make_primedelta()
         with patch.object(pd._dclex_handler, "add_quote", return_value="Q") as quote:

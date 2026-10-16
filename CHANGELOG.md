@@ -16,6 +16,10 @@ semantic versioning once published.
   Verified on dev: an add with the quoted amounts as maxima went through and
   the pool's `LiquidityAdded` event matched the quote to the unit. Adding and
   removing liquidity use no price, so neither depends on market hours.
+- **`last_token_price(symbol)`** values one token of an oracle-priced symbol at
+  the mint brokerage's last share price times the split multiplier. Unlike
+  `oracle_token_price` it is there while the market is closed, for valuing a
+  holding or a spend cap (never for pricing a trade).
 - **The client checks that the RPC is on the network's chain.** Before the
   first `login()`, on-chain send (`transfer_token` and `send_del` included) or
   `craft()`, it compares the RPC's chain id with the bundled network's and

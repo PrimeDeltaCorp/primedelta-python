@@ -2133,6 +2133,19 @@ class PrimeDelta:
         numerator, denominator = self._quote_handler.token_multiplier(symbol)
         return share_price * numerator / denominator
 
+    def last_token_price(self, symbol: str) -> Optional[Decimal]:
+        """USD value of one token of an oracle-priced symbol from the mint
+        brokerage's last price of a share, times the token's ``multiplier()``.
+        Unlike ``oracle_token_price`` it is there while the market is closed
+        (the last close), so it suits valuing a holding or a spend cap, never
+        pricing a trade. ``None`` when the brokerage has no price. Needs a
+        logged-in session."""
+        share_price = self.market_sell_cost(symbol, Decimal(1)).last_price
+        if share_price is None or share_price <= 0:
+            return None
+        numerator, denominator = self._quote_handler.token_multiplier(symbol)
+        return share_price * numerator / denominator
+
     def keep_alive(self) -> bool:
         """Touch the backend session without signing anything: True while it is
         alive (and extends its idle timeout), False once it has expired. Never
