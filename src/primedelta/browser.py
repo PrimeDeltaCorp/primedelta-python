@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import secrets
@@ -57,6 +58,7 @@ async function perform(provider, op, params) {
   const accounts = await provider.request({method: "eth_requestAccounts"});
   await maybeSwitchChain(provider, params.chain);
   if (op === "connect") return accounts[0];
+  if (op === "accounts") return accounts;
   const expected = String(params.address || (params.tx && params.tx.from) || "").toLowerCase();
   if (expected && !accounts.some((a) => String(a).toLowerCase() === expected)) {
     throw new Error("Switch your wallet to " + expected + ", the account this session signed in with");
@@ -120,6 +122,7 @@ const CONFIG = JSON.parse(document.getElementById("config").textContent);
     + """
 const LABELS = {
   connect: "Connect your wallet in the wallet popup.",
+  accounts: "Connect the accounts PrimeDelta may use in the wallet popup.",
   personal_sign: "Sign the PrimeDelta sign-in message in your wallet.",
   send: "Review and confirm the transaction in your wallet.",
 };
@@ -585,6 +588,20 @@ class BrowserSigner:
             # Wallets return the address lowercased; SIWE requires EIP-55.
             self._address = to_checksum_address(self._run("connect", {}))
         return self._address
+
+    def accounts(self) -> list[str]:
+        """Every account the wallet lets this page use, the selected one first
+        (EIP-55). Connect more accounts to the PrimeDelta page in the wallet to
+        add them."""
+        return [to_checksum_address(a) for a in self._run("accounts", {}) or []]
+
+    def for_account(self, address: str) -> "BrowserSigner":
+        """A signer for another account of the same wallet, through this one's
+        page. The wallet must have that account connected to the page. Closing
+        either signer closes the shared page."""
+        view = copy.copy(self)
+        view._address = to_checksum_address(address)
+        return view
 
     def sign_message(self, message: str) -> str:
         return self._run("personal_sign", {"message": message, "address": self.address})

@@ -20,6 +20,12 @@ semantic versioning once published.
   the mint brokerage's last share price times the split multiplier. Unlike
   `oracle_token_price` it is there while the market is closed, for valuing a
   holding or a spend cap (never for pricing a trade).
+- **One browser wallet, several accounts.** `BrowserSigner.accounts()` lists
+  every account the wallet has connected to the PrimeDelta page (the selected
+  one first), and `BrowserSigner.for_account(address)` returns a signer for
+  another of them that signs through the same page, so a second account needs
+  no second tab or connect prompt. The page already accepted a request for any
+  connected account; it now also answers an `accounts` request.
 - **The client checks that the RPC is on the network's chain.** Before the
   first `login()`, on-chain send (`transfer_token` and `send_del` included) or
   `craft()`, it compares the RPC's chain id with the bundled network's and

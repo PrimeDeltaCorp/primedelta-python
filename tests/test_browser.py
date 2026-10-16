@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from eth_utils import to_checksum_address
 from hexbytes import HexBytes
 
 from primedelta import BrowserSigner, browser
@@ -125,6 +126,28 @@ class TestBrowserSigner:
     def test_address_checksummed_when_wallet_returns_lowercase(self, make_signer):
         signer, _ = make_signer(lambda job: (ADDR.lower(), None))
         assert signer.address == ADDR
+
+    def test_accounts_lists_every_connected_account_checksummed(self, make_signer):
+        other = "0x" + "ab" * 20
+        signer, tab = make_signer(lambda job: ([ADDR.lower(), other], None))
+
+        assert signer.accounts() == [ADDR, to_checksum_address(other)]
+        assert [job["op"] for job in tab.jobs] == ["accounts"]
+
+    def test_an_account_view_signs_as_that_account_through_the_same_tab(
+        self, make_signer
+    ):
+        other = "0x" + "cd" * 20
+        signer, tab = make_signer(_wallet)
+        view = signer.for_account(other)
+
+        assert view.address == to_checksum_address(other)
+        assert view.sign_message("hi") == "0xSIGNATURE"
+        assert signer.address == ADDR
+        assert tab.jobs[0]["params"]["address"] == view.address
+        assert [job["op"] for job in tab.jobs] == ["personal_sign", "connect"]
+        assert len(tab.opened) == 1
+        assert view.loopback_origin == signer.loopback_origin
 
     def test_sign_message_uses_personal_sign_with_address(self, make_signer):
         signer, tab = make_signer(_wallet)
@@ -665,6 +688,18 @@ class TestWalletJs:
 
     def test_the_session_page_polls_again_at_once_after_a_long_poll(self):
         assert self._gap_after_an_empty_poll(1100) < 500
+
+    def test_accounts_returns_every_connected_account(self):
+        other = "0x" + "1" * 40
+        out = self._run("accounts", {}, [ADDR, other])
+        assert out == f"OK {ADDR},{other}"
+
+    def test_a_second_connected_account_may_sign(self):
+        other = "0x" + "1" * 40
+        out = self._run(
+            "personal_sign", {"message": "m", "address": other}, [ADDR, other]
+        )
+        assert out == "OK SIGNED:personal_sign"
 
     def test_the_connected_account_signs_whatever_its_case(self):
         out = self._run(
