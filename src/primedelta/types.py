@@ -232,6 +232,18 @@ class Price:
 
 
 @dataclass(frozen=True)
+class PriceFeedAddQuote:
+    """What minting ``liquidity_amount`` raw LP units in an oracle-priced pool
+    takes from the wallet now, rounded up the way the pool rounds."""
+
+    symbol: str
+    pool_address: str
+    liquidity_amount: Decimal
+    stock_amount: Decimal
+    stablecoin_amount: Decimal
+
+
+@dataclass(frozen=True)
 class PriceFeedLPPosition:
     """LP tokens held in an oracle-priced pool. ``liquidity_amount`` is the raw
     amount ``PriceFeedRemoveLiquidity`` takes; ``stock_amount`` and

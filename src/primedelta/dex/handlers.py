@@ -15,7 +15,7 @@ from primedelta.dex.params import (
     PriceFeedRemoveLiquidity,
     SwapSide,
 )
-from primedelta.types import PriceFeedLPPosition
+from primedelta.types import PriceFeedAddQuote, PriceFeedLPPosition
 
 _STABLECOIN_DECIMALS = Decimal(10**6)
 _STOCK_DECIMALS = Decimal(10**18)
@@ -44,6 +44,25 @@ def _lp_units(amount: Any) -> int:
             f"token), got {amount}"
         )
     return int(value)
+
+
+def _ceil_div(numerator: int, denominator: int) -> int:
+    return -(-numerator // denominator)
+
+
+def _stablecoin_units(amount: Any) -> int:
+    try:
+        value = Decimal(str(amount))
+    except (InvalidOperation, ValueError, TypeError):
+        value = Decimal("NaN")
+    if not value.is_finite() or value <= 0:
+        raise ValueError(f"stablecoin_amount must be a positive number, got {amount}")
+    units = value * _STABLECOIN_DECIMALS
+    if units != units.to_integral_value():
+        raise ValueError(
+            f"stablecoin_amount has more than 6 decimal places, got {amount}"
+        )
+    return int(units)
 
 
 def _decoded(result: Any, *types: str) -> Optional[tuple[Any, ...]]:
@@ -645,6 +664,59 @@ class _DclexPoolHandler:
         pool_address = self.pool_address(symbol)
         contracts = self._contracts_provider()
         return self._read_positions(contracts, [(symbol, pool_address)])[0]
+
+    def add_quote(
+        self,
+        symbol: str,
+        liquidity_amount: Any = None,
+        stablecoin_amount: Any = None,
+    ) -> PriceFeedAddQuote:
+        if (liquidity_amount is None) == (stablecoin_amount is None):
+            raise ValueError(
+                "pass exactly one of liquidity_amount or stablecoin_amount"
+            )
+        pool_address = self.pool_address(symbol)
+        contracts = self._contracts_provider()
+        encoder = self._web3.eth.contract(
+            abi=_require_pool_abi(contracts, "dclex_pool")
+        )
+        target = self._web3.to_checksum_address(pool_address)
+        calls: list[tuple[str, bool, Any]] = [
+            (target, True, encoder.encode_abi(abi_element_identifier=name))
+            for name in ("totalSupply", "getReserves")
+        ]
+        results = self._read_fresh(
+            lambda block: self._aggregate(contracts, calls, block)
+        )
+        supply = _decoded(results[0], "uint256")
+        reserves = _decoded(results[1], "uint256", "uint256")
+        if supply is None or reserves is None:
+            raise RuntimeError(f"could not read the {symbol} pool at {pool_address}")
+        total = supply[0]
+        stock_reserve, stablecoin_reserve = reserves
+        if total == 0 or stablecoin_reserve == 0:
+            raise ValueError(
+                f"the {symbol} pool holds no liquidity yet, so it takes no adds"
+            )
+        if liquidity_amount is not None:
+            liquidity = _lp_units(liquidity_amount)
+        else:
+            budget = _stablecoin_units(stablecoin_amount) * 10**12
+            liquidity = budget * total // stablecoin_reserve
+        stock = _ceil_div(liquidity * stock_reserve, total)
+        stablecoin = _ceil_div(_ceil_div(liquidity * stablecoin_reserve, total), 10**12)
+        if liquidity == 0 or stock == 0 or stablecoin == 0:
+            raise ValueError(
+                f"too small for the {symbol} pool: it would take nothing for one "
+                "of the two tokens"
+            )
+        return PriceFeedAddQuote(
+            symbol=symbol,
+            pool_address=pool_address,
+            liquidity_amount=Decimal(liquidity),
+            stock_amount=Decimal(stock) / _STOCK_DECIMALS,
+            stablecoin_amount=Decimal(stablecoin) / _STABLECOIN_DECIMALS,
+        )
 
     def lp_positions(self) -> list[PriceFeedLPPosition]:
         contracts = self._contracts_provider()

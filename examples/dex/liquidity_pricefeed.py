@@ -20,11 +20,11 @@ primedelta = PrimeDelta(
 )
 primedelta.login()
 
-# TSLA is an oracle stock: swaps AND price-feed liquidity price against the signed
-# oracle, so every action below reverts (StalePrice / MarketClosed) outside US
-# market hours. Gate on is_market_open(), the same check a swap needs.
+# TSLA is an oracle stock: the swap below prices against the signed oracle and
+# reverts (StalePrice / MarketClosed) outside US market hours. Adding and
+# removing liquidity use no price and work at any time; only the buy needs this.
 if not primedelta.is_market_open():
-    raise SystemExit("market closed — oracle price-feed liquidity is unavailable")
+    raise SystemExit("market closed — the TSLA buy below needs a signed price")
 
 # Acquire some TSLA so we have stock to pair with the stablecoin for LP.
 buy_tx = primedelta.swap_exact_input(
@@ -37,18 +37,23 @@ print(f"buy:    {buy_tx}")
 tsla_balance = primedelta.get_onchain_stock_balance("TSLA")
 print(f"TSLA on chain: {tsla_balance}")
 
-# Add liquidity to the TSLA DCLEX pricefeed pool.
-# liquidity_amount is the LP-share amount to mint (18 decimals).
-# max_*_amount cap how much the pool may pull from your wallet at the current
-# pool price — set generously vs your actual balance.
-liquidity_amount = Decimal(10**15)  # 0.001 LP shares
+# Add liquidity to the TSLA DCLEX pricefeed pool. The quote says what minting
+# 0.001 LP tokens takes now (the pool's own rounding); 1% on top covers swaps
+# that move the reserves before the add lands. Size by the dUSD side instead with
+# price_feed_add_quote("TSLA", stablecoin_amount=Decimal("10")).
+quote = primedelta.price_feed_add_quote("TSLA", liquidity_amount=Decimal(10**15))
+liquidity_amount = quote.liquidity_amount
 
 add_tx = primedelta.add_liquidity(
     PriceFeedAddLiquidity(
         symbol="TSLA",
         liquidity_amount=liquidity_amount,
-        max_stock_amount=Decimal("0.5"),
-        max_stablecoin_amount=Decimal("250"),
+        max_stock_amount=(quote.stock_amount * Decimal("1.01")).quantize(
+            Decimal("1e-18")
+        ),
+        max_stablecoin_amount=(quote.stablecoin_amount * Decimal("1.01")).quantize(
+            Decimal("0.000001")
+        ),
     )
 )
 print(f"add:    {add_tx}")

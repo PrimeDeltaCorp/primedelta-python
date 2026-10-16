@@ -7,6 +7,15 @@ semantic versioning once published.
 ## [Unreleased]
 
 ### Added
+- **Quote an add to an oracle-priced pool.**
+  `price_feed_add_quote(symbol, liquidity_amount=..., stablecoin_amount=...)`
+  returns a `PriceFeedAddQuote`: the stock and dUSD that minting the LP takes
+  now, rounded up the way the pool rounds, so they work as exact
+  `max_stock_amount` / `max_stablecoin_amount` (add your slippage). Size it by
+  raw LP units or by the dUSD side; the stock side follows the pool's ratio.
+  Verified on dev: an add with the quoted amounts as maxima went through and
+  the pool's `LiquidityAdded` event matched the quote to the unit. Adding and
+  removing liquidity use no price, so neither depends on market hours.
 - **The client checks that the RPC is on the network's chain.** Before the
   first `login()`, on-chain send (`transfer_token` and `send_del` included) or
   `craft()`, it compares the RPC's chain id with the bundled network's and

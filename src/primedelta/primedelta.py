@@ -81,6 +81,7 @@ from primedelta.types import (
     Portfolio,
     PortfolioHistory,
     Price,
+    PriceFeedAddQuote,
     PriceFeedLPPosition,
     Stock,
     Transfer,
@@ -1670,6 +1671,21 @@ class PrimeDelta:
         """This wallet's LP tokens in the oracle-priced ``symbol`` pool and what
         removing all of them pays out now; zero amounts when it holds none."""
         return self._dclex_handler.lp_position(symbol)
+
+    def price_feed_add_quote(
+        self,
+        symbol: str,
+        liquidity_amount: Optional[Decimal] = None,
+        stablecoin_amount: Optional[Decimal] = None,
+    ) -> PriceFeedAddQuote:
+        """What adding liquidity to the oracle-priced ``symbol`` pool takes now,
+        rounded up like the pool: give ``liquidity_amount`` (raw LP units) or
+        ``stablecoin_amount`` (the dUSD side; the stock side follows the pool's
+        ratio). Pass the amounts, plus your slippage, as ``max_stock_amount`` /
+        ``max_stablecoin_amount`` of ``PriceFeedAddLiquidity``."""
+        return self._dclex_handler.add_quote(
+            symbol, liquidity_amount, stablecoin_amount
+        )
 
     def price_feed_lp_positions(self) -> list[PriceFeedLPPosition]:
         """Every oracle-priced pool registered with the router that this wallet
