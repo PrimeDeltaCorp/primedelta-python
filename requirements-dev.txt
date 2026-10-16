@@ -1,5 +1,5 @@
 pytest==9.1.1
-types-requests==2.33.0.20260906
-black==26.10.0
+types-requests==2.33.0.20261006
+black==26.10.1
 isort==5.13.2
 mypy==1.20.2
