@@ -383,12 +383,11 @@ class TransactionFailed(Exception):
 
 
 class MarketClosed(TransactionFailed):
-    """An oracle-priced action reverted because the signed equity price was
-    stale or absent — the US market is closed (or the price was withheld). Covers
-    any oracle-priced call: a swap AND oracle-priced add/remove liquidity, which price
-    against the same oracle. A subclass of TransactionFailed, so existing handlers
-    still catch it, but agents can catch it specifically to distinguish 'market
-    closed' from a bug.
+    """An oracle-priced swap reverted because the signed equity price was stale
+    or absent — the US market is closed (or the price was withheld). Adding and
+    removing liquidity in an oracle-priced pool use no price, so they never raise
+    it. A subclass of TransactionFailed, so existing handlers still catch it, but
+    agents can catch it specifically to distinguish 'market closed' from a bug.
     """
 
 
@@ -2140,7 +2139,12 @@ class PrimeDelta:
         (the last close), so it suits valuing a holding or a spend cap, never
         pricing a trade. ``None`` when the brokerage has no price. Needs a
         logged-in session."""
-        share_price = self.market_sell_cost(symbol, Decimal(1)).last_price
+        try:
+            share_price = self.market_sell_cost(symbol, Decimal(1)).last_price
+        except APIError as exc:
+            if exc.error_code == "STOCK_WITHOUT_PRICE":
+                return None
+            raise
         if share_price is None or share_price <= 0:
             return None
         numerator, denominator = self._quote_handler.token_multiplier(symbol)

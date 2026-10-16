@@ -694,22 +694,28 @@ class _DclexPoolHandler:
             raise RuntimeError(f"could not read the {symbol} pool at {pool_address}")
         total = supply[0]
         stock_reserve, stablecoin_reserve = reserves
-        if total == 0 or stablecoin_reserve == 0:
+        if total == 0:
             raise ValueError(
                 f"the {symbol} pool holds no liquidity yet, so it takes no adds"
+            )
+        if stock_reserve == 0 or stablecoin_reserve == 0:
+            raise ValueError(
+                f"the {symbol} pool has an empty "
+                f"{'stock' if stock_reserve == 0 else 'dUSD'} reserve, so an add "
+                "can't be priced from its ratio"
             )
         if liquidity_amount is not None:
             liquidity = _lp_units(liquidity_amount)
         else:
             budget = _stablecoin_units(stablecoin_amount) * 10**12
             liquidity = budget * total // stablecoin_reserve
+            if liquidity == 0:
+                raise ValueError(
+                    f"stablecoin_amount {stablecoin_amount} is too small to mint "
+                    f"any {symbol}-LP"
+                )
         stock = _ceil_div(liquidity * stock_reserve, total)
         stablecoin = _ceil_div(_ceil_div(liquidity * stablecoin_reserve, total), 10**12)
-        if liquidity == 0 or stock == 0 or stablecoin == 0:
-            raise ValueError(
-                f"too small for the {symbol} pool: it would take nothing for one "
-                "of the two tokens"
-            )
         return PriceFeedAddQuote(
             symbol=symbol,
             pool_address=pool_address,

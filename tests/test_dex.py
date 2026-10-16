@@ -1,4 +1,5 @@
 import dataclasses
+import random
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -37,6 +38,7 @@ from primedelta.dex.handlers import (
     _RouterSwapHandler,
 )
 from primedelta.primedelta import _READ_RETRIES, _decode_revert
+from primedelta.primedelta_client import APIError
 
 _BOUNDED_ADD = bytes.fromhex("aebf3e41")
 _LEGACY_ADD = bytes.fromhex("51c6590a")
@@ -1056,8 +1058,52 @@ class TestDclexAddQuote(_DclexPoolFixture):
     def test_a_dusd_side_below_one_lp_unit_is_refused(self):
         answers = self._pool(_POOL_A, "AAPL-LP", 0, 1, 10**18, 10**30)
 
-        with pytest.raises(ValueError, match="too small"):
+        with pytest.raises(ValueError, match="too small to mint any AAPL-LP"):
             self._quote(answers, stablecoin_amount=Decimal("0.000001"))
+
+    @pytest.mark.parametrize(
+        "stock_reserve, stablecoin_reserve, side",
+        [(0, 10**21, "stock"), (10**18, 0, "dUSD")],
+    )
+    @pytest.mark.parametrize(
+        "sizing",
+        [
+            {"liquidity_amount": Decimal(10**18)},
+            {"stablecoin_amount": Decimal("1")},
+        ],
+    )
+    def test_a_pool_with_an_empty_reserve_is_named(
+        self, stock_reserve, stablecoin_reserve, side, sizing
+    ):
+        answers = self._pool(
+            _POOL_A, "AAPL-LP", 0, 10**18, stock_reserve, stablecoin_reserve
+        )
+
+        with pytest.raises(ValueError, match=f"empty {side} reserve"):
+            self._quote(answers, **sizing)
+
+    def test_a_dusd_side_is_the_largest_add_within_it(self):
+        rng = random.Random(230)
+        for _ in range(150):
+            supply = rng.randint(1, 10**24)
+            stock_reserve = rng.randint(1, 10**24)
+            stablecoin_reserve = rng.choice(
+                [supply, rng.randint(1, supply), rng.randint(1, 10**30)]
+            )
+            budget = Decimal(rng.randint(1, 10**12)) / Decimal(10**6)
+            answers = self._pool(
+                _POOL_A, "AAPL-LP", 0, supply, stock_reserve, stablecoin_reserve
+            )
+            try:
+                quote, _ = self._quote(answers, stablecoin_amount=budget)
+            except ValueError as exc:
+                assert "too small" in str(exc)
+                continue
+            assert quote.stablecoin_amount <= budget
+            bigger, _ = self._quote(
+                answers, liquidity_amount=quote.liquidity_amount + 1
+            )
+            assert bigger.stablecoin_amount > budget
 
     @pytest.mark.parametrize("read", ["totalSupply", "getReserves"])
     def test_an_unreadable_pool_raises(self, read):
@@ -2678,6 +2724,21 @@ class TestReadAfterWrite:
         ):
             assert pd.last_token_price("TSLA") == expected
         sell.assert_called_once_with("TSLA", Decimal(1))
+
+    def test_last_token_price_is_none_when_the_brokerage_has_no_price(self):
+        pd = _make_primedelta()
+        with patch.object(
+            pd, "market_sell_cost", side_effect=APIError("STOCK_WITHOUT_PRICE")
+        ):
+            assert pd.last_token_price("TSLA") is None
+
+    def test_last_token_price_raises_other_platform_errors(self):
+        pd = _make_primedelta()
+        with (
+            patch.object(pd, "market_sell_cost", side_effect=APIError("FORBIDDEN")),
+            pytest.raises(APIError),
+        ):
+            pd.last_token_price("TSLA")
 
     def test_facade_quotes_an_lp_add_through_the_pool_handler(self):
         pd = _make_primedelta()
