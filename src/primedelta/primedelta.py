@@ -81,6 +81,7 @@ from primedelta.types import (
     Portfolio,
     PortfolioHistory,
     Price,
+    PriceFeedAddQuote,
     PriceFeedLPPosition,
     Stock,
     Transfer,
@@ -382,12 +383,11 @@ class TransactionFailed(Exception):
 
 
 class MarketClosed(TransactionFailed):
-    """An oracle-priced action reverted because the signed equity price was
-    stale or absent — the US market is closed (or the price was withheld). Covers
-    any oracle-priced call: a swap AND oracle-priced add/remove liquidity, which price
-    against the same oracle. A subclass of TransactionFailed, so existing handlers
-    still catch it, but agents can catch it specifically to distinguish 'market
-    closed' from a bug.
+    """An oracle-priced swap reverted because the signed equity price was stale
+    or absent — the US market is closed (or the price was withheld). Adding and
+    removing liquidity in an oracle-priced pool use no price, so they never raise
+    it. A subclass of TransactionFailed, so existing handlers still catch it, but
+    agents can catch it specifically to distinguish 'market closed' from a bug.
     """
 
 
@@ -1671,6 +1671,21 @@ class PrimeDelta:
         removing all of them pays out now; zero amounts when it holds none."""
         return self._dclex_handler.lp_position(symbol)
 
+    def price_feed_add_quote(
+        self,
+        symbol: str,
+        liquidity_amount: Optional[Decimal] = None,
+        stablecoin_amount: Optional[Decimal] = None,
+    ) -> PriceFeedAddQuote:
+        """What adding liquidity to the oracle-priced ``symbol`` pool takes now,
+        rounded up like the pool: give ``liquidity_amount`` (raw LP units) or
+        ``stablecoin_amount`` (the dUSD side; the stock side follows the pool's
+        ratio). Pass the amounts, plus your slippage, as ``max_stock_amount`` /
+        ``max_stablecoin_amount`` of ``PriceFeedAddLiquidity``."""
+        return self._dclex_handler.add_quote(
+            symbol, liquidity_amount, stablecoin_amount
+        )
+
     def price_feed_lp_positions(self) -> list[PriceFeedLPPosition]:
         """Every oracle-priced pool registered with the router that this wallet
         holds LP tokens in. LP left in a pool the router no longer lists (after a
@@ -2113,6 +2128,24 @@ class PrimeDelta:
         logged-in session."""
         share_price = self.oracle_price(symbol)
         if share_price is None:
+            return None
+        numerator, denominator = self._quote_handler.token_multiplier(symbol)
+        return share_price * numerator / denominator
+
+    def last_token_price(self, symbol: str) -> Optional[Decimal]:
+        """USD value of one token of an oracle-priced symbol from the mint
+        brokerage's last price of a share, times the token's ``multiplier()``.
+        Unlike ``oracle_token_price`` it is there while the market is closed
+        (the last close), so it suits valuing a holding or a spend cap, never
+        pricing a trade. ``None`` when the brokerage has no price. Needs a
+        logged-in session."""
+        try:
+            share_price = self.market_sell_cost(symbol, Decimal(1)).last_price
+        except APIError as exc:
+            if exc.error_code == "STOCK_WITHOUT_PRICE":
+                return None
+            raise
+        if share_price is None or share_price <= 0:
             return None
         numerator, denominator = self._quote_handler.token_multiplier(symbol)
         return share_price * numerator / denominator

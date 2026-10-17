@@ -1,4 +1,5 @@
 import dataclasses
+import random
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -37,10 +38,11 @@ from primedelta.dex.handlers import (
     _RouterSwapHandler,
 )
 from primedelta.primedelta import _READ_RETRIES, _decode_revert
+from primedelta.primedelta_client import APIError
 
 _BOUNDED_ADD = bytes.fromhex("aebf3e41")
 _LEGACY_ADD = bytes.fromhex("51c6590a")
-from primedelta.types import AccountStatus, PriceFeedLPPosition
+from primedelta.types import AccountStatus, PriceFeedAddQuote, PriceFeedLPPosition
 
 
 @pytest.fixture(autouse=True)
@@ -744,7 +746,7 @@ def _ok(types, *values):
     return True, encode(types, list(values))
 
 
-class TestDclexHandlerLpPositions:
+class _DclexPoolFixture:
     def _handler(self, answers, tokens=(), *, with_multicall=True, routes=None):
         web3 = _make_web3_mock()
         answers = {
@@ -839,6 +841,8 @@ class TestDclexHandlerLpPositions:
             1234567890999999999999,
         )
 
+
+class TestDclexHandlerLpPositions(_DclexPoolFixture):
     def test_a_position_pays_out_what_the_pool_would_round_down_to(self):
         handler, _, aggregated = self._handler(
             self._aapl(), routes={_AAPL_TOKEN: _POOL_A}
@@ -989,6 +993,125 @@ class TestDclexHandlerLpPositions:
         assert aggregated == []
         assert {c.args[1] for c in web3.eth.call.call_args_list} == {777}
         assert web3.eth.call.call_count == 2 * 2 + 2 * 4
+
+
+class TestDclexAddQuote(_DclexPoolFixture):
+    def _quote(self, answers=None, **sizing):
+        handler, _, aggregated = self._handler(
+            self._aapl() if answers is None else answers,
+            routes={_AAPL_TOKEN: _POOL_A},
+        )
+        return handler.add_quote("AAPL", **sizing), aggregated
+
+    def test_a_quote_rounds_up_like_the_pool(self):
+        quote, aggregated = self._quote(liquidity_amount=Decimal(3 * 10**18 + 1))
+
+        assert quote == PriceFeedAddQuote(
+            symbol="AAPL",
+            pool_address=_POOL_A,
+            liquidity_amount=Decimal(3 * 10**18 + 1),
+            stock_amount=Decimal("4.285714285714285718"),
+            stablecoin_amount=Decimal("529.100525"),
+        )
+        [(calls, block)] = aggregated
+        assert block == 777
+        assert calls == [
+            (_POOL_A, True, "totalSupply"),
+            (_POOL_A, True, "getReserves"),
+        ]
+
+    def test_a_dusd_side_sizes_the_mint_without_taking_more_dusd(self):
+        quote, _ = self._quote(stablecoin_amount=Decimal("529.100524"))
+
+        assert quote.liquidity_amount == Decimal(2999999995949999966)
+        assert quote.stock_amount == Decimal("4.285714279928571383")
+        assert quote.stablecoin_amount == Decimal("529.100524")
+
+    def test_the_dusd_side_rounds_up_before_scaling_to_six_decimals(self):
+        answers = self._pool(_POOL_A, "AAPL-LP", 0, 3, 3 * 10**18, 3 * 10**12 + 1)
+
+        quote, _ = self._quote(answers, liquidity_amount=Decimal(1))
+
+        assert quote.stablecoin_amount == Decimal("0.000002")
+
+    @pytest.mark.parametrize(
+        "sizing",
+        [{}, {"liquidity_amount": Decimal(1), "stablecoin_amount": Decimal(1)}],
+    )
+    def test_exactly_one_size_is_required(self, sizing):
+        with pytest.raises(ValueError, match="exactly one"):
+            self._quote(**sizing)
+
+    @pytest.mark.parametrize(
+        "amount", [Decimal("1.0000001"), Decimal("-1"), Decimal("0"), "abc"]
+    )
+    def test_a_dusd_side_the_token_cannot_hold_is_refused(self, amount):
+        with pytest.raises(ValueError, match="stablecoin_amount"):
+            self._quote(stablecoin_amount=amount)
+
+    def test_an_empty_pool_takes_no_adds(self):
+        answers = self._pool(_POOL_A, "AAPL-LP", 0, 0, 0, 0)
+
+        with pytest.raises(ValueError, match="no liquidity yet"):
+            self._quote(answers, liquidity_amount=Decimal(10**18))
+
+    def test_a_dusd_side_below_one_lp_unit_is_refused(self):
+        answers = self._pool(_POOL_A, "AAPL-LP", 0, 1, 10**18, 10**30)
+
+        with pytest.raises(ValueError, match="too small to mint any AAPL-LP"):
+            self._quote(answers, stablecoin_amount=Decimal("0.000001"))
+
+    @pytest.mark.parametrize(
+        "stock_reserve, stablecoin_reserve, side",
+        [(0, 10**21, "stock"), (10**18, 0, "dUSD")],
+    )
+    @pytest.mark.parametrize(
+        "sizing",
+        [
+            {"liquidity_amount": Decimal(10**18)},
+            {"stablecoin_amount": Decimal("1")},
+        ],
+    )
+    def test_a_pool_with_an_empty_reserve_is_named(
+        self, stock_reserve, stablecoin_reserve, side, sizing
+    ):
+        answers = self._pool(
+            _POOL_A, "AAPL-LP", 0, 10**18, stock_reserve, stablecoin_reserve
+        )
+
+        with pytest.raises(ValueError, match=f"empty {side} reserve"):
+            self._quote(answers, **sizing)
+
+    def test_a_dusd_side_is_the_largest_add_within_it(self):
+        rng = random.Random(230)
+        for _ in range(150):
+            supply = rng.randint(1, 10**24)
+            stock_reserve = rng.randint(1, 10**24)
+            stablecoin_reserve = rng.choice(
+                [supply, rng.randint(1, supply), rng.randint(1, 10**30)]
+            )
+            budget = Decimal(rng.randint(1, 10**12)) / Decimal(10**6)
+            answers = self._pool(
+                _POOL_A, "AAPL-LP", 0, supply, stock_reserve, stablecoin_reserve
+            )
+            try:
+                quote, _ = self._quote(answers, stablecoin_amount=budget)
+            except ValueError as exc:
+                assert "too small" in str(exc)
+                continue
+            assert quote.stablecoin_amount <= budget
+            bigger, _ = self._quote(
+                answers, liquidity_amount=quote.liquidity_amount + 1
+            )
+            assert bigger.stablecoin_amount > budget
+
+    @pytest.mark.parametrize("read", ["totalSupply", "getReserves"])
+    def test_an_unreadable_pool_raises(self, read):
+        answers = self._aapl()
+        del answers[(_POOL_A, read)]
+
+        with pytest.raises(RuntimeError, match="AAPL pool"):
+            self._quote(answers, liquidity_amount=Decimal(10**18))
 
 
 class TestDclexLiquidityAmountUnits:
@@ -2577,6 +2700,51 @@ class TestReadAfterWrite:
         assert pd._router_swapper._read_fresh == pd._read_at_fresh_block
         assert pd._amm_handler._read_fresh == pd._read_at_fresh_block
         assert pd._dclex_handler._read_fresh == pd._read_at_fresh_block
+
+    @pytest.mark.parametrize(
+        "last, multiplier, expected",
+        [
+            (Decimal("350.5"), (1, 1), Decimal("350.5")),
+            (Decimal("350"), (2, 1), Decimal("700")),
+            (Decimal("350"), (1, 4), Decimal("87.5")),
+            (None, (1, 1), None),
+            (Decimal("0"), (1, 1), None),
+        ],
+    )
+    def test_last_token_price_scales_the_brokerage_share_price(
+        self, last, multiplier, expected
+    ):
+        pd = _make_primedelta()
+        cost = MagicMock(last_price=last)
+        with (
+            patch.object(pd, "market_sell_cost", return_value=cost) as sell,
+            patch.object(
+                pd._quote_handler, "token_multiplier", return_value=multiplier
+            ),
+        ):
+            assert pd.last_token_price("TSLA") == expected
+        sell.assert_called_once_with("TSLA", Decimal(1))
+
+    def test_last_token_price_is_none_when_the_brokerage_has_no_price(self):
+        pd = _make_primedelta()
+        with patch.object(
+            pd, "market_sell_cost", side_effect=APIError("STOCK_WITHOUT_PRICE")
+        ):
+            assert pd.last_token_price("TSLA") is None
+
+    def test_last_token_price_raises_other_platform_errors(self):
+        pd = _make_primedelta()
+        with (
+            patch.object(pd, "market_sell_cost", side_effect=APIError("FORBIDDEN")),
+            pytest.raises(APIError),
+        ):
+            pd.last_token_price("TSLA")
+
+    def test_facade_quotes_an_lp_add_through_the_pool_handler(self):
+        pd = _make_primedelta()
+        with patch.object(pd._dclex_handler, "add_quote", return_value="Q") as quote:
+            assert pd.price_feed_add_quote("AAPL", stablecoin_amount=Decimal(5)) == "Q"
+        quote.assert_called_once_with("AAPL", None, Decimal(5))
 
     def test_facade_reads_oracle_pool_lp_through_the_pool_handler(self):
         pd = _make_primedelta()
