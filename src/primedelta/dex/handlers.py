@@ -1048,6 +1048,16 @@ class _AMMPoolHandler:
         npm_ref = self._require_npm(contracts)
         npm = self._contract(npm_ref)
 
+        owner = _call_view(
+            "NonfungiblePositionManager.ownerOf",
+            lambda: npm.functions.ownerOf(position_id).call(),
+        )
+        if str(owner).lower() != self._account.address.lower():
+            raise ValueError(
+                f"position {position_id} belongs to {owner}, not this wallet "
+                f"({self._account.address}): adding to it would hand that owner "
+                "the liquidity"
+            )
         position = _call_view(
             "NonfungiblePositionManager.positions",
             lambda: npm.functions.positions(position_id).call(),
