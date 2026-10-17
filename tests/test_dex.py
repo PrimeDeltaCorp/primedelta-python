@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 from eth_abi import encode
+from eth_utils import to_checksum_address
 from web3.exceptions import ContractLogicError
 
 from primedelta import (
@@ -1191,8 +1192,8 @@ class TestAMMHandlerLiquidity:
         contract.functions.token1.return_value.call.return_value = token1
         contract.functions.fee.return_value.call.return_value = fee
         contract.functions.allowance.return_value.call.return_value = 0
-        contract.functions.ownerOf.return_value.call.return_value = (
-            _USER_ADDRESS.lower()
+        contract.functions.ownerOf.return_value.call.return_value = to_checksum_address(
+            _USER_ADDRESS
         )
         contract.encode_abi.side_effect = (
             lambda abi_element_identifier, args: f"0x{abi_element_identifier}".encode()
@@ -1375,6 +1376,20 @@ class TestAMMHandlerLiquidity:
             )
 
         contract.functions.ownerOf.assert_called_once_with(42)
+        contract.functions.approve.assert_not_called()
+        send_tx.assert_not_called()
+
+    def test_increase_liquidity_reports_a_position_that_does_not_exist(self):
+        handler, web3, contract, send_tx = self._setup()
+        contract.functions.ownerOf.return_value.call.side_effect = ContractLogicError(
+            "ERC721: owner query for nonexistent token"
+        )
+
+        with pytest.raises(TransactionFailed, match="ownerOf"):
+            handler.increase_liquidity(
+                42, amount_stock=Decimal("1"), amount_stablecoin=Decimal("1")
+            )
+
         contract.functions.approve.assert_not_called()
         send_tx.assert_not_called()
 
