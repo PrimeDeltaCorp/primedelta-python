@@ -6,6 +6,8 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-17
+
 ### Added
 - **Quote an add to an oracle-priced pool.**
   `price_feed_add_quote(symbol, liquidity_amount=..., stablecoin_amount=...)`
