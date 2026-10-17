@@ -1191,6 +1191,9 @@ class TestAMMHandlerLiquidity:
         contract.functions.token1.return_value.call.return_value = token1
         contract.functions.fee.return_value.call.return_value = fee
         contract.functions.allowance.return_value.call.return_value = 0
+        contract.functions.ownerOf.return_value.call.return_value = (
+            _USER_ADDRESS.lower()
+        )
         contract.encode_abi.side_effect = (
             lambda abi_element_identifier, args: f"0x{abi_element_identifier}".encode()
         )
@@ -1357,6 +1360,23 @@ class TestAMMHandlerLiquidity:
             (_NPM_ADDRESS, 400 * 10**6),
             (_NPM_ADDRESS, 2 * 10**18),
         ]
+
+    def test_increase_liquidity_refuses_a_position_another_wallet_owns(self):
+        handler, web3, contract, send_tx = self._setup()
+        stranger = "0x" + "9" * 40
+        contract.functions.ownerOf.return_value.call.return_value = stranger
+        contract.functions.positions.return_value.call.return_value = self._position(
+            _STABLECOIN_ADDRESS, _AAPL_TOKEN
+        )
+
+        with pytest.raises(ValueError, match=f"position 42 belongs to {stranger}"):
+            handler.increase_liquidity(
+                42, amount_stock=Decimal("0"), amount_stablecoin=Decimal("10000")
+            )
+
+        contract.functions.ownerOf.assert_called_once_with(42)
+        contract.functions.approve.assert_not_called()
+        send_tx.assert_not_called()
 
     def test_increase_liquidity_orders_when_token0_stock(self):
         handler, web3, contract, send_tx = self._setup()

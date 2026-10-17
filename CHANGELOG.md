@@ -53,6 +53,11 @@ semantic versioning once published.
   liquidity in the testnet WDEL/dUSD pool. `v3_lifecycle.py` reads the pool's
   current tick and places its range on the dUSD side of it.
 
+### Fixed
+- **`increase_liquidity` refuses a position this wallet doesn't own.** The
+  position manager lets anyone add to any position and credits the owner, so
+  topping up a foreign position id gave that owner the liquidity.
+
 ## [0.4.0] - 2026-10-09
 
 ### Added
