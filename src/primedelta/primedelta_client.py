@@ -702,6 +702,7 @@ class PrimeDeltaClient:
                 else None
             ),
             raw_status=raw_status,
+            broker_message=item.get("brokerMessage") or None,
         )
 
     def get_deposit_stocks_signature(

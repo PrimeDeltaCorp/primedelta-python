@@ -1317,6 +1317,7 @@ def _closed_order_item(quantity, filled_quantity, price="150.00"):
         "fees": None,
         "stockName": "Apple",
         "dateOfCancellation": "2026-10-01",
+        "brokerMessage": None,
     }
 
 
@@ -1662,6 +1663,39 @@ class TestUnknownEnumValues:
         )
         [order] = client.closed_orders(1, 10)
         assert (order.status, order.raw_status) == (status, None)
+
+    def test_closed_order_carries_the_broker_message(self):
+        client, session = _client_with_session()
+        reason = "Market was closed — order not accepted."
+        session.request.return_value = _page(
+            {**_closed_order_item("1", "0"), "brokerMessage": reason}
+        )
+        [order] = client.closed_orders(1, 10)
+        assert order.broker_message == reason
+
+    @pytest.mark.parametrize("item_update", [{"brokerMessage": ""}, {}])
+    def test_closed_order_without_a_broker_message_has_none(self, item_update):
+        client, session = _client_with_session()
+        item = {**_closed_order_item("1", "0"), **item_update}
+        if not item_update:
+            del item["brokerMessage"]
+        session.request.return_value = _page(item)
+        [order] = client.closed_orders(1, 10)
+        assert order.broker_message is None
+
+    def test_open_order_has_no_broker_message(self):
+        client, session = _client_with_session()
+        session.request.return_value = _page(_open_order_item("1", "0"))
+        [order] = client.open_orders(1, 10)
+        assert order.broker_message is None
+
+    def test_agent_closed_order_carries_the_broker_message(self):
+        client, session = _client_with_session()
+        session.request.return_value = _page(
+            {**_closed_order_item("1", "0"), "brokerMessage": "symbol halted"}
+        )
+        [order] = client.get_ai_agent_closed_orders("0xSUB", 1, 10)
+        assert order.broker_message == "symbol halted"
 
     def test_unknown_account_status_parses_as_unknown(self):
         from primedelta.types import AccountStatus

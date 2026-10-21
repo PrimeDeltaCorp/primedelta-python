@@ -6,6 +6,95 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+### Added
+- **Not enough DEL for gas raises `NotEnoughGas` before anything is signed.**
+  With a key or KMS signer the SDK reads the sender's DEL balance and compares
+  it with gas limit × gas price plus the DEL the transaction sends. The error
+  is a `TransactionFailed` with `address`, `balance`, `required` and
+  `shortfall` in DEL, `gas_limit`, `gas_price` (wei) and `value`, and its
+  message says to send at least the shortfall to that address. When the wallet
+  holds less than the value it sends, a node refuses to simulate it, so the gas
+  is sized as if the value were there.
+- **A wedged account raises `StuckTransaction` instead of queueing behind it.**
+  When the account's pending nonce is above its latest nonce and no
+  transaction this client sent explains the gap, the send raises
+  `StuckTransaction` (`address`, `latest_nonce`, `pending_nonce`) before
+  signing. The nonces are re-read for up to 15 s (1, 2, 4 and 8 s apart, more
+  than a block), so a gateway replica that lags behind another after an
+  ordinary send, or a transaction another client with the key just sent, never
+  trips it. A transaction this client sent counts as explained unless its
+  receipt wait timed out. When the gap closes while re-reading, the gas
+  estimate and the DEL balance check read the block it closed at, so they see
+  the DEL the mined transaction spent.
+- **`clear_stuck_transactions()`** replaces each transaction the node holds
+  unmined for the account (every nonce from the latest to the pending one) with
+  a 0-value transfer to the account itself, at 21000 gas and 25% above the
+  current gas price. It sends every replacement before waiting for any, so a
+  later stuck transaction cannot mine right behind an earlier replacement,
+  then waits for each to mine and returns their hashes (`[]` when nothing is
+  stuck). It checks the DEL balance first (`NotEnoughGas`), says which nonce
+  the node refused a replacement for and why, and refuses a browser wallet
+  (`RuntimeError`: use the wallet's own cancel) and `craft` (`CannotCraft`).
+  A replacement refused as underpriced means the stuck transaction may pay
+  more than the replacement's price, and calling again would sign the same
+  replacement, so the error says to cancel or speed up the stuck transaction
+  at a higher gas price from the wallet or app that sent it.
+  When another transaction, most likely the stuck one, takes a nonce before
+  its replacement, it raises `StuckTransactionMined` (a `TransactionFailed`
+  with `address`, `mined_nonces` and `cleared`, the hashes of the replacements
+  that mined): that transaction ran instead of being cancelled. Funding the
+  account does not clear such a transaction; replacing its nonce does.
+  Verified live: an account wedged by a 5,000,000-gas transaction it could
+  not pay for raised `StuckTransaction`, stayed wedged after 1 DEL arrived, and
+  one replacement cleared it; the next `wrap_del` mined using 52,036 of its
+  66,032 estimated gas.
+- **Closed orders carry the broker's reason.** `Order.broker_message` is what
+  the mint brokerage recorded when it cancelled or rejected an order (for
+  example "Market was closed — order not accepted."), so `closed_orders()` and
+  `get_ai_agent_closed_orders()` say why an order did not fill. `None` for an
+  open order or when there is no message.
+
+### Changed
+- **Gas is estimated instead of fixed at 5,000,000.** A key or KMS signer
+  signed every contract call with a 5,000,000 gas limit, which at 1000 gwei
+  asks for 5 DEL up front: a wallet with less had its transaction accepted by
+  an RPC node, dropped by the validators, and the account stuck behind it. The
+  SDK now runs `eth_estimateGas` for the exact transaction at the block of the
+  client's last write (so an approve → swap chain never estimates against
+  pre-approve state) and signs 25% above it, rounded up; a plain DEL transfer
+  keeps exactly 21000, and a transfer to a contract now gets the gas it needs.
+  For these signers the estimate is the pre-sign simulation: a revert still
+  raises `TransactionFailed` / `MarketClosed` before signing, with or without
+  preflight, and an estimate the node cannot give raises `TransactionFailed`
+  without sending. A browser wallet and `craft()` still leave gas to the
+  wallet; `MockBrowserSigner` now estimates like one. A transaction that runs
+  out of gas on chain anyway, because the state changed between the estimate
+  and its block, raises `TransactionFailed` with a `reason` that starts
+  `ran out of gas` and says a retry estimates the gas again, instead of
+  `reverted with no reason`.
+- **Receipts are awaited for an explicit 60 s.** `PrimeDelta(receipt_timeout=...)`
+  sets the wait (default 60 s, polling every 0.5 s, instead of web3's implicit
+  120 s at 0.1 s). A transaction that does not mine in time raises
+  `TransactionPending` (a `TransactionFailed` carrying `tx_hash` and
+  `timeout`) instead of web3's `TimeExhausted`; it may still mine, so check
+  `tx_status(tx_hash)` and balances before retrying. Until it mines, the next
+  send from a key or KMS signer raises `StuckTransaction` rather than queueing
+  behind it.
+
+### Fixed
+- **A gateway error is no longer reported as a revert.** web3 raises
+  `ContractLogicError` for any RPC error whose `data` is a JSON object, which
+  is how the RPC gateway reports a replica that has not reached the requested
+  block. The pre-sign simulation reported it as `execution reverted: Block not
+  found`; it now retries it like the other read-after-write reads, and skips
+  the check if it persists.
+- **A failed broadcast no longer skips a nonce.** When the signer raised while
+  submitting, the reserved nonce stayed taken, so the next transaction used the
+  one after it and could never mine. A broadcast that reached the node but
+  failed on the way back still counts as this client's own.
+- **`get_native_del_balance()` retries a replica that answers `null`** for a
+  block it has not reached, instead of failing on it.
+
 ## [0.5.0] - 2026-10-17
 
 ### Added

@@ -285,6 +285,8 @@ class TestAllowancesAndSend:
         pd._web3.to_checksum_address.side_effect = lambda a: a
         pd._web3.eth.gas_price = 10**9
         pd._web3.eth.get_transaction_count.return_value = 3
+        pd._web3.eth.get_balance.return_value = 10**18
+        pd._web3.eth.estimate_gas.return_value = 21_000
         pd._web3.eth.wait_for_transaction_receipt.return_value = {"status": 1}
 
         assert pd._build_and_send_value_transaction("0xTO", 10**15) == "0xH"
@@ -437,35 +439,42 @@ class TestAgentSafetyRails:
         pd._web3.to_checksum_address.side_effect = lambda a: a
         pd._web3.eth.gas_price = 10**9
         pd._web3.eth.get_transaction_count.return_value = 1
+        pd._web3.eth.get_balance.return_value = 10**21
         pd._get_contracts = MagicMock(return_value=MagicMock(chain_id=2028))
         pd._try_debug_trace_call = MagicMock(return_value=None)
         return pd
 
-    def _fn_reverting_with(self, data):
-        from web3.exceptions import ContractLogicError
-
+    def _swap(self):
         fn = MagicMock()
         fn.fn_name = "swap"
         fn.address = "0xPOOL"
         fn._encode_transaction_data.return_value = "0xdead"
-        fn.build_transaction.side_effect = ContractLogicError("reverted", data=data)
         return fn
+
+    def _reverting_with(self, data):
+        from web3.exceptions import ContractLogicError
+
+        pd = self._tx_pd()
+        pd._web3.eth.estimate_gas.side_effect = ContractLogicError(
+            "reverted", data=data
+        )
+        return pd
 
     def test_stale_price_revert_raises_market_closed(self):
         from primedelta import MarketClosed, TransactionFailed
 
-        pd = self._tx_pd()
+        pd = self._reverting_with("0x19abf40e")
         with pytest.raises(MarketClosed) as info:
-            pd._build_and_send_transaction_once(self._fn_reverting_with("0x19abf40e"))
+            pd._build_and_send_transaction_once(self._swap())
         assert isinstance(info.value, TransactionFailed)  # still a TransactionFailed
 
     def test_other_revert_stays_transaction_failed(self):
         from primedelta import MarketClosed, TransactionFailed
 
-        pd = self._tx_pd()
+        pd = self._reverting_with("0x4e487b71")
         with pytest.raises(TransactionFailed) as info:
             # a generic panic selector must NOT be classified as MarketClosed
-            pd._build_and_send_transaction_once(self._fn_reverting_with("0x4e487b71"))
+            pd._build_and_send_transaction_once(self._swap())
         assert not isinstance(info.value, MarketClosed)
 
     def test_halt_blocks_sends_resume_reenables(self):

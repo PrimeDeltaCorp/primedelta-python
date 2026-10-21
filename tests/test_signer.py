@@ -139,6 +139,7 @@ class TestMockBrowserSigner:
         captured = {}
         web3 = MagicMock()
         web3.eth.get_transaction_count.return_value = 7
+        web3.eth.estimate_gas.return_value = 40_000
         web3.eth.gas_price = 10**9
         web3.eth.send_raw_transaction.side_effect = lambda raw: captured.__setitem__(
             "raw", raw
@@ -149,12 +150,50 @@ class TestMockBrowserSigner:
         rebuilt = {
             **raw_call,
             "nonce": 7,
-            "gas": 5_000_000,
+            "gas": 50_000,
             "gasPrice": 10**9,
         }
         assert bytes(captured["raw"]) == bytes(
             Account.sign_transaction(rebuilt, KEY).raw_transaction
         )
+        web3.eth.estimate_gas.assert_called_once_with(
+            {"from": ADDR, "to": ADDR, "value": 1, "data": b""}
+        )
+
+    def test_submit_transaction_estimates_a_value_transfer_without_data(self):
+        web3 = MagicMock()
+        web3.eth.get_transaction_count.return_value = 0
+        web3.eth.estimate_gas.return_value = 21_000
+        web3.eth.gas_price = 10**9
+        MockBrowserSigner.from_key(KEY).submit_transaction(
+            web3, {"from": ADDR, "to": ADDR, "value": 1, "chainId": 2028}
+        )
+        web3.eth.estimate_gas.assert_called_once_with(
+            {"from": ADDR, "to": ADDR, "value": 1}
+        )
+        raw = web3.eth.send_raw_transaction.call_args.args[0]
+        assert Account.sign_transaction(
+            {
+                "from": ADDR,
+                "to": ADDR,
+                "value": 1,
+                "chainId": 2028,
+                "nonce": 0,
+                "gas": 21_000,
+                "gasPrice": 10**9,
+            },
+            KEY,
+        ).raw_transaction == bytes(raw)
+
+    def test_submit_transaction_keeps_a_gas_limit_it_is_given(self):
+        web3 = MagicMock()
+        web3.eth.get_transaction_count.return_value = 0
+        web3.eth.gas_price = 10**9
+        MockBrowserSigner.from_key(KEY).submit_transaction(
+            web3,
+            {"from": ADDR, "to": ADDR, "value": 1, "chainId": 2028, "gas": 30_000},
+        )
+        web3.eth.estimate_gas.assert_not_called()
 
 
 OTHER_KEY = "0x" + "2" * 64
