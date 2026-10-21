@@ -23,7 +23,12 @@ with warnings.catch_warnings():
 
 from web3 import Web3
 from web3.contract.contract import ContractFunction
-from web3.exceptions import ContractLogicError, TimeExhausted, TransactionNotFound
+from web3.exceptions import (
+    ContractLogicError,
+    TimeExhausted,
+    TransactionNotFound,
+    Web3RPCError,
+)
 from web3.middleware import ExtraDataToPOAMiddleware
 from web3.types import RPCEndpoint, TxParams
 
@@ -122,6 +127,10 @@ _RECEIPT_POLL_LATENCY = 0.5
 # behind another, or a transaction another client with this key just sent, can
 # show a pending nonce above the latest one until the next block.
 _STUCK_RECHECK_DELAYS = (1.0, 2.0, 4.0, 8.0)
+
+# A node or gateway that answers a broadcast with one of these may still hold the
+# transaction: it already has it, or the request timed out after reaching it.
+_MAYBE_IN_POOL = ("already known", "known transaction", "timeout", "timed out")
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -709,6 +718,13 @@ def _is_revert(error: BaseException) -> bool:
     # so. A node that reports a revert as an object carries its return data.
     data = error.data
     return not isinstance(data, dict) or isinstance(data.get("data"), str)
+
+
+def _refused_by_node(error: BaseException) -> bool:
+    if not isinstance(error, Web3RPCError):
+        return False
+    message = str(error).lower()
+    return not any(phrase in message for phrase in _MAYBE_IN_POOL)
 
 
 def _deepest_trace_error(trace: Any) -> Optional[str]:
@@ -2269,17 +2285,22 @@ class PrimeDelta:
 
     def _submit(self, transaction: dict[str, Any]) -> Any:
         nonce = transaction.get("nonce")
+        already_ours = nonce in self._sent_nonces
         if nonce is not None:
             # Recorded before sending: a broadcast that reached the node but
             # failed on the way back is still ours.
             self._sent_nonces.add(nonce)
         try:
             return self._signer.submit_transaction(self._web3, transaction)
-        except Exception:
+        except Exception as error:
             if nonce is not None:
                 # Re-read the chain's nonce next time instead of skipping this
                 # one: a skipped nonce strands every later transaction.
                 self._next_nonce = None
+                # Refused, so whatever holds this nonce is not ours, unless an
+                # earlier transaction of ours does.
+                if not already_ours and _refused_by_node(error):
+                    self._sent_nonces.discard(nonce)
             raise
 
     def _wait_for_receipt(

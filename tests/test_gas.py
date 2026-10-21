@@ -2,9 +2,16 @@ from decimal import Decimal
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+import requests
 from hexbytes import HexBytes
 from web3 import Web3
-from web3.exceptions import ContractLogicError, TimeExhausted, TransactionNotFound
+from web3.exceptions import (
+    ContractLogicError,
+    RequestTimedOut,
+    TimeExhausted,
+    TransactionNotFound,
+    Web3RPCError,
+)
 
 from primedelta import (
     CannotCraft,
@@ -37,6 +44,18 @@ def _block_not_found() -> ContractLogicError:
         "execution reverted: Block not found",
         data={"code": "ErrUpstreamsExhausted"},
     )
+
+
+def _node_error(message: str, kind: type = Web3RPCError) -> Web3RPCError:
+    error = {
+        "code": -32000,
+        "message": message,
+        "data": {
+            "code": "ErrUpstreamsExhausted",
+            "message": "all upstream attempts failed (1 upstream server errors)",
+        },
+    }
+    return kind(repr(error), rpc_response={"jsonrpc": "2.0", "id": 1, "error": error})
 
 
 class _Chain:
@@ -257,17 +276,47 @@ class TestEstimatedGas:
         pd.wrap_del(Decimal("0.01"))
         assert _sent(pd)[-1]["nonce"] == 5
 
-    def test_a_broadcast_that_failed_on_the_way_back_is_still_ours(self):
+    @pytest.mark.parametrize(
+        "error",
+        [
+            requests.ReadTimeout("read timed out"),
+            requests.ConnectionError("connection reset by peer"),
+            requests.HTTPError("504 Server Error: Gateway Timeout"),
+            _node_error("Known transaction"),
+            _node_error("already known"),
+            _node_error("request timed out", RequestTimedOut),
+            _node_error("remote endpoint request timeout"),
+        ],
+    )
+    def test_a_broadcast_that_may_have_reached_the_pool_is_still_ours(self, error):
         pd, chain = _pd()
-        pd._signer.submit_transaction.side_effect = ValueError("read timed out")
-        with pytest.raises(ValueError):
+        pd._signer.submit_transaction.side_effect = error
+        with pytest.raises(type(error)):
             pd.wrap_del(Decimal("0.01"))
+        assert pd._sent_nonces == {5}
         chain.pending = 6
         pd._signer.submit_transaction.side_effect = list(HASHES)
         with patch("time.sleep") as sleep:
             pd.wrap_del(Decimal("0.01"))
         sleep.assert_not_called()
         assert _sent(pd)[-1]["nonce"] == 6
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Replacement transaction underpriced",
+            "Nonce too low",
+            "maxPriorityFeePerGas 500000000000 wei is below the required minimum "
+            "1000000000000 wei",
+            "Upfront cost exceeds account balance",
+        ],
+    )
+    def test_a_broadcast_the_node_refused_is_not_ours(self, message):
+        pd, chain = _pd()
+        pd._signer.submit_transaction.side_effect = _node_error(message)
+        with pytest.raises(Web3RPCError):
+            pd.wrap_del(Decimal("0.01"))
+        assert (pd._sent_nonces, pd._next_nonce) == (set(), None)
 
     def test_a_balance_read_the_node_cannot_serve_names_the_cause(self):
         pd, chain = _pd()
@@ -469,6 +518,36 @@ class TestStuckTransaction:
         assert info.value.balance == Decimal("0.02")
         assert [c.args[1] for c in pd._web3.eth.estimate_gas.mock_calls] == [210]
         pd._signer.submit_transaction.assert_not_called()
+
+    def test_the_next_send_does_not_queue_behind_the_one_that_refused_ours(self):
+        pd, chain = _pd()
+        pd._signer.submit_transaction.side_effect = _node_error(
+            "Replacement transaction underpriced"
+        )
+        with pytest.raises(Web3RPCError):
+            pd.wrap_del(Decimal("0.01"))
+        chain.pending = 6
+        pd._signer.submit_transaction.side_effect = list(HASHES)
+        with patch("time.sleep"):
+            with pytest.raises(StuckTransaction):
+                pd.wrap_del(Decimal("0.01"))
+        assert len(_sent(pd)) == 1
+
+    def test_a_refused_resend_leaves_an_earlier_transaction_ours(self):
+        pd, chain = _pd()
+        pd._sent_nonces = {5}
+        pd._signer.submit_transaction.side_effect = _node_error(
+            "Replacement transaction underpriced"
+        )
+        with pytest.raises(Web3RPCError):
+            pd.wrap_del(Decimal("0.01"))
+        assert pd._sent_nonces == {5}
+        chain.pending = 6
+        pd._signer.submit_transaction.side_effect = list(HASHES)
+        with patch("time.sleep") as sleep:
+            pd.wrap_del(Decimal("0.01"))
+        sleep.assert_not_called()
+        assert _sent(pd)[-1]["nonce"] == 6
 
     def test_nonces_below_the_latest_are_forgotten(self):
         pd, chain = _pd()
@@ -792,6 +871,22 @@ class TestClearStuckTransactions:
         assert "wait for it to mine, then call clear_stuck_transactions() again" in (
             str(info.value)
         )
+
+    def test_a_refused_replacement_leaves_its_nonce_stuck(self):
+        pd, chain = self._stuck()
+        pd._signer.submit_transaction.side_effect = [
+            HASHES[0],
+            _node_error("Replacement transaction underpriced"),
+        ]
+        with pytest.raises(TransactionFailed):
+            pd.clear_stuck_transactions()
+        assert pd._sent_nonces == {5}
+        pd._signer.submit_transaction.side_effect = list(HASHES)
+        with patch("time.sleep"):
+            with pytest.raises(StuckTransaction) as info:
+                pd.wrap_del(Decimal("0.01"))
+        assert (info.value.latest_nonce, info.value.pending_nonce) == (5, 7)
+        assert [tx["nonce"] for tx in _sent(pd)] == [5, 6]
 
     def test_a_wallet_signer_is_refused(self):
         pd, chain = _pd(wallet=True)
