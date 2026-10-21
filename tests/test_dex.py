@@ -2504,6 +2504,8 @@ class TestReadAfterWrite:
         pd = _make_primedelta()
         pd._web3 = MagicMock()
         pd._web3.to_checksum_address.side_effect = lambda a: a
+        pd._web3.eth.get_balance.return_value = 10**21
+        pd._web3.eth.estimate_gas.return_value = 21_000
         pd._signer = MagicMock()
         pd._signer.address = _USER_ADDRESS
         pd._signer.fills_gas_and_nonce = False
@@ -2527,7 +2529,6 @@ class TestReadAfterWrite:
         pd._signer.submit_transaction.return_value = sent
         fn = MagicMock()
         fn.fn_name = "buyExactInput"
-        fn.build_transaction.return_value = {"to": "0x0"}
 
         pd._build_and_send_transaction(fn)
         assert pd._last_write_block == 500
@@ -2627,6 +2628,17 @@ class TestReadAfterWrite:
         pd._web3.eth.get_balance.assert_called_once_with(
             _USER_ADDRESS, block_identifier=400
         )
+
+    def test_get_native_del_balance_retries_a_replica_that_answers_null(self):
+        pd = self._pd()
+        pd._last_write_block = 400
+        pd._web3.eth.block_number = 400
+        pd._web3.eth.get_balance.side_effect = [None, 3 * 10**18]
+        with patch("time.sleep"):
+            assert pd.get_native_del_balance() == Decimal("3")
+        assert [
+            c.kwargs["block_identifier"] for c in pd._web3.eth.get_balance.mock_calls
+        ] == [400, 400]
 
     def test_get_onchain_balances_batches_via_multicall(self):
         pd = self._pd()
@@ -2802,6 +2814,11 @@ class TestBuildAndSendTransaction:
         pd._signer = MagicMock()
         pd._signer.address = _USER_ADDRESS
         pd._signer.fills_gas_and_nonce = False
+        pd._web3.eth.get_balance.return_value = 10**21
+        pd._web3.eth.estimate_gas.return_value = 40_000
+        pd._web3.eth.chain_id = 7357
+        pd._web3.eth.gas_price = 10**9
+        pd._web3.eth.get_transaction_count.return_value = 0
         return pd
 
     def test_raises_transaction_failed_on_pre_submit_revert(self):
@@ -2810,7 +2827,7 @@ class TestBuildAndSendTransaction:
         pd = self._make_pd_with_fresh_web3()
         fn = MagicMock()
         fn.fn_name = "approve"
-        fn.build_transaction.side_effect = ContractLogicError(
+        pd._web3.eth.estimate_gas.side_effect = ContractLogicError(
             "execution reverted",
             data=(
                 "0x08c379a0"
@@ -2826,6 +2843,7 @@ class TestBuildAndSendTransaction:
         assert info.value.function_name == "approve"
         assert info.value.tx_hash is None
         assert "Error('bad sig')" in info.value.reason
+        pd._signer.submit_transaction.assert_not_called()
 
     def test_raises_transaction_failed_when_receipt_status_zero(self):
         from web3.exceptions import ContractLogicError
@@ -2833,7 +2851,6 @@ class TestBuildAndSendTransaction:
         pd = self._make_pd_with_fresh_web3()
         fn = MagicMock()
         fn.fn_name = "buyExactInput"
-        fn.build_transaction.return_value = {"to": "0x0"}
         # Submission succeeds.
         sent_hash = MagicMock()
         sent_hash.hex.return_value = "0xabc"
@@ -2844,7 +2861,6 @@ class TestBuildAndSendTransaction:
         }
         # Re-running as eth_call reveals the reason.
         pd._web3.eth.call.side_effect = [
-            b"",
             ContractLogicError(
                 "execution reverted",
                 data="0x08c379a0"
@@ -2861,7 +2877,7 @@ class TestBuildAndSendTransaction:
         assert info.value.tx_hash == "0xabc"
         assert "Error('bad')" in info.value.reason
 
-    def test_local_signer_tx_includes_nonce_and_gas(self):
+    def test_local_signer_tx_includes_nonce_and_estimated_gas(self):
         pd = self._make_pd_with_fresh_web3()
         pd._web3.eth.gas_price = 10**9
         pd._web3.eth.get_transaction_count.return_value = 5
@@ -2871,14 +2887,21 @@ class TestBuildAndSendTransaction:
         pd._signer.submit_transaction.return_value = sent
         fn = MagicMock()
         fn.fn_name = "approve"
-        fn.build_transaction.return_value = {"to": "0x0"}
+        fn.address = "0xC0FFEE"
+        fn._encode_transaction_data.return_value = "0xda7a"
 
         assert pd._build_and_send_transaction(fn) == "0xbeef"
-        tx_params = fn.build_transaction.call_args.args[0]
-        assert tx_params["nonce"] == 5
-        assert tx_params["gas"] == 5_000_000
-        assert tx_params["gasPrice"] == 10**9
-        pd._signer.submit_transaction.assert_called_once()
+        assert pd._signer.submit_transaction.call_args.args[1] == {
+            "from": _USER_ADDRESS,
+            "to": "0xC0FFEE",
+            "value": 0,
+            "data": "0xda7a",
+            "chainId": 7357,
+            "nonce": 5,
+            "gas": 50_000,
+            "gasPrice": 10**9,
+        }
+        fn.build_transaction.assert_not_called()
 
     def test_wallet_signer_builds_raw_call_without_gas_or_nonce(self):
         pd = self._make_pd_with_fresh_web3()
@@ -2908,7 +2931,7 @@ class TestBuildAndSendTransaction:
 class TestPreflight:
     _STALE_PRICE = "0x19abf40e"
 
-    def _pd(self, *, wallet: bool = False, **kwargs) -> PrimeDelta:
+    def _pd(self, *, wallet: bool = True, **kwargs) -> PrimeDelta:
         with patch("primedelta.primedelta.Web3"):
             pd = PrimeDelta(
                 private_key="0x" + "1" * 64,
@@ -2979,13 +3002,31 @@ class TestPreflight:
     def test_revert_releases_the_reserved_nonce(self):
         from web3.exceptions import ContractLogicError
 
-        pd = self._pd()
-        pd._web3.eth.call.side_effect = ContractLogicError(
+        pd = self._pd(wallet=False)
+        pd._next_nonce = 6
+        pd._web3.eth.get_balance.return_value = 10**21
+        pd._web3.eth.estimate_gas.side_effect = ContractLogicError(
             "execution reverted", data="0xdeadbeef"
         )
         with pytest.raises(TransactionFailed):
             pd._build_and_send_transaction(self._fn())
         assert pd._next_nonce is None
+
+    def test_a_key_signer_is_simulated_by_the_gas_estimate_alone(self):
+        pd = self._pd(wallet=False)
+        pd._web3.eth.get_balance.return_value = 10**21
+        pd._web3.eth.estimate_gas.return_value = 40_000
+        pd._build_and_send_transaction(self._fn(), value=5)
+        pd._web3.eth.call.assert_not_called()
+        assert pd._web3.eth.estimate_gas.call_args.args == (
+            {
+                "from": _USER_ADDRESS,
+                "to": _ROUTER_ADDRESS,
+                "value": 5,
+                "data": "0xda7a",
+            },
+            "latest",
+        )
 
     def test_call_mirrors_the_signed_transaction(self):
         pd = self._pd()
@@ -3001,15 +3042,9 @@ class TestPreflight:
         assert block == "latest"
         pd._signer.submit_transaction.assert_called_once()
 
-    @pytest.mark.parametrize("wallet", [False, True])
-    def test_call_carries_the_transaction_value(self, wallet):
-        pd = self._pd(wallet=wallet)
-        fn = self._fn()
-        fn.build_transaction.side_effect = lambda params: {
-            **fn.build_transaction.return_value,
-            "value": params["value"],
-        }
-        pd._build_and_send_transaction(fn, value=123)
+    def test_call_carries_the_transaction_value(self):
+        pd = self._pd()
+        pd._build_and_send_transaction(self._fn(), value=123)
         assert pd._web3.eth.call.call_args.args[0]["value"] == 123
 
     def test_a_value_transfer_is_simulated_too(self):
@@ -3039,6 +3074,44 @@ class TestPreflight:
         pd._web3.eth.call.side_effect = ValueError("header not found")
         assert pd._build_and_send_transaction(self._fn()) == "0xfeed"
         pd._signer.submit_transaction.assert_called_once()
+
+    def test_a_gateway_error_is_not_mistaken_for_a_revert(self):
+        from web3.exceptions import ContractLogicError
+
+        pd = self._pd()
+        pd._last_write_block = 500
+        pd._web3.eth.block_number = 500
+        lagging = ContractLogicError(
+            "execution reverted: Block not found", data={"code": "ErrUpstreams"}
+        )
+        pd._web3.eth.call.side_effect = [lagging, b""]
+        with patch("time.sleep"):
+            assert pd._build_and_send_transaction(self._fn()) == "0xfeed"
+        assert [c.args[1] for c in pd._web3.eth.call.mock_calls] == [500, 500]
+
+    def test_a_revert_at_the_pinned_block_is_raised_at_once(self):
+        from web3.exceptions import ContractLogicError
+
+        pd = self._pd()
+        pd._last_write_block = 500
+        pd._web3.eth.block_number = 500
+        pd._web3.eth.call.side_effect = ContractLogicError(
+            "execution reverted", data=self._STALE_PRICE
+        )
+        with patch("time.sleep") as sleep:
+            with pytest.raises(TransactionFailed):
+                pd._build_and_send_transaction(self._fn())
+        assert pd._web3.eth.call.call_count == 1
+        sleep.assert_not_called()
+
+    def test_a_gateway_error_that_persists_skips_the_check(self):
+        from web3.exceptions import ContractLogicError
+
+        pd = self._pd()
+        pd._web3.eth.call.side_effect = ContractLogicError(
+            "execution reverted: Block not found", data={"code": "ErrUpstreams"}
+        )
+        assert pd._build_and_send_transaction(self._fn()) == "0xfeed"
 
     def test_wallet_signer_is_preflighted_before_the_wallet_opens(self):
         from web3.exceptions import ContractLogicError

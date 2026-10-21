@@ -22,7 +22,7 @@ with warnings.catch_warnings():
 
 from web3 import Web3
 from web3.contract.contract import ContractFunction
-from web3.exceptions import ContractLogicError
+from web3.exceptions import ContractLogicError, TimeExhausted
 from web3.middleware import ExtraDataToPOAMiddleware
 from web3.types import RPCEndpoint, TxParams
 
@@ -59,7 +59,12 @@ from primedelta.settings import (
     SIWE_MESSAGE,
     resolve_endpoints,
 )
-from primedelta.signer import LocalAccountSigner, Signer
+from primedelta.signer import (
+    _TRANSFER_GAS,
+    LocalAccountSigner,
+    Signer,
+    _gas_limit_from_estimate,
+)
 from primedelta.types import (
     AccountStatus,
     AIAgent,
@@ -106,6 +111,16 @@ _READ_RETRIES = 3
 _READ_BACKOFF = 0.3
 
 _LOCAL_STACK = ("dev", 31337)
+
+_RECEIPT_TIMEOUT = 60.0
+_RECEIPT_POLL_LATENCY = 0.5
+
+# Before raising StuckTransaction, re-read the nonces this many times, waiting
+# this many seconds times the attempt number: a gateway replica that lags one
+# block behind another can show a pending nonce above the latest one for a
+# moment after an ordinary transaction mines.
+_STUCK_RECHECKS = 2
+_STUCK_RECHECK_DELAY = 1.0
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -362,6 +377,8 @@ class TransactionFailed(Exception):
         to: Optional[str] = None,
         data: Optional[str] = None,
         trace: Optional[Any] = None,
+        *,
+        message: Optional[str] = None,
     ) -> None:
         self.function_name = function_name
         self.reason = reason
@@ -369,6 +386,9 @@ class TransactionFailed(Exception):
         self.to = to
         self.data = data
         self.trace = trace
+        if message is not None:
+            super().__init__(message)
+            return
         parts = [f"{function_name}() reverted"]
         if tx_hash is not None:
             parts.append(f"tx_hash={tx_hash}")
@@ -389,6 +409,119 @@ class MarketClosed(TransactionFailed):
     it. A subclass of TransactionFailed, so existing handlers still catch it, but
     agents can catch it specifically to distinguish 'market closed' from a bug.
     """
+
+
+def _units_text(amount: int, decimals: int) -> str:
+    return format((Decimal(amount) / Decimal(10**decimals)).normalize(), "f")
+
+
+def _del_text(wei: int) -> str:
+    return _units_text(wei, 18)
+
+
+class NotEnoughGas(TransactionFailed):
+    """The sender holds too little native DEL for the transaction's gas (gas
+    limit times gas price) plus the DEL it sends. Raised before signing, so
+    nothing was signed or sent.
+
+    Attributes (DEL amounts are ``Decimal``):
+        address: The sender.
+        balance: DEL the sender holds.
+        required: DEL the transaction needs up front (gas plus value).
+        shortfall: ``required - balance``: send at least this much DEL to
+            ``address``, then retry.
+        gas_limit: Gas limit the transaction would carry.
+        gas_price: Gas price in wei.
+        value: DEL the transaction sends.
+    """
+
+    def __init__(
+        self,
+        function_name: str,
+        address: str,
+        balance_wei: int,
+        gas_limit: int,
+        gas_price: int,
+        value_wei: int = 0,
+        to: Optional[str] = None,
+        data: Optional[str] = None,
+    ) -> None:
+        required_wei = gas_limit * gas_price + value_wei
+        self.address = address
+        self.balance = Decimal(balance_wei) / Decimal(10**18)
+        self.required = Decimal(required_wei) / Decimal(10**18)
+        self.shortfall = Decimal(required_wei - balance_wei) / Decimal(10**18)
+        self.gas_limit = gas_limit
+        self.gas_price = gas_price
+        self.value = Decimal(value_wei) / Decimal(10**18)
+        sends = f" plus the {_del_text(value_wei)} DEL it sends" if value_wei else ""
+        message = (
+            f"not enough DEL for gas: {address} holds {_del_text(balance_wei)} DEL "
+            f"but {function_name}() needs {_del_text(required_wei)} DEL (gas limit "
+            f"{gas_limit} at {_units_text(gas_price, 9)} gwei{sends}). Send at "
+            f"least {_del_text(required_wei - balance_wei)} DEL to {address}, then "
+            "retry. Nothing was signed or sent."
+        )
+        super().__init__(function_name, message, to=to, data=data, message=message)
+
+
+class StuckTransaction(TransactionFailed):
+    """An earlier transaction from this account never mined, so every new one
+    would queue behind it. Raised before signing, so nothing was sent.
+
+    Attributes:
+        address: The account.
+        latest_nonce: Nonce of the next transaction the chain will mine.
+        pending_nonce: Nonce after the transactions the node holds unmined.
+    """
+
+    def __init__(
+        self, function_name: str, address: str, latest_nonce: int, pending_nonce: int
+    ) -> None:
+        self.address = address
+        self.latest_nonce = latest_nonce
+        self.pending_nonce = pending_nonce
+        message = (
+            f"{address} has {pending_nonce - latest_nonce} earlier transaction(s) "
+            f"that never mined (latest nonce {latest_nonce}, pending nonce "
+            f"{pending_nonce}), so {function_name}() would queue behind them and "
+            "never mine either. Such a transaction was most likely sent with too "
+            "little DEL for its gas, and adding DEL does not clear it. Call "
+            "clear_stuck_transactions(): it replaces each one with a 0-value "
+            "transfer to the account itself at a higher gas price (needs DEL for "
+            "21000 gas each), or cancel nonce "
+            f"{latest_nonce} in the wallet that holds this key. If another app "
+            "using this key has a transaction in flight, wait for it to mine "
+            "instead. Nothing was signed or sent."
+        )
+        super().__init__(function_name, message, message=message)
+
+
+class TransactionPending(TransactionFailed):
+    """The transaction was broadcast but did not mine within the client's
+    ``receipt_timeout``. It may still mine. ``tx_hash`` is set; ``timeout`` is
+    the wait in seconds."""
+
+    def __init__(
+        self,
+        function_name: str,
+        tx_hash: str,
+        timeout: float,
+        to: Optional[str] = None,
+        data: Optional[str] = None,
+    ) -> None:
+        self.timeout = timeout
+        message = (
+            f"{function_name}() transaction {tx_hash} was sent but did not mine "
+            f"within {timeout:g} s. It may still mine: check tx_status(tx_hash) "
+            "and your balances before retrying, or the action could run twice. If "
+            "it never mines and the account's pending nonce stays above its "
+            "latest nonce, call clear_stuck_transactions() (key or KMS signer) or "
+            "cancel it in the wallet."
+        )
+        super().__init__(
+            function_name, message, tx_hash=tx_hash, to=to, data=data, message=message
+        )
 
 
 class OraclePriceUnavailable(Exception):
@@ -510,6 +643,23 @@ def _decode_revert(err: Exception) -> str:
     return message or str(err) or "no reason given"
 
 
+class _BlockNotServed(Exception):
+    pass
+
+
+def _served(value: Any) -> Any:
+    # A gateway replica that has not reached the requested block answers null.
+    if value is None:
+        raise _BlockNotServed()
+    return value
+
+
+def _is_revert(error: BaseException) -> bool:
+    # web3 turns any error whose `data` is a JSON object into ContractLogicError,
+    # and an RPC gateway (eRPC) wraps "Block not found" or an upstream failure so.
+    return isinstance(error, ContractLogicError) and not isinstance(error.data, dict)
+
+
 def _deepest_trace_error(trace: Any) -> Optional[str]:
     """Walk a `debug_traceCall` (callTracer) tree and return the innermost error.
 
@@ -573,6 +723,7 @@ class PrimeDelta:
         auto_relogin: bool = True,
         on_login: Optional[Callable[["PrimeDelta"], None]] = None,
         preflight: bool = True,
+        receipt_timeout: float = _RECEIPT_TIMEOUT,
     ) -> None:
         if web3_provider_url is None:
             raise ValueError("web3_provider_url is required")
@@ -617,6 +768,11 @@ class PrimeDelta:
         # the previous tx's receipt is back. Track locally to avoid collisions
         # in chained submissions (e.g. approve → swap, mint → remove).
         self._next_nonce: Optional[int] = None
+        # Nonces this client broadcast that the chain may not show as mined yet:
+        # they explain a pending nonce above the latest one (see
+        # `_pending_nonce_unless_stuck`).
+        self._sent_nonces: set[int] = set()
+        self._receipt_timeout = receipt_timeout
         # When non-None, the send path captures unsigned transactions into this
         # list instead of broadcasting them (see `craft`). Non-custodial flow:
         # this client builds the calldata; an external wallet signs and sends.
@@ -1194,20 +1350,37 @@ class PrimeDelta:
             latest = 0
         return max(self._last_write_block, latest)
 
-    def _read_at_fresh_block(self, read_fn: Callable[[Any], Any]) -> Any:
+    def _read_at_fresh_block(
+        self,
+        read_fn: Callable[[Any], Any],
+        final: Callable[[BaseException], bool] = lambda error: False,
+    ) -> Any:
+        return self._read_at_block(self._fresh_block(), read_fn, final)
+
+    def _read_at_block(
+        self,
+        block: Any,
+        read_fn: Callable[[Any], Any],
+        final: Callable[[BaseException], bool] = lambda error: False,
+    ) -> Any:
+        """``read_fn(block)``, retried while the replica may not have the block
+        yet, then at ``"latest"``. An error ``final`` accepts is raised at once."""
         import time
 
-        block = self._fresh_block()
         if block == "latest":
             return read_fn("latest")
         for attempt in range(_READ_RETRIES - 1):
             try:
                 return read_fn(block)
-            except Exception:
+            except Exception as error:
+                if final(error):
+                    raise
                 time.sleep(_READ_BACKOFF * (attempt + 1))
         try:
             return read_fn(block)
-        except Exception:
+        except Exception as error:
+            if final(error):
+                raise
             # Replica never caught up to our block; a stale read beats no read.
             return read_fn("latest")
 
@@ -1357,9 +1530,11 @@ class PrimeDelta:
     def get_native_del_balance(self) -> Decimal:
         """Read native DEL balance from chain."""
         raw = self._read_at_fresh_block(
-            lambda block: self._web3.eth.get_balance(
-                self._web3.to_checksum_address(self._signer.address),
-                block_identifier=block,
+            lambda block: _served(
+                self._web3.eth.get_balance(
+                    self._web3.to_checksum_address(self._signer.address),
+                    block_identifier=block,
+                )
             )
         )
         return Decimal(raw) / Decimal(10**18)
@@ -1385,6 +1560,71 @@ class PrimeDelta:
             block_number=receipt["blockNumber"],
             gas_used=receipt["gasUsed"],
         )
+
+    def clear_stuck_transactions(self) -> list[str]:
+        """Unblock an account whose earlier transactions never mined.
+
+        Replaces each transaction the node holds unmined for this account (every
+        nonce from the latest nonce up to the pending nonce) with a 0-value
+        transfer to the account itself, at 21000 gas and 25% above the current
+        gas price, and waits for each to mine. A transaction this client sent
+        that is still pending is cancelled the same way. Returns the replacement
+        tx hashes in nonce order, or ``[]`` when nothing is stuck.
+
+        Raises `NotEnoughGas`, before sending anything, if the account cannot pay
+        for every replacement. Needs a key or KMS signer: a browser wallet picks
+        its own nonces (use its own speed up / cancel), so it raises
+        `RuntimeError` there and `CannotCraft` inside `craft`.
+        """
+        if self._crafting is not None:
+            raise CannotCraft(
+                "clear_stuck_transactions() replaces transactions by nonce, and a "
+                "crafted transaction leaves the nonce to the wallet: cancel or "
+                "speed up the pending transaction in the wallet instead."
+            )
+        if self._signer.fills_gas_and_nonce:
+            raise RuntimeError(
+                "clear_stuck_transactions() needs a key or KMS signer: this wallet "
+                "picks its own nonces, so cancel or speed up the pending "
+                "transaction in the wallet instead."
+            )
+        fn_name = "clear_stuck_transactions"
+        with self._sending():
+            address = self._web3.to_checksum_address(self._signer.address)
+            block = self._fresh_block()
+            latest: int = self._read_at_block(
+                block,
+                lambda at: _served(self._web3.eth.get_transaction_count(address, at)),
+            )
+            pending: int = self._web3.eth.get_transaction_count(address, "pending")
+            if pending <= latest:
+                return []
+            gas_price = -(-self._web3.eth.gas_price * 5 // 4)
+            gas = _TRANSFER_GAS * (pending - latest)
+            balance: int = self._read_at_block(
+                block,
+                lambda at: _served(self._web3.eth.get_balance(address, at)),
+            )
+            if balance < gas * gas_price:
+                raise NotEnoughGas(fn_name, address, balance, gas, gas_price)
+            chain_id = self._web3.eth.chain_id
+            hashes = []
+            for nonce in range(latest, pending):
+                tx_hash = self._submit(
+                    {
+                        "from": address,
+                        "to": address,
+                        "value": 0,
+                        "gas": _TRANSFER_GAS,
+                        "gasPrice": gas_price,
+                        "nonce": nonce,
+                        "chainId": chain_id,
+                    }
+                )
+                self._note_write(self._wait_for_receipt(tx_hash, fn_name, address))
+                hashes.append(_tx_hash_0x(tx_hash))
+            self._next_nonce = None
+            return hashes
 
     def wrap_del(self, amount: Decimal) -> str:
         """Wrap native DEL → WDEL by sending msg.value to `WDEL.deposit()`.
@@ -1715,6 +1955,16 @@ class PrimeDelta:
         if account_status != AccountStatus.DID_MINTED:
             raise AccountNotVerified()
 
+    @contextmanager
+    def _sending(self) -> Iterator[None]:
+        if self._halted:
+            raise TradingHalted("trading is halted; call resume() to re-enable")
+        self._verify_chain()
+        # Serialize sends per instance so concurrent callers can't collide on
+        # the (non-thread-safe) local nonce counter.
+        with self._tx_lock:
+            yield
+
     def _send_with_nonce_retry(self, send_once: Callable[[], str]) -> str:
         # Besu's "pending" nonce occasionally lags behind the actual account
         # state after a fresh receipt. When the chain rejects "nonce too low"
@@ -1722,12 +1972,7 @@ class PrimeDelta:
         import re
         import time
 
-        if self._halted:
-            raise TradingHalted("trading is halted; call resume() to re-enable")
-        self._verify_chain()
-        # Serialize sends per instance so concurrent callers can't collide on
-        # the (non-thread-safe) local nonce counter.
-        with self._tx_lock:
+        with self._sending():
             last_error: Optional[TransactionFailed] = None
             for attempt in range(5):
                 try:
@@ -1785,29 +2030,26 @@ class PrimeDelta:
                     )
                 self._crafting.append(transaction)
                 return _CRAFT_SENTINEL
+            self._preflight_call(transaction, fn_name, to_address, calldata, value)
         else:
-            tx_params: dict[str, Any] = {
-                "from": self._signer.address,
-                "value": value,
-                "gasPrice": self._web3.eth.gas_price,
-                "nonce": self._reserve_nonce(),
-                "gas": 5_000_000,
-            }
-            try:
-                transaction = dict(
-                    contract_function.build_transaction(cast(TxParams, tx_params))
+            if calldata is None:
+                raise TransactionFailed(
+                    fn_name, "could not encode calldata", to=to_address
                 )
-            except ContractLogicError as e:
-                raise self._pre_submit_revert(
-                    e, fn_name, to_address, calldata, value
-                ) from e
+            transaction = {
+                "from": self._signer.address,
+                "to": to_address,
+                "value": value,
+                "data": calldata,
+                "chainId": self._web3.eth.chain_id,
+            }
+            self._fill_gas_and_nonce(transaction, fn_name)
 
-        self._preflight_call(transaction, fn_name, to_address, calldata, value)
-        tx_hash = self._signer.submit_transaction(self._web3, transaction)
+        tx_hash = self._submit(transaction)
         # Wait for the receipt so chained calls (e.g. approve → swap) see the
         # state change. Without this the next tx's gas estimation runs against
         # pre-approve state on chains with real block time (dev/prod), reverting.
-        receipt = self._web3.eth.wait_for_transaction_receipt(tx_hash)
+        receipt = self._wait_for_receipt(tx_hash, fn_name, to_address, calldata)
         if receipt["status"] == 0:
             # Re-run as eth_call at the block BEFORE our tx mined to extract
             # the revert reason. Using the mined block itself would replay
@@ -1838,6 +2080,135 @@ class PrimeDelta:
             )
         self._note_write(receipt)
         return _tx_hash_0x(tx_hash)
+
+    def _fill_gas_and_nonce(self, transaction: dict[str, Any], fn_name: str) -> None:
+        block = self._fresh_block()
+        pending = self._pending_nonce_unless_stuck(fn_name, block)
+        gas_price: int = self._web3.eth.gas_price
+        transaction["gas"] = self._gas_limit(transaction, gas_price, fn_name, block)
+        transaction["gasPrice"] = gas_price
+        transaction["nonce"] = self._reserve_nonce(pending)
+
+    def _gas_limit(
+        self, transaction: dict[str, Any], gas_price: int, fn_name: str, block: Any
+    ) -> int:
+        """Estimate the transaction's gas at ``block`` and check the sender can
+        pay for it. The estimate is the pre-sign simulation: a revert raises
+        here, decoded, before anything is signed."""
+        sender = transaction["from"]
+        value = int(transaction.get("value") or 0)
+        to_address = transaction.get("to")
+        calldata = transaction.get("data")
+        call = cast(
+            TxParams,
+            {
+                "from": sender,
+                "to": to_address,
+                "value": value,
+                "data": calldata or "0x",
+            },
+        )
+
+        def read(at: Any) -> tuple[int, Optional[int]]:
+            balance: int = _served(self._web3.eth.get_balance(sender, at))
+            if balance >= value:
+                return balance, self._web3.eth.estimate_gas(call, at)
+            # A node refuses to simulate sending more DEL than the balance, so
+            # simulate as if the value were there to size the gas to fund.
+            try:
+                override = cast(Any, {sender: {"balance": value}})
+                return balance, self._web3.eth.estimate_gas(call, at, override)
+            except Exception as error:
+                if _is_revert(error):
+                    raise
+                return balance, None
+
+        try:
+            balance, estimate = self._read_at_block(block, read, final=_is_revert)
+        except Exception as error:
+            if isinstance(error, ContractLogicError) and _is_revert(error):
+                raise self._pre_submit_revert(
+                    error, fn_name, to_address, calldata, value
+                ) from error
+            reason = f"could not estimate gas: {error}"
+            raise TransactionFailed(
+                fn_name,
+                reason,
+                to=to_address,
+                data=calldata,
+                message=f"{fn_name}(): {reason}. Nothing was signed or sent.",
+            ) from error
+        gas = _gas_limit_from_estimate(
+            estimate if estimate is not None else _TRANSFER_GAS
+        )
+        if balance < gas * gas_price + value:
+            raise NotEnoughGas(
+                fn_name,
+                sender,
+                balance,
+                gas,
+                gas_price,
+                value,
+                to=to_address,
+                data=calldata,
+            )
+        return gas
+
+    def _pending_nonce_unless_stuck(self, fn_name: str, block: Any) -> int:
+        """The pending nonce, unless an earlier transaction this client did not
+        send sits unmined below it (a pending nonce above the latest one that
+        `_sent_nonces` does not explain): then `StuckTransaction`."""
+        import time
+
+        address = self._web3.to_checksum_address(self._signer.address)
+        for attempt in range(_STUCK_RECHECKS + 1):
+            if attempt:
+                time.sleep(_STUCK_RECHECK_DELAY * attempt)
+                block = self._fresh_block()
+            latest: int = self._read_at_block(
+                block,
+                lambda at: _served(self._web3.eth.get_transaction_count(address, at)),
+            )
+            pending: int = self._web3.eth.get_transaction_count(address, "pending")
+            self._sent_nonces = {n for n in self._sent_nonces if n >= latest}
+            if self._sent_nonces.issuperset(range(latest, pending)):
+                return pending
+        raise StuckTransaction(fn_name, address, latest, pending)
+
+    def _submit(self, transaction: dict[str, Any]) -> Any:
+        try:
+            tx_hash = self._signer.submit_transaction(self._web3, transaction)
+        except Exception:
+            if "nonce" in transaction:
+                # Re-read the chain's nonce next time instead of skipping this
+                # one: a skipped nonce strands every later transaction.
+                self._next_nonce = None
+            raise
+        if "nonce" in transaction:
+            self._sent_nonces.add(transaction["nonce"])
+        return tx_hash
+
+    def _wait_for_receipt(
+        self,
+        tx_hash: Any,
+        fn_name: str,
+        to: Optional[str] = None,
+        data: Optional[str] = None,
+    ) -> Any:
+        try:
+            return self._web3.eth.wait_for_transaction_receipt(
+                tx_hash,
+                timeout=self._receipt_timeout,
+                poll_latency=_RECEIPT_POLL_LATENCY,
+            )
+        except TimeExhausted as error:
+            raise TransactionPending(
+                fn_name,
+                _tx_hash_0x(tx_hash),
+                self._receipt_timeout,
+                to=to,
+                data=data,
+            ) from error
 
     def _pre_submit_revert(
         self,
@@ -1881,11 +2252,15 @@ class PrimeDelta:
             "data": data,
         }
         try:
-            self._web3.eth.call(cast(TxParams, call), self._fresh_block())
+            self._read_at_fresh_block(
+                lambda block: self._web3.eth.call(cast(TxParams, call), block),
+                final=_is_revert,
+            )
         except ContractLogicError as e:
-            raise self._pre_submit_revert(
-                e, fn_name, to_address, calldata, value
-            ) from e
+            if _is_revert(e):
+                raise self._pre_submit_revert(
+                    e, fn_name, to_address, calldata, value
+                ) from e
         except Exception:
             return
 
@@ -1907,13 +2282,14 @@ class PrimeDelta:
             transaction["data"] = "0x"
             self._crafting.append(transaction)
             return _CRAFT_SENTINEL
-        if not self._signer.fills_gas_and_nonce:
-            transaction["gasPrice"] = self._web3.eth.gas_price
-            transaction["nonce"] = self._reserve_nonce()
-            transaction["gas"] = 21_000
-        self._preflight_call({**transaction, "data": "0x"}, "transfer", to, None, value)
-        tx_hash = self._signer.submit_transaction(self._web3, transaction)
-        receipt = self._web3.eth.wait_for_transaction_receipt(tx_hash)
+        if self._signer.fills_gas_and_nonce:
+            self._preflight_call(
+                {**transaction, "data": "0x"}, "transfer", to, None, value
+            )
+        else:
+            self._fill_gas_and_nonce(transaction, "transfer")
+        tx_hash = self._submit(transaction)
+        receipt = self._wait_for_receipt(tx_hash, "transfer", to)
         if receipt["status"] == 0:
             raise TransactionFailed(
                 "transfer", "reverted", tx_hash=_tx_hash_0x(tx_hash), to=to
@@ -1921,21 +2297,15 @@ class PrimeDelta:
         self._note_write(receipt)
         return _tx_hash_0x(tx_hash)
 
-    def _reserve_nonce(self) -> int:
-        """Return the next nonce to use.
-
-        Queries chain via `eth_getTransactionCount(pending)` each time. If the
-        chain's view hasn't caught up since our last submission (some Besu/PoA
-        nodes lag), bump past our last-used value. Never goes backwards.
-        """
-        chain_nonce: int = self._web3.eth.get_transaction_count(
-            self._web3.to_checksum_address(self._signer.address),
-            "pending",
-        )
-        if self._next_nonce is not None and chain_nonce <= self._next_nonce:
-            chain_nonce = self._next_nonce + 1
-        self._next_nonce = chain_nonce
-        return chain_nonce
+    def _reserve_nonce(self, pending: int) -> int:
+        """Return the next nonce to use: the chain's pending nonce, or one past
+        our last-used value if the chain's view hasn't caught up since our last
+        submission (some Besu/PoA nodes lag). Never goes backwards."""
+        nonce = pending
+        if self._next_nonce is not None and nonce <= self._next_nonce:
+            nonce = self._next_nonce + 1
+        self._next_nonce = nonce
+        return nonce
 
     def _try_debug_trace_call(self, tx: dict[str, Any]) -> Optional[Any]:
         """Attempt `debug_traceCall` for a richer call trace.

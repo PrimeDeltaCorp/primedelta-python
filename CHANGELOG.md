@@ -6,6 +6,73 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+### Added
+- **Not enough DEL for gas raises `NotEnoughGas` before anything is signed.**
+  With a key or KMS signer the SDK reads the sender's DEL balance and compares
+  it with gas limit × gas price plus the DEL the transaction sends. The error
+  is a `TransactionFailed` with `address`, `balance`, `required` and
+  `shortfall` in DEL, `gas_limit`, `gas_price` (wei) and `value`, and its
+  message says to send at least the shortfall to that address. When the wallet
+  holds less than the value it sends, a node refuses to simulate it, so the gas
+  is sized as if the value were there.
+- **A wedged account raises `StuckTransaction` instead of queueing behind it.**
+  When the account's pending nonce is above its latest nonce and no
+  transaction this client sent explains the gap, the send raises
+  `StuckTransaction` (`address`, `latest_nonce`, `pending_nonce`) before
+  signing. The nonces are re-read twice, 1 s and 2 s apart, so a gateway
+  replica that lags behind another after an ordinary send never trips it, and
+  a transaction this client sent that has not mined yet does not count.
+- **`clear_stuck_transactions()`** replaces each transaction the node holds
+  unmined for the account (every nonce from the latest to the pending one) with
+  a 0-value transfer to the account itself, at 21000 gas and 25% above the
+  current gas price, waits for each to mine and returns their hashes (`[]` when
+  nothing is stuck). It checks the DEL balance first (`NotEnoughGas`), and
+  refuses a browser wallet (`RuntimeError`: use the wallet's own cancel) and
+  `craft` (`CannotCraft`). Funding the account does not clear such a
+  transaction; replacing its nonce does. Verified on dev: an account wedged by
+  a 5,000,000-gas transaction it could not pay for raised `StuckTransaction`,
+  stayed wedged after 1 DEL arrived, and one replacement cleared it; the next
+  `wrap_del` mined using 52,036 of its 66,032 estimated gas.
+- **Closed orders carry the broker's reason.** `Order.broker_message` is what
+  the mint brokerage recorded when it cancelled or rejected an order (for
+  example "Market was closed — order not accepted."), so `closed_orders()` and
+  `get_ai_agent_closed_orders()` say why an order did not fill. `None` for an
+  open order or when there is no message.
+
+### Changed
+- **Gas is estimated instead of fixed at 5,000,000.** A key or KMS signer
+  signed every contract call with a 5,000,000 gas limit, which at 1000 gwei
+  asks for 5 DEL up front: a wallet with less had its transaction accepted by
+  an RPC node, dropped by the validators, and the account stuck behind it. The
+  SDK now runs `eth_estimateGas` for the exact transaction at the block of the
+  client's last write (so an approve → swap chain never estimates against
+  pre-approve state) and signs 25% above it, rounded up; a plain DEL transfer
+  keeps exactly 21000, and a transfer to a contract now gets the gas it needs.
+  For these signers the estimate is the pre-sign simulation: a revert still
+  raises `TransactionFailed` / `MarketClosed` before signing, with or without
+  preflight, and an estimate the node cannot give raises `TransactionFailed`
+  without sending. A browser wallet and `craft()` still leave gas to the
+  wallet; `MockBrowserSigner` now estimates like one.
+- **Receipts are awaited for an explicit 60 s.** `PrimeDelta(receipt_timeout=...)`
+  sets the wait (default 60 s, polling every 0.5 s, instead of web3's implicit
+  120 s at 0.1 s). A transaction that does not mine in time raises
+  `TransactionPending` (a `TransactionFailed` carrying `tx_hash` and
+  `timeout`) instead of web3's `TimeExhausted`; it may still mine, so check
+  `tx_status(tx_hash)` and balances before retrying.
+
+### Fixed
+- **A gateway error is no longer reported as a revert.** web3 raises
+  `ContractLogicError` for any RPC error whose `data` is a JSON object, which
+  is how the RPC gateway reports a replica that has not reached the requested
+  block. The pre-sign simulation reported it as `execution reverted: Block not
+  found`; it now retries it like the other read-after-write reads, and skips
+  the check if it persists.
+- **A failed broadcast no longer skips a nonce.** When the signer raised while
+  submitting, the reserved nonce stayed taken, so the next transaction used the
+  one after it and could never mine.
+- **`get_native_del_balance()` retries a replica that answers `null`** for a
+  block it has not reached, instead of failing on it.
+
 ## [0.5.0] - 2026-10-17
 
 ### Added

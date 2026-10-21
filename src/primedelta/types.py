@@ -176,6 +176,7 @@ class Order:
     price: Optional[Decimal]
     date_of_cancellation: Optional[date]
     raw_status: Optional[str] = None
+    broker_message: Optional[str] = None
 
 
 @dataclass(frozen=True)

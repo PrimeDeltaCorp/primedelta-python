@@ -7,6 +7,17 @@ from eth_account.messages import encode_defunct
 from eth_account.signers.local import LocalAccount
 from eth_keys import keys
 
+_TRANSFER_GAS = 21_000
+
+
+def _gas_limit_from_estimate(estimate: int) -> int:
+    """Gas limit for an ``eth_estimateGas`` result: 25% above it, rounded up, in
+    case state moves before the block. A plain DEL transfer always costs exactly
+    21000."""
+    if estimate <= _TRANSFER_GAS:
+        return estimate
+    return -(-estimate * 5 // 4)
+
 
 @runtime_checkable
 class Signer(Protocol):
@@ -99,7 +110,13 @@ class MockBrowserSigner:
         prepared.setdefault(
             "nonce", web3.eth.get_transaction_count(self._account.address, "pending")
         )
-        prepared.setdefault("gas", 5_000_000)
+        if "gas" not in prepared:
+            call = {
+                key: prepared[key]
+                for key in ("from", "to", "value", "data")
+                if prepared.get(key) is not None
+            }
+            prepared["gas"] = _gas_limit_from_estimate(web3.eth.estimate_gas(call))
         prepared.setdefault("gasPrice", web3.eth.gas_price)
         signed = self._account.sign_transaction(prepared)
         return web3.eth.send_raw_transaction(signed.raw_transaction)

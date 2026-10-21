@@ -28,10 +28,13 @@ from .primedelta import (
     MarketClosed,
     NetworkMismatch,
     NotEnoughFunds,
+    NotEnoughGas,
     OraclePriceUnavailable,
     PrimeDelta,
+    StuckTransaction,
     TradingHalted,
     TransactionFailed,
+    TransactionPending,
     WdelNotConfigured,
 )
 from .primedelta_client import (
