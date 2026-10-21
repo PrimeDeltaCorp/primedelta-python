@@ -6,6 +6,8 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-21
+
 ### Added
 - **Not enough DEL for gas raises `NotEnoughGas` before anything is signed.**
   With a key or KMS signer the SDK reads the sender's DEL balance and compares
