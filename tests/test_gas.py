@@ -183,6 +183,15 @@ class TestEstimatedGas:
         sleep.assert_not_called()
         pd._signer.submit_transaction.assert_not_called()
 
+    def test_preflight_off_still_refuses_a_transfer_the_estimate_reverts(self):
+        pd, chain = _pd(preflight=False)
+        pd._web3.eth.estimate_gas.side_effect = _revert(STALE_PRICE)
+        with pytest.raises(MarketClosed) as info:
+            pd.transfer_token("dUSD", RECIPIENT, Decimal("1"))
+        assert info.value.tx_hash is None
+        pd._web3.eth.call.assert_not_called()
+        pd._signer.submit_transaction.assert_not_called()
+
     def test_a_lagging_replica_is_retried_not_reported_as_a_revert(self):
         pd, chain = _pd()
         pd._last_write_block = 200

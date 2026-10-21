@@ -2746,9 +2746,11 @@ class PrimeDelta:
         stock token, an oracle-priced pool's LP token (``"<SYMBOL>-LP"`` with the
         stock's current symbol, e.g. ``"GOOG-LP"``) or an oracle-free token. A
         mixed-case ``to`` must carry a valid checksum. The transfer is simulated
-        before it is signed (unless preflight is off or it is crafted), so one the
-        token refuses (a recipient without a valid DID, a short balance) fails
-        before the wallet is asked."""
+        before it is signed, so one the token refuses (a recipient without a valid
+        DID, a short balance) fails before anything is signed or sent. A key or KMS
+        signer's gas estimate is the simulation, so it runs even with preflight
+        off. Only a crafted transfer, or a browser wallet with preflight off, skips
+        it."""
         to = _checked_address(to, "recipient")
         address, decimals = self._transfer_token_ref(token_symbol)
         units = _token_units(amount, decimals)
