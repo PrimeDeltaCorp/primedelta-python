@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 from hexbytes import HexBytes
 from web3 import Web3
-from web3.exceptions import ContractLogicError, TimeExhausted
+from web3.exceptions import ContractLogicError, TimeExhausted, TransactionNotFound
 
 from primedelta import (
     CannotCraft,
@@ -12,6 +12,7 @@ from primedelta import (
     NotEnoughGas,
     PrimeDelta,
     StuckTransaction,
+    StuckTransactionMined,
     TradingHalted,
     TransactionFailed,
     TransactionPending,
@@ -449,6 +450,25 @@ class TestStuckTransaction:
         with patch("time.sleep"):
             pd.wrap_del(Decimal("0.01"))
         assert _sent(pd)[0]["nonce"] == 6
+        assert chain.balance_reads == [210]
+        assert [c.args[1] for c in pd._web3.eth.estimate_gas.mock_calls] == [210]
+
+    def test_a_reread_checks_the_balance_left_after_the_gap_mined(self):
+        pd, chain = _pd()
+        pd._last_write_block = 200
+        heights = iter([200, 210])
+        type(pd._web3.eth).block_number = property(lambda self: next(heights))
+        pd._web3.eth.get_transaction_count.side_effect = lambda address, block: (
+            6 if block in ("pending", 210) else 5
+        )
+        balances = {200: 10**17, 210: 2 * 10**16}
+        pd._web3.eth.get_balance.side_effect = lambda address, block: balances[block]
+        with patch("time.sleep"):
+            with pytest.raises(NotEnoughGas) as info:
+                pd.wrap_del(Decimal("0.01"))
+        assert info.value.balance == Decimal("0.02")
+        assert [c.args[1] for c in pd._web3.eth.estimate_gas.mock_calls] == [210]
+        pd._signer.submit_transaction.assert_not_called()
 
     def test_nonces_below_the_latest_are_forgotten(self):
         pd, chain = _pd()
@@ -610,6 +630,153 @@ class TestClearStuckTransactions:
             pd.clear_stuck_transactions()
         assert info.value.function_name == "clear_stuck_transactions"
         assert info.value.tx_hash == "0x" + HASHES[0].hex()
+
+    def test_every_replacement_is_sent_before_any_receipt_is_awaited(self):
+        pd, chain = self._stuck()
+        events: list[tuple[str, object]] = []
+        hashes = iter(HASHES)
+
+        def submit(web3, tx):
+            events.append(("submit", tx["nonce"]))
+            return next(hashes)
+
+        def wait(tx_hash, **kwargs):
+            events.append(("wait", tx_hash))
+            return {"status": 1, "blockNumber": 300}
+
+        pd._signer.submit_transaction.side_effect = submit
+        pd._web3.eth.wait_for_transaction_receipt.side_effect = wait
+        pd.clear_stuck_transactions()
+        assert events == [
+            ("submit", 5),
+            ("submit", 6),
+            ("wait", HASHES[0]),
+            ("wait", HASHES[1]),
+        ]
+
+    def test_a_nonce_already_mined_is_reported_and_the_rest_replaced(self):
+        pd, chain = self._stuck(pending=8)
+        pd._next_nonce = 9
+        pd._signer.submit_transaction.side_effect = [
+            HASHES[0],
+            ValueError("{'code': -32001, 'message': 'Nonce too low'}"),
+            HASHES[2],
+        ]
+        with pytest.raises(StuckTransactionMined) as info:
+            pd.clear_stuck_transactions()
+        error = info.value
+        assert isinstance(error, TransactionFailed)
+        assert (error.address, error.mined_nonces) == (ADDRESS, [6])
+        assert error.cleared == ["0x" + HASHES[0].hex(), "0x" + HASHES[2].hex()]
+        assert [tx["nonce"] for tx in _sent(pd)] == [5, 6, 7]
+        waited = pd._web3.eth.wait_for_transaction_receipt.call_args_list
+        assert [c.args[0] for c in waited] == [HASHES[0], HASHES[2]]
+        assert str(error) == (
+            f"{ADDRESS}: another transaction mined at nonce 6 before its "
+            "replacement could, most likely the stuck transaction itself, so it "
+            "ran instead of being cancelled: check the account's balances before "
+            "acting on it. Replacements that mined: nonce 5 "
+            f"0x{HASHES[0].hex()}, nonce 7 0x{HASHES[2].hex()}. Nothing is stuck "
+            "at these nonces any more."
+        )
+        assert pd._next_nonce is None
+        assert pd._last_write_block == 300
+
+    def test_a_replacement_beaten_to_its_nonce_is_reported(self):
+        pd, chain = self._stuck()
+
+        def wait(tx_hash, **kwargs):
+            if tx_hash == HASHES[1]:
+                chain.latest = 7
+                raise TimeExhausted()
+            return {"status": 1, "blockNumber": 300}
+
+        pd._web3.eth.wait_for_transaction_receipt.side_effect = wait
+        pd._web3.eth.get_transaction_receipt.side_effect = TransactionNotFound("no")
+        with pytest.raises(StuckTransactionMined) as info:
+            pd.clear_stuck_transactions()
+        assert info.value.mined_nonces == [6]
+        assert info.value.cleared == ["0x" + HASHES[0].hex()]
+        assert "No replacement" not in str(info.value)
+        pd._web3.eth.get_transaction_receipt.assert_called_once_with(HASHES[1])
+        assert chain.counts[-1] == 300
+
+    def test_only_a_beaten_replacement_says_none_mined(self):
+        pd, chain = self._stuck(pending=6)
+
+        def wait(tx_hash, **kwargs):
+            chain.latest = 6
+            raise TimeExhausted()
+
+        pd._web3.eth.wait_for_transaction_receipt.side_effect = wait
+        pd._web3.eth.get_transaction_receipt.side_effect = TransactionNotFound("no")
+        with pytest.raises(StuckTransactionMined) as info:
+            pd.clear_stuck_transactions()
+        assert (info.value.mined_nonces, info.value.cleared) == ([5], [])
+        assert "No replacement mined." in str(info.value)
+
+    def test_a_replacement_that_mined_just_after_the_wait_counts(self):
+        pd, chain = self._stuck()
+
+        def wait(tx_hash, **kwargs):
+            if tx_hash == HASHES[1]:
+                chain.latest = 7
+                raise TimeExhausted()
+            return {"status": 1, "blockNumber": 300}
+
+        pd._web3.eth.wait_for_transaction_receipt.side_effect = wait
+        pd._web3.eth.get_transaction_receipt.return_value = {
+            "status": 1,
+            "blockNumber": 301,
+        }
+        hashes = pd.clear_stuck_transactions()
+        assert hashes == ["0x" + HASHES[0].hex(), "0x" + HASHES[1].hex()]
+        assert pd._last_write_block == 301
+
+    def test_a_replacement_whose_nonce_is_still_open_stays_pending(self):
+        pd, chain = self._stuck()
+
+        def wait(tx_hash, **kwargs):
+            if tx_hash == HASHES[1]:
+                chain.latest = 6
+                raise TimeExhausted()
+            return {"status": 1, "blockNumber": 300}
+
+        pd._web3.eth.wait_for_transaction_receipt.side_effect = wait
+        with pytest.raises(TransactionPending) as info:
+            pd.clear_stuck_transactions()
+        assert info.value.tx_hash == "0x" + HASHES[1].hex()
+        pd._web3.eth.get_transaction_receipt.assert_not_called()
+
+    def test_nonces_taken_while_sending_and_waiting_are_named_in_order(self):
+        pd, chain = self._stuck()
+        pd._signer.submit_transaction.side_effect = [
+            HASHES[0],
+            ValueError("nonce too low: next nonce 7, tx nonce 6"),
+        ]
+
+        def wait(tx_hash, **kwargs):
+            chain.latest = 7
+            raise TimeExhausted()
+
+        pd._web3.eth.wait_for_transaction_receipt.side_effect = wait
+        pd._web3.eth.get_transaction_receipt.side_effect = TransactionNotFound("no")
+        with pytest.raises(StuckTransactionMined) as info:
+            pd.clear_stuck_transactions()
+        assert (info.value.mined_nonces, info.value.cleared) == ([5, 6], [])
+
+    def test_several_mined_nonces_are_named_together(self):
+        error = StuckTransactionMined(
+            "clear_stuck_transactions", ADDRESS, [5, 6], [(7, "0xab")]
+        )
+        assert str(error) == (
+            f"{ADDRESS}: other transactions mined at nonces 5, 6 before their "
+            "replacements could, most likely the stuck transactions themselves, so "
+            "they ran instead of being cancelled: check the account's balances "
+            "before acting on it. Replacements that mined: nonce 7 0xab. Nothing is "
+            "stuck at these nonces any more."
+        )
+        assert (error.mined_nonces, error.cleared) == ([5, 6], ["0xab"])
 
     def test_a_refused_replacement_says_why(self):
         pd, chain = self._stuck()

@@ -23,19 +23,27 @@ semantic versioning once published.
   than a block), so a gateway replica that lags behind another after an
   ordinary send, or a transaction another client with the key just sent, never
   trips it. A transaction this client sent counts as explained unless its
-  receipt wait timed out.
+  receipt wait timed out. When the gap closes while re-reading, the gas
+  estimate and the DEL balance check read the block it closed at, so they see
+  the DEL the mined transaction spent.
 - **`clear_stuck_transactions()`** replaces each transaction the node holds
   unmined for the account (every nonce from the latest to the pending one) with
   a 0-value transfer to the account itself, at 21000 gas and 25% above the
-  current gas price, waits for each to mine and returns their hashes (`[]` when
-  nothing is stuck). It checks the DEL balance first (`NotEnoughGas`), says
-  which nonce the node refused a replacement for and why, and refuses a
-  browser wallet (`RuntimeError`: use the wallet's own cancel) and `craft`
-  (`CannotCraft`). Funding the account does not clear such a
-  transaction; replacing its nonce does. Verified on dev: an account wedged by
-  a 5,000,000-gas transaction it could not pay for raised `StuckTransaction`,
-  stayed wedged after 1 DEL arrived, and one replacement cleared it; the next
-  `wrap_del` mined using 52,036 of its 66,032 estimated gas.
+  current gas price. It sends every replacement before waiting for any, so a
+  later stuck transaction cannot mine right behind an earlier replacement,
+  then waits for each to mine and returns their hashes (`[]` when nothing is
+  stuck). It checks the DEL balance first (`NotEnoughGas`), says which nonce
+  the node refused a replacement for and why, and refuses a browser wallet
+  (`RuntimeError`: use the wallet's own cancel) and `craft` (`CannotCraft`).
+  When another transaction, most likely the stuck one, takes a nonce before
+  its replacement, it raises `StuckTransactionMined` (a `TransactionFailed`
+  with `address`, `mined_nonces` and `cleared`, the hashes of the replacements
+  that mined): that transaction ran instead of being cancelled. Funding the
+  account does not clear such a transaction; replacing its nonce does.
+  Verified on dev: an account wedged by a 5,000,000-gas transaction it could
+  not pay for raised `StuckTransaction`, stayed wedged after 1 DEL arrived, and
+  one replacement cleared it; the next `wrap_del` mined using 52,036 of its
+  66,032 estimated gas.
 - **Closed orders carry the broker's reason.** `Order.broker_message` is what
   the mint brokerage recorded when it cancelled or rejected an order (for
   example "Market was closed — order not accepted."), so `closed_orders()` and

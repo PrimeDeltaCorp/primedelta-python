@@ -32,6 +32,7 @@ from .primedelta import (
     OraclePriceUnavailable,
     PrimeDelta,
     StuckTransaction,
+    StuckTransactionMined,
     TradingHalted,
     TransactionFailed,
     TransactionPending,

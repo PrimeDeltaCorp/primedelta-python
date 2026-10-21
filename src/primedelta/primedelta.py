@@ -11,6 +11,7 @@ from importlib import resources
 from typing import Any, Callable, Iterator, Optional, cast
 
 from eth_abi import decode as abi_decode
+from eth_typing import ChecksumAddress
 
 with warnings.catch_warnings():
     # `siwe` builds an ABNF grammar that redefines RFC-5234 core rules
@@ -22,7 +23,7 @@ with warnings.catch_warnings():
 
 from web3 import Web3
 from web3.contract.contract import ContractFunction
-from web3.exceptions import ContractLogicError, TimeExhausted
+from web3.exceptions import ContractLogicError, TimeExhausted, TransactionNotFound
 from web3.middleware import ExtraDataToPOAMiddleware
 from web3.types import RPCEndpoint, TxParams
 
@@ -495,6 +496,52 @@ class StuckTransaction(TransactionFailed):
             "instead. Nothing was signed or sent."
         )
         super().__init__(function_name, message, message=message)
+
+
+class StuckTransactionMined(TransactionFailed):
+    """`clear_stuck_transactions()` found a nonce already taken by another
+    transaction before its replacement mined, most likely the stuck transaction
+    itself: that one ran instead of being cancelled. Every nonce that was stuck
+    has mined.
+
+    Attributes:
+        address: The account.
+        mined_nonces: Nonces another transaction took, ascending.
+        cleared: Hashes of the replacements that mined, in nonce order.
+    """
+
+    def __init__(
+        self,
+        function_name: str,
+        address: str,
+        mined_nonces: list[int],
+        cleared: list[tuple[int, str]],
+    ) -> None:
+        self.address = address
+        self.mined_nonces = mined_nonces
+        self.cleared = [tx_hash for _, tx_hash in cleared]
+        nonces = ", ".join(str(nonce) for nonce in mined_nonces)
+        mined = (
+            f"another transaction mined at nonce {nonces} before its replacement "
+            "could, most likely the stuck transaction itself, so it ran"
+            if len(mined_nonces) == 1
+            else f"other transactions mined at nonces {nonces} before their "
+            "replacements could, most likely the stuck transactions themselves, so "
+            "they ran"
+        )
+        replaced = (
+            "Replacements that mined: "
+            + ", ".join(f"nonce {nonce} {tx_hash}" for nonce, tx_hash in cleared)
+            + "."
+            if cleared
+            else "No replacement mined."
+        )
+        message = (
+            f"{address}: {mined} instead of being cancelled: check the account's "
+            f"balances before acting on it. {replaced} Nothing is stuck at these "
+            "nonces any more."
+        )
+        super().__init__(function_name, message, to=address, message=message)
 
 
 class TransactionPending(TransactionFailed):
@@ -1571,14 +1618,20 @@ class PrimeDelta:
         Replaces each transaction the node holds unmined for this account (every
         nonce from the latest nonce up to the pending nonce) with a 0-value
         transfer to the account itself, at 21000 gas and 25% above the current
-        gas price, and waits for each to mine. A transaction this client sent
-        that is still pending is cancelled the same way. Returns the replacement
-        tx hashes in nonce order, or ``[]`` when nothing is stuck.
+        gas price. It sends every replacement before waiting for any, so no later
+        stuck transaction can mine right behind an earlier replacement, then waits
+        for each to mine. A transaction this client sent that is still pending is
+        cancelled the same way. Returns the replacement tx hashes in nonce order,
+        or ``[]`` when nothing is stuck.
 
         Raises `NotEnoughGas`, before sending anything, if the account cannot pay
-        for every replacement. Needs a key or KMS signer: a browser wallet picks
-        its own nonces (use its own speed up / cancel), so it raises
-        `RuntimeError` there and `CannotCraft` inside `craft`.
+        for every replacement, and `StuckTransactionMined` when another
+        transaction, most likely the stuck one, took a nonce before its
+        replacement did: it ran instead of being cancelled, and ``.cleared``
+        holds the hashes of the replacements that mined. Needs a key or KMS
+        signer: a browser wallet picks its own nonces (use its own speed up /
+        cancel), so it raises `RuntimeError` there and `CannotCraft` inside
+        `craft`.
         """
         if self._crafting is not None:
             raise CannotCraft(
@@ -1596,10 +1649,7 @@ class PrimeDelta:
         with self._sending():
             address = self._web3.to_checksum_address(self._signer.address)
             block = self._fresh_block()
-            latest: int = self._read_at_block(
-                block,
-                lambda at: _served(self._web3.eth.get_transaction_count(address, at)),
-            )
+            latest = self._latest_nonce(address, block)
             pending: int = self._web3.eth.get_transaction_count(address, "pending")
             if pending <= latest:
                 return []
@@ -1612,7 +1662,8 @@ class PrimeDelta:
             if balance < gas * gas_price:
                 raise NotEnoughGas(fn_name, address, balance, gas, gas_price)
             chain_id = self._web3.eth.chain_id
-            hashes = []
+            sent: list[tuple[int, Any, dict[str, Any]]] = []
+            taken: list[int] = []
             for nonce in range(latest, pending):
                 replacement = {
                     "from": address,
@@ -1624,8 +1675,11 @@ class PrimeDelta:
                     "chainId": chain_id,
                 }
                 try:
-                    tx_hash = self._submit(replacement)
+                    sent.append((nonce, self._submit(replacement), replacement))
                 except Exception as error:
+                    if "nonce too low" in str(error).lower():
+                        taken.append(nonce)
+                        continue
                     reason = (
                         f"the node refused the replacement for nonce {nonce}: {error}"
                     )
@@ -1640,10 +1694,24 @@ class PrimeDelta:
                             f"{fn_name}() again."
                         ),
                     ) from error
-                self._note_write(self._wait_for_receipt(tx_hash, fn_name, replacement))
-                hashes.append(_tx_hash_0x(tx_hash))
+            cleared: list[tuple[int, str]] = []
+            for nonce, tx_hash, replacement in sent:
+                try:
+                    receipt = self._wait_for_receipt(tx_hash, fn_name, replacement)
+                except TransactionPending:
+                    if self._latest_nonce(address, self._fresh_block()) <= nonce:
+                        raise
+                    try:
+                        receipt = self._web3.eth.get_transaction_receipt(tx_hash)
+                    except TransactionNotFound:
+                        taken.append(nonce)
+                        continue
+                self._note_write(receipt)
+                cleared.append((nonce, _tx_hash_0x(tx_hash)))
             self._next_nonce = None
-            return hashes
+            if taken:
+                raise StuckTransactionMined(fn_name, address, sorted(taken), cleared)
+            return [tx_hash for _, tx_hash in cleared]
 
     def wrap_del(self, amount: Decimal) -> str:
         """Wrap native DEL → WDEL by sending msg.value to `WDEL.deposit()`.
@@ -2101,8 +2169,7 @@ class PrimeDelta:
         return _tx_hash_0x(tx_hash)
 
     def _fill_gas_and_nonce(self, transaction: dict[str, Any], fn_name: str) -> None:
-        block = self._fresh_block()
-        pending = self._pending_nonce_unless_stuck(fn_name, block)
+        pending, block = self._pending_nonce_unless_stuck(fn_name, self._fresh_block())
         gas_price: int = self._web3.eth.gas_price
         transaction["gas"] = self._gas_limit(transaction, gas_price, fn_name, block)
         transaction["gasPrice"] = gas_price
@@ -2173,10 +2240,12 @@ class PrimeDelta:
             )
         return gas
 
-    def _pending_nonce_unless_stuck(self, fn_name: str, block: Any) -> int:
-        """The pending nonce, unless an earlier transaction this client did not
-        send sits unmined below it (a pending nonce above the latest one that
-        `_sent_nonces` does not explain): then `StuckTransaction`."""
+    def _pending_nonce_unless_stuck(self, fn_name: str, block: Any) -> tuple[int, Any]:
+        """The pending nonce and the block it was confirmed at, unless an earlier
+        transaction this client did not send sits unmined below it (a pending
+        nonce above the latest one that `_sent_nonces` does not explain): then
+        `StuckTransaction`. The gas estimate and balance check must read that
+        block: a gap that closed while re-reading may have spent the DEL."""
         import time
 
         address = self._web3.to_checksum_address(self._signer.address)
@@ -2184,15 +2253,19 @@ class PrimeDelta:
             if delay:
                 time.sleep(delay)
                 block = self._fresh_block()
-            latest: int = self._read_at_block(
-                block,
-                lambda at: _served(self._web3.eth.get_transaction_count(address, at)),
-            )
+            latest = self._latest_nonce(address, block)
             pending: int = self._web3.eth.get_transaction_count(address, "pending")
             self._sent_nonces = {n for n in self._sent_nonces if n >= latest}
             if self._sent_nonces.issuperset(range(latest, pending)):
-                return pending
+                return pending, block
         raise StuckTransaction(fn_name, address, latest, pending)
+
+    def _latest_nonce(self, address: ChecksumAddress, block: Any) -> int:
+        nonce: int = self._read_at_block(
+            block,
+            lambda at: _served(self._web3.eth.get_transaction_count(address, at)),
+        )
+        return nonce
 
     def _submit(self, transaction: dict[str, Any]) -> Any:
         nonce = transaction.get("nonce")
