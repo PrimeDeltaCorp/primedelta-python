@@ -241,14 +241,18 @@ class TestEstimatedGas:
 
     def test_a_mined_but_reverted_transfer_raises_with_its_hash(self):
         pd, chain = _pd()
-        pd._web3.eth.estimate_gas.return_value = 21_000
+        pd._web3.eth.estimate_gas.return_value = 30_000
         pd._web3.eth.wait_for_transaction_receipt.return_value = {
             "status": 0,
             "blockNumber": 300,
+            "gasUsed": 30_000,
         }
         with pytest.raises(TransactionFailed) as info:
             pd.send_del(RECIPIENT, Decimal("1"))
-        assert info.value.tx_hash == "0x" + HASHES[0].hex()
+        assert (info.value.tx_hash, info.value.reason) == (
+            "0x" + HASHES[0].hex(),
+            "reverted",
+        )
         assert pd._last_write_block == 0
 
     def test_a_wallet_signer_fills_its_own_gas(self):
@@ -636,6 +640,62 @@ class TestTransactionPending:
         assert (info.value.function_name, info.value.to) == ("transfer", RECIPIENT)
 
 
+class TestOutOfGas:
+    def _mined_failed(self, pd: PrimeDelta, gas_used: int) -> None:
+        pd._web3.eth.wait_for_transaction_receipt.return_value = {
+            "status": 0,
+            "blockNumber": 300,
+            "gasUsed": gas_used,
+        }
+        pd._web3.eth.call.return_value = b""
+
+    @pytest.mark.parametrize(
+        "gas_used, reason",
+        [
+            (
+                50_000,
+                "ran out of gas: it used all 50000 gas of its estimated limit, most "
+                "likely because the state changed between the estimate and its "
+                "block. Nothing it did took effect, but the gas was paid; a retry "
+                "estimates the gas again",
+            ),
+            (49_999, "reverted with no reason"),
+        ],
+    )
+    def test_a_call_that_used_all_its_gas_ran_out_of_it(self, gas_used, reason):
+        pd, chain = _pd()
+        self._mined_failed(pd, gas_used)
+        with pytest.raises(TransactionFailed) as info:
+            pd.wrap_del(Decimal("0.01"))
+        assert type(info.value) is TransactionFailed
+        assert info.value.reason == reason
+        assert info.value.tx_hash == "0x" + HASHES[0].hex()
+        assert str(info.value).endswith(f"reason={reason}")
+        replayed = [c.args[1] for c in pd._web3.eth.call.call_args_list]
+        assert replayed == ([] if gas_used == 50_000 else [299])
+
+    @pytest.mark.parametrize("gas_used, ran_out", [(37_500, True), (37_499, False)])
+    def test_a_transfer_to_a_contract_that_used_all_its_gas(self, gas_used, ran_out):
+        pd, chain = _pd()
+        pd._web3.eth.estimate_gas.return_value = 30_000
+        self._mined_failed(pd, gas_used)
+        with pytest.raises(TransactionFailed) as info:
+            pd.send_del(RECIPIENT, Decimal("1"))
+        assert _sent(pd)[0]["gas"] == 37_500
+        assert info.value.reason.startswith(
+            "ran out of gas: it used all 37500 gas" if ran_out else "reverted"
+        )
+        assert ("gas" in info.value.reason) is ran_out
+
+    def test_a_wallet_that_set_its_own_gas_is_replayed(self):
+        pd, chain = _pd(wallet=True)
+        self._mined_failed(pd, 50_000)
+        with pytest.raises(TransactionFailed) as info:
+            pd.wrap_del(Decimal("0.01"))
+        assert info.value.reason == "reverted with no reason"
+        assert pd._web3.eth.call.call_args.args[1] == 299
+
+
 class TestClearStuckTransactions:
     BUMPED = 1_250_000_002
 
@@ -857,7 +917,7 @@ class TestClearStuckTransactions:
         )
         assert (error.mined_nonces, error.cleared) == ([5, 6], ["0xab"])
 
-    def test_a_refused_replacement_says_why(self):
+    def test_an_underpriced_replacement_says_to_cancel_the_stuck_one(self):
         pd, chain = self._stuck()
         pd._signer.submit_transaction.side_effect = ValueError(
             "replacement transaction underpriced"
@@ -868,8 +928,44 @@ class TestClearStuckTransactions:
             "the node refused the replacement for nonce 5: replacement transaction "
             "underpriced"
         )
-        assert "wait for it to mine, then call clear_stuck_transactions() again" in (
-            str(info.value)
+        assert str(info.value) == (
+            "clear_stuck_transactions(): the node refused the replacement for nonce "
+            "5: replacement transaction underpriced. The transaction stuck at nonce 5 "
+            "may pay more than this replacement's 1.250000002 gwei (25% above the "
+            "current gas price), and a node only replaces a transaction with one "
+            "that pays at least 10% more. Calling clear_stuck_transactions() again "
+            "signs the same replacement: cancel or speed up the stuck transaction at "
+            "a higher gas price from the wallet or app that sent it."
+        )
+
+    @pytest.mark.parametrize(
+        "error, waits",
+        [
+            (_node_error("Replacement transaction underpriced"), False),
+            (_node_error("REPLACEMENT_UNDERPRICED"), False),
+            (_node_error("already known"), True),
+            (_node_error("Known transaction"), True),
+            (_node_error("request timed out", RequestTimedOut), True),
+            (requests.ConnectionError("connection reset by peer"), True),
+            (_node_error("Upfront cost exceeds account balance"), False),
+        ],
+    )
+    def test_only_a_replacement_that_may_be_pending_says_to_wait(self, error, waits):
+        pd, chain = self._stuck()
+        pd._signer.submit_transaction.side_effect = error
+        with pytest.raises(TransactionFailed) as info:
+            pd.clear_stuck_transactions()
+        message = str(info.value)
+        assert info.value.reason == (
+            f"the node refused the replacement for nonce 5: {error}"
+        )
+        assert message.startswith(f"clear_stuck_transactions(): {info.value.reason}.")
+        assert (
+            "may already be pending: wait for it to mine, then call "
+            "clear_stuck_transactions() again." in message
+        ) is waits
+        assert ("from the wallet or app that sent it" in message) is (
+            "underpriced" in str(error).lower()
         )
 
     def test_a_refused_replacement_leaves_its_nonce_stuck(self):

@@ -2858,6 +2858,7 @@ class TestBuildAndSendTransaction:
         pd._web3.eth.wait_for_transaction_receipt.return_value = {
             "status": 0,
             "blockNumber": 99,
+            "gasUsed": 30_000,
         }
         # Re-running as eth_call reveals the reason.
         pd._web3.eth.call.side_effect = [

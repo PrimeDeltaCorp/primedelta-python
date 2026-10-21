@@ -727,6 +727,37 @@ def _refused_by_node(error: BaseException) -> bool:
     return not any(phrase in message for phrase in _MAYBE_IN_POOL)
 
 
+def _replacement_refused_advice(
+    error: BaseException, nonce: int, gas_price: int
+) -> str:
+    if "underpriced" in str(error).lower():
+        return (
+            f" The transaction stuck at nonce {nonce} may pay more than this "
+            f"replacement's {_units_text(gas_price, 9)} gwei (25% above the current "
+            "gas price), and a node only replaces a transaction with one that pays "
+            "at least 10% more. Calling clear_stuck_transactions() again signs the "
+            "same replacement: cancel or speed up the stuck transaction at a higher "
+            "gas price from the wallet or app that sent it."
+        )
+    if _refused_by_node(error):
+        return ""
+    return (
+        " This replacement, or an earlier one, may already be pending: wait for it "
+        "to mine, then call clear_stuck_transactions() again."
+    )
+
+
+def _out_of_gas(transaction: dict[str, Any], receipt: Any) -> Optional[str]:
+    gas = transaction.get("gas")
+    if gas is None or receipt["gasUsed"] < gas:
+        return None
+    return (
+        f"ran out of gas: it used all {gas} gas of its estimated limit, most likely "
+        "because the state changed between the estimate and its block. Nothing it "
+        "did took effect, but the gas was paid; a retry estimates the gas again"
+    )
+
+
 def _deepest_trace_error(trace: Any) -> Optional[str]:
     """Walk a `debug_traceCall` (callTracer) tree and return the innermost error.
 
@@ -1699,16 +1730,12 @@ class PrimeDelta:
                     reason = (
                         f"the node refused the replacement for nonce {nonce}: {error}"
                     )
+                    advice = _replacement_refused_advice(error, nonce, gas_price)
                     raise TransactionFailed(
                         fn_name,
                         reason,
                         to=address,
-                        message=(
-                            f"{fn_name}(): {reason}. If it says the replacement is "
-                            "underpriced or already known, an earlier replacement may "
-                            "still be pending: wait for it to mine, then call "
-                            f"{fn_name}() again."
-                        ),
+                        message=f"{fn_name}(): {reason}.{advice}",
                     ) from error
             cleared: list[tuple[int, str]] = []
             for nonce, tx_hash, replacement in sent:
@@ -2154,6 +2181,15 @@ class PrimeDelta:
         # pre-approve state on chains with real block time (dev/prod), reverting.
         receipt = self._wait_for_receipt(tx_hash, fn_name, transaction)
         if receipt["status"] == 0:
+            out_of_gas = _out_of_gas(transaction, receipt)
+            if out_of_gas is not None:
+                raise TransactionFailed(
+                    fn_name,
+                    out_of_gas,
+                    tx_hash=_tx_hash_0x(tx_hash),
+                    to=to_address,
+                    data=calldata,
+                )
             # Re-run as eth_call at the block BEFORE our tx mined to extract
             # the revert reason. Using the mined block itself would replay
             # against post-tx state — the account's nonce is already past
@@ -2409,7 +2445,10 @@ class PrimeDelta:
         receipt = self._wait_for_receipt(tx_hash, "transfer", transaction)
         if receipt["status"] == 0:
             raise TransactionFailed(
-                "transfer", "reverted", tx_hash=_tx_hash_0x(tx_hash), to=to
+                "transfer",
+                _out_of_gas(transaction, receipt) or "reverted",
+                tx_hash=_tx_hash_0x(tx_hash),
+                to=to,
             )
         self._note_write(receipt)
         return _tx_hash_0x(tx_hash)

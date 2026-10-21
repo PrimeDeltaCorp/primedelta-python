@@ -35,12 +35,16 @@ semantic versioning once published.
   stuck). It checks the DEL balance first (`NotEnoughGas`), says which nonce
   the node refused a replacement for and why, and refuses a browser wallet
   (`RuntimeError`: use the wallet's own cancel) and `craft` (`CannotCraft`).
+  A replacement refused as underpriced means the stuck transaction may pay
+  more than the replacement's price, and calling again would sign the same
+  replacement, so the error says to cancel or speed up the stuck transaction
+  at a higher gas price from the wallet or app that sent it.
   When another transaction, most likely the stuck one, takes a nonce before
   its replacement, it raises `StuckTransactionMined` (a `TransactionFailed`
   with `address`, `mined_nonces` and `cleared`, the hashes of the replacements
   that mined): that transaction ran instead of being cancelled. Funding the
   account does not clear such a transaction; replacing its nonce does.
-  Verified on dev: an account wedged by a 5,000,000-gas transaction it could
+  Verified live: an account wedged by a 5,000,000-gas transaction it could
   not pay for raised `StuckTransaction`, stayed wedged after 1 DEL arrived, and
   one replacement cleared it; the next `wrap_del` mined using 52,036 of its
   66,032 estimated gas.
@@ -63,7 +67,11 @@ semantic versioning once published.
   raises `TransactionFailed` / `MarketClosed` before signing, with or without
   preflight, and an estimate the node cannot give raises `TransactionFailed`
   without sending. A browser wallet and `craft()` still leave gas to the
-  wallet; `MockBrowserSigner` now estimates like one.
+  wallet; `MockBrowserSigner` now estimates like one. A transaction that runs
+  out of gas on chain anyway, because the state changed between the estimate
+  and its block, raises `TransactionFailed` with a `reason` that starts
+  `ran out of gas` and says a retry estimates the gas again, instead of
+  `reverted with no reason`.
 - **Receipts are awaited for an explicit 60 s.** `PrimeDelta(receipt_timeout=...)`
   sets the wait (default 60 s, polling every 0.5 s, instead of web3's implicit
   120 s at 0.1 s). A transaction that does not mine in time raises
