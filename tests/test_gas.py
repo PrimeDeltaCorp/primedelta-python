@@ -252,10 +252,46 @@ class TestEstimatedGas:
         with pytest.raises(ValueError):
             pd.wrap_del(Decimal("0.01"))
         assert pd._next_nonce is None
-        assert pd._sent_nonces == set()
         pd._signer.submit_transaction.side_effect = list(HASHES)
         pd.wrap_del(Decimal("0.01"))
         assert _sent(pd)[-1]["nonce"] == 5
+
+    def test_a_broadcast_that_failed_on_the_way_back_is_still_ours(self):
+        pd, chain = _pd()
+        pd._signer.submit_transaction.side_effect = ValueError("read timed out")
+        with pytest.raises(ValueError):
+            pd.wrap_del(Decimal("0.01"))
+        chain.pending = 6
+        pd._signer.submit_transaction.side_effect = list(HASHES)
+        with patch("time.sleep") as sleep:
+            pd.wrap_del(Decimal("0.01"))
+        sleep.assert_not_called()
+        assert _sent(pd)[-1]["nonce"] == 6
+
+    def test_a_balance_read_the_node_cannot_serve_names_the_cause(self):
+        pd, chain = _pd()
+        pd._web3.eth.get_balance.side_effect = None
+        pd._web3.eth.get_balance.return_value = None
+        with pytest.raises(TransactionFailed) as info:
+            pd.wrap_del(Decimal("0.01"))
+        assert info.value.reason == (
+            "could not estimate gas: the RPC node has not reached the requested block"
+        )
+        pd._signer.submit_transaction.assert_not_called()
+
+    def test_a_revert_reported_as_an_object_is_still_a_revert(self):
+        pd, chain = _pd()
+        pd._last_write_block = 200
+        pd._web3.eth.estimate_gas.side_effect = ContractLogicError(
+            "execution reverted: reverted with reason string 'no'",
+            data={"message": "reverted", "data": "0x08c379a0"},
+        )
+        with patch("time.sleep") as sleep:
+            with pytest.raises(TransactionFailed) as info:
+                pd.wrap_del(Decimal("0.01"))
+        assert "could not estimate gas" not in info.value.reason
+        assert pd._web3.eth.estimate_gas.call_count == 1
+        sleep.assert_not_called()
 
 
 class TestNotEnoughGas:
@@ -324,6 +360,16 @@ class TestNotEnoughGas:
         assert info.value.gas_limit == 21_000
         assert info.value.required == Decimal("1.021")
 
+    def test_a_transient_error_on_the_sized_estimate_is_retried(self):
+        pd, chain = _pd()
+        pd._last_write_block = 200
+        chain.balance = 0
+        pd._web3.eth.estimate_gas.side_effect = [_block_not_found(), 52_825]
+        with patch("time.sleep"):
+            with pytest.raises(NotEnoughGas) as info:
+                pd.wrap_del(Decimal("0.01"))
+        assert info.value.gas_limit == 66_032
+
     def test_a_revert_while_short_of_the_value_is_still_a_revert(self):
         pd, chain = _pd()
         chain.balance = 0
@@ -354,7 +400,7 @@ class TestStuckTransaction:
             5,
             6,
         )
-        assert sleep.call_args_list == [call(1.0), call(2.0)]
+        assert sleep.call_args_list == [call(1.0), call(2.0), call(4.0), call(8.0)]
         assert "latest nonce 5, pending nonce 6" in str(error)
         assert "clear_stuck_transactions()" in str(error)
         assert "adding DEL does not clear it" in str(error)
@@ -437,6 +483,7 @@ class TestTransactionPending:
             f"deposit() transaction 0x{HASHES[0].hex()} was sent but did not mine "
             "within 12.5 s. It may still mine"
         )
+        assert "whose next send raises StuckTransaction until then" in str(error)
         assert "clear_stuck_transactions()" in str(error)
         pd._web3.eth.wait_for_transaction_receipt.assert_called_once_with(
             HASHES[0], timeout=12.5, poll_latency=0.5
@@ -450,7 +497,19 @@ class TestTransactionPending:
             "poll_latency": 0.5,
         }
 
-    def test_the_next_send_queues_behind_our_pending_one(self):
+    def test_the_next_send_does_not_queue_behind_a_timed_out_one(self):
+        pd, chain = _pd()
+        pd._web3.eth.wait_for_transaction_receipt.side_effect = TimeExhausted()
+        with pytest.raises(TransactionPending):
+            pd.wrap_del(Decimal("0.01"))
+        assert (pd._sent_nonces, pd._next_nonce) == (set(), None)
+        chain.pending = 6
+        with patch("time.sleep"):
+            with pytest.raises(StuckTransaction):
+                pd.wrap_del(Decimal("0.01"))
+        assert len(_sent(pd)) == 1
+
+    def test_a_timed_out_one_that_mines_while_rereading_lets_the_next_through(self):
         pd, chain = _pd()
         pd._web3.eth.wait_for_transaction_receipt.side_effect = [
             TimeExhausted(),
@@ -459,9 +518,13 @@ class TestTransactionPending:
         with pytest.raises(TransactionPending):
             pd.wrap_del(Decimal("0.01"))
         chain.pending = 6
-        with patch("time.sleep") as sleep:
+
+        def mined(delay):
+            chain.latest = 6
+
+        with patch("time.sleep", side_effect=mined) as sleep:
             pd.wrap_del(Decimal("0.01"))
-        sleep.assert_not_called()
+        assert sleep.call_args_list == [call(1.0)]
         assert [tx["nonce"] for tx in _sent(pd)] == [5, 6]
 
     @pytest.mark.parametrize("wallet", [False, True])
@@ -547,6 +610,21 @@ class TestClearStuckTransactions:
             pd.clear_stuck_transactions()
         assert info.value.function_name == "clear_stuck_transactions"
         assert info.value.tx_hash == "0x" + HASHES[0].hex()
+
+    def test_a_refused_replacement_says_why(self):
+        pd, chain = self._stuck()
+        pd._signer.submit_transaction.side_effect = ValueError(
+            "replacement transaction underpriced"
+        )
+        with pytest.raises(TransactionFailed) as info:
+            pd.clear_stuck_transactions()
+        assert info.value.reason == (
+            "the node refused the replacement for nonce 5: replacement transaction "
+            "underpriced"
+        )
+        assert "wait for it to mine, then call clear_stuck_transactions() again" in (
+            str(info.value)
+        )
 
     def test_a_wallet_signer_is_refused(self):
         pd, chain = _pd(wallet=True)

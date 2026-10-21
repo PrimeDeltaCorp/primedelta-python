@@ -16,7 +16,11 @@ def _gas_limit_from_estimate(estimate: int) -> int:
     21000."""
     if estimate <= _TRANSFER_GAS:
         return estimate
-    return -(-estimate * 5 // 4)
+    return _plus_a_quarter(estimate)
+
+
+def _plus_a_quarter(amount: int) -> int:
+    return -(-amount * 5 // 4)
 
 
 @runtime_checkable

@@ -19,16 +19,19 @@ semantic versioning once published.
   When the account's pending nonce is above its latest nonce and no
   transaction this client sent explains the gap, the send raises
   `StuckTransaction` (`address`, `latest_nonce`, `pending_nonce`) before
-  signing. The nonces are re-read twice, 1 s and 2 s apart, so a gateway
-  replica that lags behind another after an ordinary send never trips it, and
-  a transaction this client sent that has not mined yet does not count.
+  signing. The nonces are re-read for up to 15 s (1, 2, 4 and 8 s apart, more
+  than a block), so a gateway replica that lags behind another after an
+  ordinary send, or a transaction another client with the key just sent, never
+  trips it. A transaction this client sent counts as explained unless its
+  receipt wait timed out.
 - **`clear_stuck_transactions()`** replaces each transaction the node holds
   unmined for the account (every nonce from the latest to the pending one) with
   a 0-value transfer to the account itself, at 21000 gas and 25% above the
   current gas price, waits for each to mine and returns their hashes (`[]` when
-  nothing is stuck). It checks the DEL balance first (`NotEnoughGas`), and
-  refuses a browser wallet (`RuntimeError`: use the wallet's own cancel) and
-  `craft` (`CannotCraft`). Funding the account does not clear such a
+  nothing is stuck). It checks the DEL balance first (`NotEnoughGas`), says
+  which nonce the node refused a replacement for and why, and refuses a
+  browser wallet (`RuntimeError`: use the wallet's own cancel) and `craft`
+  (`CannotCraft`). Funding the account does not clear such a
   transaction; replacing its nonce does. Verified on dev: an account wedged by
   a 5,000,000-gas transaction it could not pay for raised `StuckTransaction`,
   stayed wedged after 1 DEL arrived, and one replacement cleared it; the next
@@ -58,7 +61,9 @@ semantic versioning once published.
   120 s at 0.1 s). A transaction that does not mine in time raises
   `TransactionPending` (a `TransactionFailed` carrying `tx_hash` and
   `timeout`) instead of web3's `TimeExhausted`; it may still mine, so check
-  `tx_status(tx_hash)` and balances before retrying.
+  `tx_status(tx_hash)` and balances before retrying. Until it mines, the next
+  send from a key or KMS signer raises `StuckTransaction` rather than queueing
+  behind it.
 
 ### Fixed
 - **A gateway error is no longer reported as a revert.** web3 raises
@@ -69,7 +74,8 @@ semantic versioning once published.
   the check if it persists.
 - **A failed broadcast no longer skips a nonce.** When the signer raised while
   submitting, the reserved nonce stayed taken, so the next transaction used the
-  one after it and could never mine.
+  one after it and could never mine. A broadcast that reached the node but
+  failed on the way back still counts as this client's own.
 - **`get_native_del_balance()` retries a replica that answers `null`** for a
   block it has not reached, instead of failing on it.
 

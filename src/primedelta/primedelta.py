@@ -64,6 +64,7 @@ from primedelta.signer import (
     LocalAccountSigner,
     Signer,
     _gas_limit_from_estimate,
+    _plus_a_quarter,
 )
 from primedelta.types import (
     AccountStatus,
@@ -115,12 +116,11 @@ _LOCAL_STACK = ("dev", 31337)
 _RECEIPT_TIMEOUT = 60.0
 _RECEIPT_POLL_LATENCY = 0.5
 
-# Before raising StuckTransaction, re-read the nonces this many times, waiting
-# this many seconds times the attempt number: a gateway replica that lags one
-# block behind another can show a pending nonce above the latest one for a
-# moment after an ordinary transaction mines.
-_STUCK_RECHECKS = 2
-_STUCK_RECHECK_DELAY = 1.0
+# Before raising StuckTransaction, re-read the nonces after each of these waits
+# (seconds; more than one block interval in all): a gateway replica that lags
+# behind another, or a transaction another client with this key just sent, can
+# show a pending nonce above the latest one until the next block.
+_STUCK_RECHECK_DELAYS = (1.0, 2.0, 4.0, 8.0)
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -515,9 +515,9 @@ class TransactionPending(TransactionFailed):
             f"{function_name}() transaction {tx_hash} was sent but did not mine "
             f"within {timeout:g} s. It may still mine: check tx_status(tx_hash) "
             "and your balances before retrying, or the action could run twice. If "
-            "it never mines and the account's pending nonce stays above its "
-            "latest nonce, call clear_stuck_transactions() (key or KMS signer) or "
-            "cancel it in the wallet."
+            "it never mines, call clear_stuck_transactions() (a key or KMS signer, "
+            "whose next send raises StuckTransaction until then) or cancel it in "
+            "the wallet."
         )
         super().__init__(
             function_name, message, tx_hash=tx_hash, to=to, data=data, message=message
@@ -650,14 +650,18 @@ class _BlockNotServed(Exception):
 def _served(value: Any) -> Any:
     # A gateway replica that has not reached the requested block answers null.
     if value is None:
-        raise _BlockNotServed()
+        raise _BlockNotServed("the RPC node has not reached the requested block")
     return value
 
 
 def _is_revert(error: BaseException) -> bool:
+    if not isinstance(error, ContractLogicError):
+        return False
     # web3 turns any error whose `data` is a JSON object into ContractLogicError,
-    # and an RPC gateway (eRPC) wraps "Block not found" or an upstream failure so.
-    return isinstance(error, ContractLogicError) and not isinstance(error.data, dict)
+    # and an RPC gateway (eRPC) wraps "Block not found" or an upstream failure
+    # so. A node that reports a revert as an object carries its return data.
+    data = error.data
+    return not isinstance(data, dict) or isinstance(data.get("data"), str)
 
 
 def _deepest_trace_error(trace: Any) -> Optional[str]:
@@ -1599,7 +1603,7 @@ class PrimeDelta:
             pending: int = self._web3.eth.get_transaction_count(address, "pending")
             if pending <= latest:
                 return []
-            gas_price = -(-self._web3.eth.gas_price * 5 // 4)
+            gas_price = _plus_a_quarter(self._web3.eth.gas_price)
             gas = _TRANSFER_GAS * (pending - latest)
             balance: int = self._read_at_block(
                 block,
@@ -1610,18 +1614,33 @@ class PrimeDelta:
             chain_id = self._web3.eth.chain_id
             hashes = []
             for nonce in range(latest, pending):
-                tx_hash = self._submit(
-                    {
-                        "from": address,
-                        "to": address,
-                        "value": 0,
-                        "gas": _TRANSFER_GAS,
-                        "gasPrice": gas_price,
-                        "nonce": nonce,
-                        "chainId": chain_id,
-                    }
-                )
-                self._note_write(self._wait_for_receipt(tx_hash, fn_name, address))
+                replacement = {
+                    "from": address,
+                    "to": address,
+                    "value": 0,
+                    "gas": _TRANSFER_GAS,
+                    "gasPrice": gas_price,
+                    "nonce": nonce,
+                    "chainId": chain_id,
+                }
+                try:
+                    tx_hash = self._submit(replacement)
+                except Exception as error:
+                    reason = (
+                        f"the node refused the replacement for nonce {nonce}: {error}"
+                    )
+                    raise TransactionFailed(
+                        fn_name,
+                        reason,
+                        to=address,
+                        message=(
+                            f"{fn_name}(): {reason}. If it says the replacement is "
+                            "underpriced or already known, an earlier replacement may "
+                            "still be pending: wait for it to mine, then call "
+                            f"{fn_name}() again."
+                        ),
+                    ) from error
+                self._note_write(self._wait_for_receipt(tx_hash, fn_name, replacement))
                 hashes.append(_tx_hash_0x(tx_hash))
             self._next_nonce = None
             return hashes
@@ -2049,7 +2068,7 @@ class PrimeDelta:
         # Wait for the receipt so chained calls (e.g. approve → swap) see the
         # state change. Without this the next tx's gas estimation runs against
         # pre-approve state on chains with real block time (dev/prod), reverting.
-        receipt = self._wait_for_receipt(tx_hash, fn_name, to_address, calldata)
+        receipt = self._wait_for_receipt(tx_hash, fn_name, transaction)
         if receipt["status"] == 0:
             # Re-run as eth_call at the block BEFORE our tx mined to extract
             # the revert reason. Using the mined block itself would replay
@@ -2109,19 +2128,17 @@ class PrimeDelta:
             },
         )
 
-        def read(at: Any) -> tuple[int, Optional[int]]:
+        seen: dict[str, int] = {}
+
+        def read(at: Any) -> tuple[int, int]:
             balance: int = _served(self._web3.eth.get_balance(sender, at))
+            seen["balance"] = balance
             if balance >= value:
                 return balance, self._web3.eth.estimate_gas(call, at)
             # A node refuses to simulate sending more DEL than the balance, so
             # simulate as if the value were there to size the gas to fund.
-            try:
-                override = cast(Any, {sender: {"balance": value}})
-                return balance, self._web3.eth.estimate_gas(call, at, override)
-            except Exception as error:
-                if _is_revert(error):
-                    raise
-                return balance, None
+            override = cast(Any, {sender: {"balance": value}})
+            return balance, self._web3.eth.estimate_gas(call, at, override)
 
         try:
             balance, estimate = self._read_at_block(block, read, final=_is_revert)
@@ -2130,17 +2147,19 @@ class PrimeDelta:
                 raise self._pre_submit_revert(
                     error, fn_name, to_address, calldata, value
                 ) from error
-            reason = f"could not estimate gas: {error}"
-            raise TransactionFailed(
-                fn_name,
-                reason,
-                to=to_address,
-                data=calldata,
-                message=f"{fn_name}(): {reason}. Nothing was signed or sent.",
-            ) from error
-        gas = _gas_limit_from_estimate(
-            estimate if estimate is not None else _TRANSFER_GAS
-        )
+            if seen.get("balance", value) >= value:
+                reason = f"could not estimate gas: {error}"
+                raise TransactionFailed(
+                    fn_name,
+                    reason,
+                    to=to_address,
+                    data=calldata,
+                    message=f"{fn_name}(): {reason}. Nothing was signed or sent.",
+                ) from error
+            # The node cannot size it without the value; the shortfall is at least
+            # the value plus a plain transfer's gas.
+            balance, estimate = seen["balance"], _TRANSFER_GAS
+        gas = _gas_limit_from_estimate(estimate)
         if balance < gas * gas_price + value:
             raise NotEnoughGas(
                 fn_name,
@@ -2161,9 +2180,9 @@ class PrimeDelta:
         import time
 
         address = self._web3.to_checksum_address(self._signer.address)
-        for attempt in range(_STUCK_RECHECKS + 1):
-            if attempt:
-                time.sleep(_STUCK_RECHECK_DELAY * attempt)
+        for delay in (0.0, *_STUCK_RECHECK_DELAYS):
+            if delay:
+                time.sleep(delay)
                 block = self._fresh_block()
             latest: int = self._read_at_block(
                 block,
@@ -2176,24 +2195,22 @@ class PrimeDelta:
         raise StuckTransaction(fn_name, address, latest, pending)
 
     def _submit(self, transaction: dict[str, Any]) -> Any:
+        nonce = transaction.get("nonce")
+        if nonce is not None:
+            # Recorded before sending: a broadcast that reached the node but
+            # failed on the way back is still ours.
+            self._sent_nonces.add(nonce)
         try:
-            tx_hash = self._signer.submit_transaction(self._web3, transaction)
+            return self._signer.submit_transaction(self._web3, transaction)
         except Exception:
-            if "nonce" in transaction:
+            if nonce is not None:
                 # Re-read the chain's nonce next time instead of skipping this
                 # one: a skipped nonce strands every later transaction.
                 self._next_nonce = None
             raise
-        if "nonce" in transaction:
-            self._sent_nonces.add(transaction["nonce"])
-        return tx_hash
 
     def _wait_for_receipt(
-        self,
-        tx_hash: Any,
-        fn_name: str,
-        to: Optional[str] = None,
-        data: Optional[str] = None,
+        self, tx_hash: Any, fn_name: str, transaction: dict[str, Any]
     ) -> Any:
         try:
             return self._web3.eth.wait_for_transaction_receipt(
@@ -2202,12 +2219,18 @@ class PrimeDelta:
                 poll_latency=_RECEIPT_POLL_LATENCY,
             )
         except TimeExhausted as error:
+            nonce = transaction.get("nonce")
+            if nonce is not None:
+                # No longer in flight: until it mines, the next send raises
+                # StuckTransaction instead of queueing behind it.
+                self._sent_nonces.discard(nonce)
+                self._next_nonce = None
             raise TransactionPending(
                 fn_name,
                 _tx_hash_0x(tx_hash),
                 self._receipt_timeout,
-                to=to,
-                data=data,
+                to=transaction.get("to"),
+                data=transaction.get("data"),
             ) from error
 
     def _pre_submit_revert(
@@ -2289,7 +2312,7 @@ class PrimeDelta:
         else:
             self._fill_gas_and_nonce(transaction, "transfer")
         tx_hash = self._submit(transaction)
-        receipt = self._wait_for_receipt(tx_hash, "transfer", to)
+        receipt = self._wait_for_receipt(tx_hash, "transfer", transaction)
         if receipt["status"] == 0:
             raise TransactionFailed(
                 "transfer", "reverted", tx_hash=_tx_hash_0x(tx_hash), to=to
