@@ -319,8 +319,7 @@ class TestEstimatedGas:
         [
             "Replacement transaction underpriced",
             "Nonce too low",
-            "maxPriorityFeePerGas 500000000000 wei is below the required minimum "
-            "1000000000000 wei",
+            "maxPriorityFeePerGas 500000000000 wei is below the required minimum 1000000000000 wei",
             "Upfront cost exceeds account balance",
         ],
     )
