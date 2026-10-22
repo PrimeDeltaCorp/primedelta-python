@@ -1,4 +1,6 @@
 import dataclasses
+import threading
+import time
 from decimal import Decimal
 from unittest.mock import MagicMock
 
@@ -446,6 +448,103 @@ class TestReads:
         client, session = _client_with_session()
         session.request.return_value = _Resp(200, {"token": "abc"})
         assert client.prices_stream_access_token() == "abc"
+
+
+class TestConcurrentRelogin:
+    def _expired(self, client, session, siblings, relogin):
+        state = {"valid": False, "relogins": 0}
+        barrier = threading.Barrier(siblings)
+
+        def request(method, url, **kwargs):
+            if state["valid"]:
+                return _Resp(200, {"ok": True})
+            if state["relogins"] == 0:
+                barrier.wait(timeout=5)
+            return _Resp(401, {})
+
+        def callback():
+            state["relogins"] += 1
+            time.sleep(0.05)
+            relogin(state)
+
+        session.request.side_effect = request
+        client.set_relogin(callback)
+        return state
+
+    def _run(self, client, siblings):
+        results = [None] * siblings
+
+        def call(index):
+            try:
+                results[index] = client._get("/portfolio/")
+            except Exception as exc:
+                results[index] = exc
+
+        threads = [
+            threading.Thread(target=call, args=(index,)) for index in range(siblings)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        return results
+
+    def test_parallel_expired_calls_share_one_relogin(self):
+        client, session = _client_with_session()
+        state = self._expired(
+            client, session, 4, lambda state: state.update(valid=True)
+        )
+
+        results = self._run(client, 4)
+
+        assert state["relogins"] == 1
+        assert results == [{"ok": True}] * 4
+
+    def test_a_refused_relogin_is_not_repeated_by_the_waiting_calls(self):
+        client, session = _client_with_session()
+
+        def refuse(state):
+            raise RuntimeError("signature refused")
+
+        state = self._expired(client, session, 3, refuse)
+
+        results = self._run(client, 3)
+
+        assert state["relogins"] == 1
+        assert sorted(type(result).__name__ for result in results) == [
+            "NotLoggedIn",
+            "NotLoggedIn",
+            "RuntimeError",
+        ]
+
+    def test_a_login_that_lands_after_the_request_is_not_repeated(self):
+        client, session = _client_with_session()
+        relogin = MagicMock()
+        client.set_relogin(relogin)
+
+        def request(method, url, **kwargs):
+            if session.request.call_count > 1:
+                return _Resp(200, {"ok": True})
+            with client.login_attempt():
+                pass
+            return _Resp(401, {})
+
+        session.request.side_effect = request
+
+        assert client._get("/portfolio/") == {"ok": True}
+        relogin.assert_not_called()
+        assert session.request.call_count == 2
+
+    def test_a_401_inside_the_relogin_is_not_retried(self):
+        client, session = _client_with_session()
+        session.request.return_value = _Resp(401, {})
+        relogin = MagicMock(side_effect=lambda: client._get("/verification-status/"))
+        client.set_relogin(relogin)
+
+        with pytest.raises(NotLoggedIn):
+            client._get("/portfolio/")
+        relogin.assert_called_once()
+        assert session.request.call_count == 2
 
 
 class TestAuditFixes:

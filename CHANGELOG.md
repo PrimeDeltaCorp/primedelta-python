@@ -6,6 +6,17 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+### Fixed
+- **Parallel calls on an expired session share one re-login.** When several
+  threads hit a 401 at once, one signs in again and the others wait and resend
+  their request with the new session. Before, only the first was retried and
+  the rest raised `NotLoggedIn`, so a caller that logged in again on that error
+  asked the wallet to sign once per call. A refused re-login is not repeated
+  by the calls that waited for it: they raise `NotLoggedIn`.
+- **`login()` runs one at a time per client.** A direct `login()` and an
+  automatic re-login no longer overlap, and a request that got its 401 before a
+  login finished is resent instead of starting another one.
+
 ## [0.6.0] - 2026-10-21
 
 ### Added
