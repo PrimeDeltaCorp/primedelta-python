@@ -185,6 +185,8 @@ serve();
 
 _PORT_ENV = "PRIMEDELTA_BROWSER_SIGNER_PORT"
 
+_CANCELLED = "the call was cancelled; nothing was sent to the wallet"
+
 LateTransactionHook = Callable[[str, dict[str, Any]], None]
 
 _SIGNING_CALL: ContextVar[
@@ -318,6 +320,7 @@ class _LoopbackBridge:
         with self._cond:
             server, self._server = self._server, None
             self._closed = True
+            self._late.clear()
             for job in self._jobs.values():
                 if not job["done"].is_set():
                     job["closed"] = True
@@ -337,8 +340,10 @@ class _LoopbackBridge:
     def request(
         self, op: str, params: dict[str, Any], opener: Callable[[str], None]
     ) -> Any:
-        self._start()
         cancel, on_late = _SIGNING_CALL.get() or (None, None)
+        if cancel is not None and cancel.is_set():
+            raise BrowserSignerError(_CANCELLED)
+        self._start()
         state = secrets.token_urlsafe(16)
         done = threading.Event()
         job: dict[str, Any] = {
@@ -348,6 +353,7 @@ class _LoopbackBridge:
             "dispatched": False,
             "closed": False,
             "result": None,
+            "cancel": cancel,
             "on_late": on_late,
         }
         with self._cond:
@@ -386,9 +392,7 @@ class _LoopbackBridge:
                     "request, so check balances and transactions before retrying"
                 )
             if cancel is not None and cancel.is_set():
-                raise BrowserSignerError(
-                    "the call was cancelled; nothing was sent to the wallet"
-                )
+                raise BrowserSignerError(_CANCELLED)
             raise BrowserSignerError(
                 "timed out waiting for the wallet tab; nothing was sent to the wallet"
             )
@@ -417,8 +421,10 @@ class _LoopbackBridge:
                 return
             if done.wait(min(self.liveness_seconds, give_up - now)):
                 return
-            if cancel is not None and cancel.is_set() and not job["dispatched"]:
-                return
+            if cancel is not None and cancel.is_set():
+                with self._cond:
+                    if not job["dispatched"]:
+                        return
             now = time.monotonic()
             with self._cond:
                 stranded = (
@@ -445,6 +451,8 @@ class _LoopbackBridge:
                     if self._queue:
                         state = self._queue.pop(0)
                         job = self._jobs[state]
+                        if job["cancel"] is not None and job["cancel"].is_set():
+                            continue
                         job["dispatched"] = True
                         return {
                             "state": state,
@@ -472,17 +480,21 @@ class _LoopbackBridge:
         if not state or not isinstance(payload, dict):
             return False
         with self._cond:
-            late = self._late.pop(state, None)
             job = self._jobs.get(state)
-            if late is None:
-                if job is None or not job["dispatched"] or job["done"].is_set():
-                    return False
-                job["result"] = payload
-                job["done"].set()
+            if job is None or not job["dispatched"] or job["done"].is_set():
+                return False
+            job["result"] = payload
+            job["done"].set()
             self._last_poll = time.monotonic()
-        if late is not None:
-            self._report_late(late, payload)
         return True
+
+    def _take_late(
+        self, state: Optional[str], payload: Any
+    ) -> Optional[dict[str, Any]]:
+        if not state or not isinstance(payload, dict):
+            return None
+        with self._cond:
+            return self._late.pop(state, None)
 
     @staticmethod
     def _report_late(job: dict[str, Any], payload: dict[str, Any]) -> None:
@@ -490,6 +502,7 @@ class _LoopbackBridge:
         if (
             job["on_late"] is None
             or job["op"] != "send"
+            or payload.get("error")
             or not isinstance(tx_hash, str)
         ):
             return
@@ -573,7 +586,12 @@ class _LoopbackBridge:
                 except ValueError:
                     self._reply(400)
                     return
-                if bridge._resolve(query.get("state", [None])[0], payload):
+                state = query.get("state", [None])[0]
+                late = bridge._take_late(state, payload)
+                if late is not None:
+                    self._reply(204)
+                    bridge._report_late(late, payload)
+                elif bridge._resolve(state, payload):
                     self._reply(204)
                 else:
                     self._reply(404)
