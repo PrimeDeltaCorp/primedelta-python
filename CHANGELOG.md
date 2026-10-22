@@ -6,6 +6,14 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+### Added
+- **`browser.signing_call(cancel, on_late_transaction)`.** Requests the browser
+  signer makes inside this block take a cancel event and a late-transaction
+  hook. When the event is set before the wallet page has picked a request up,
+  the request is withdrawn within a second and raises `BrowserSignerError`
+  ("the call was cancelled; nothing was sent to the wallet"). A request the page
+  already shows in the wallet keeps waiting for its answer.
+
 ### Fixed
 - **Parallel calls on an expired session share one re-login.** When several
   threads hit a 401 at once, one signs in again and the others wait and resend
@@ -16,6 +24,12 @@ semantic versioning once published.
 - **`login()` runs one at a time per client.** A direct `login()` and an
   automatic re-login no longer overlap, and a request that got its 401 before a
   login finished is resent instead of starting another one.
+- **A wallet answer that arrives after the signer gave up is no longer lost.**
+  When the browser signer stops waiting for a request the wallet is showing,
+  the wallet can still approve it and broadcast the transaction. The page's
+  late answer used to get a 404 and its transaction hash was dropped. It is now
+  accepted once, and a transaction hash is passed to the `on_late_transaction`
+  hook together with the transaction.
 
 ## [0.6.0] - 2026-10-21
 
