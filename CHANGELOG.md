@@ -6,6 +6,8 @@ semantic versioning once published.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-23
+
 ### Added
 - **`browser.signing_call(cancel, on_late_transaction)`.** Requests the browser
   signer makes inside this block carry a cancel event and a late-transaction
