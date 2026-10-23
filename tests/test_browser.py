@@ -26,6 +26,7 @@ from primedelta.browser import (
     _peer_open,
     _render_page,
     _render_session_page,
+    signing_call,
 )
 
 ADDR = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
@@ -635,6 +636,236 @@ class TestBridgeEdges:
         ):
             assert "Switch your wallet to" in page
             assert "accounts.some" in page
+
+    def _abandon_send(self, signer, hook=None):
+        signer._open = lambda url: None
+        errors = []
+        tx = {"from": ADDR, "to": ADDR, "value": 1, "data": "0xd0e30db0", "chainId": 7}
+
+        def send():
+            with signing_call(on_late_transaction=hook):
+                try:
+                    signer.submit_transaction(None, tx)
+                except BrowserSignerError as exc:
+                    errors.append(str(exc))
+
+        worker = threading.Thread(target=send)
+        worker.start()
+        job = json.loads(self._next(signer).read())
+        worker.join(timeout=5)
+        assert errors and "may still complete" in errors[0]
+        return job
+
+    def test_a_cancelled_call_asks_an_open_tab_nothing(self, make_signer):
+        signer, tab = make_signer(_wallet)
+        assert signer.address == ADDR
+        cancel = threading.Event()
+        cancel.set()
+        tx = {"from": ADDR, "to": ADDR, "value": 1, "chainId": 7}
+        with signing_call(cancel):
+            with pytest.raises(BrowserSignerError) as info:
+                signer.submit_transaction(None, tx)
+        assert str(info.value) == (
+            "the call was cancelled; nothing was sent to the wallet"
+        )
+        time.sleep(0.3)
+        assert [job["op"] for job in tab.jobs] == ["connect"]
+        assert len(tab.opened) == 1
+
+    def test_a_cancelled_call_opens_no_tab(self, make_signer):
+        signer, _ = make_signer(_wallet, timeout=3)
+        opened = []
+        signer._open = opened.append
+        cancel = threading.Event()
+        cancel.set()
+        started = time.monotonic()
+        with signing_call(cancel):
+            with pytest.raises(BrowserSignerError, match="nothing was sent"):
+                _ = signer.address
+        assert time.monotonic() - started < 0.5
+        assert opened == []
+
+    def test_a_cancel_withdraws_a_request_no_tab_took(self, make_signer):
+        signer, _ = make_signer(_wallet, timeout=3)
+        signer._open = lambda url: None
+        signer._bridge.liveness_seconds = 0.05
+        cancel = threading.Event()
+        errors = []
+
+        def ask():
+            with signing_call(cancel):
+                try:
+                    _ = signer.address
+                except BrowserSignerError as exc:
+                    errors.append(str(exc))
+
+        worker = threading.Thread(target=ask)
+        worker.start()
+        while not signer._bridge._jobs:
+            time.sleep(0.01)
+        cancel.set()
+        started = time.monotonic()
+        worker.join(timeout=5)
+        assert time.monotonic() - started < 1
+        assert errors == ["the call was cancelled; nothing was sent to the wallet"]
+        assert signer._bridge._jobs == {}
+        assert self._next(signer).status == 204
+
+    def test_a_tab_asking_after_the_cancel_gets_nothing(self, make_signer):
+        signer, _ = make_signer(_wallet, timeout=3)
+        signer._open = lambda url: None
+        signer._bridge.liveness_seconds = 2
+        cancel = threading.Event()
+        errors = []
+
+        def ask():
+            with signing_call(cancel):
+                try:
+                    _ = signer.address
+                except BrowserSignerError as exc:
+                    errors.append(str(exc))
+
+        worker = threading.Thread(target=ask)
+        worker.start()
+        while not signer._bridge._queue:
+            time.sleep(0.01)
+        cancel.set()
+        assert self._next(signer).status == 204
+        worker.join(timeout=5)
+        assert errors == ["the call was cancelled; nothing was sent to the wallet"]
+
+    def test_a_cancel_after_the_tab_took_the_request_waits_for_the_wallet(
+        self, make_signer
+    ):
+        signer, _ = make_signer(_wallet, timeout=5)
+        signer._open = lambda url: None
+        signer._bridge.liveness_seconds = 0.05
+        cancel = threading.Event()
+        answers = []
+
+        def ask():
+            with signing_call(cancel):
+                answers.append(signer.address)
+
+        worker = threading.Thread(target=ask)
+        worker.start()
+        job = json.loads(self._next(signer).read())
+        cancel.set()
+        time.sleep(0.3)
+        assert worker.is_alive()
+        answer = json.dumps({"value": ADDR}).encode()
+        assert self._post(signer, job["state"], answer) == 204
+        worker.join(timeout=5)
+        assert answers == [ADDR]
+
+    def test_a_cancel_signal_ends_with_its_block(self, make_signer):
+        signer, _ = make_signer(_wallet, timeout=0.3)
+        signer._open = lambda url: None
+        signer._bridge.liveness_seconds = 0.05
+        cancel = threading.Event()
+        cancel.set()
+        with signing_call(cancel):
+            pass
+        with pytest.raises(BrowserSignerError, match="timed out waiting"):
+            _ = signer.address
+
+    def test_a_late_wallet_answer_is_accepted_and_reported(self, make_signer):
+        signer, _ = make_signer(_wallet, timeout=0.3)
+        late = []
+        job = self._abandon_send(signer, lambda tx_hash, tx: late.append((tx_hash, tx)))
+        answer = json.dumps({"value": "0x" + "cd" * 32, "error": None}).encode()
+        assert self._post(signer, job["state"], answer) == 204
+        deadline = time.monotonic() + 2
+        while not late and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert late == [("0x" + "cd" * 32, job["params"]["tx"])]
+        assert self._post(signer, job["state"], answer) == 404
+
+    def test_a_late_answer_without_a_hook_is_accepted(self, make_signer, capfd):
+        signer, _ = make_signer(_wallet, timeout=0.3)
+        job = self._abandon_send(signer)
+        assert self._post(signer, job["state"], b'{"value": "0xab"}') == 204
+        time.sleep(0.2)
+        assert "hook failed" not in capfd.readouterr().err
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            b'{"value": null, "error": "User rejected"}',
+            b'{"value": "0xab", "error": "User rejected"}',
+            b'{"value": 7}',
+        ],
+    )
+    def test_a_late_answer_without_a_hash_reports_nothing(
+        self, make_signer, capfd, answer
+    ):
+        signer, _ = make_signer(_wallet, timeout=0.3)
+        late = []
+        job = self._abandon_send(signer, lambda *args: late.append(args))
+        assert self._post(signer, job["state"], answer) == 204
+        time.sleep(0.2)
+        assert late == []
+        assert "hook failed" not in capfd.readouterr().err
+
+    def test_a_late_answer_to_a_connect_reports_nothing(self, make_signer, capfd):
+        signer, _ = make_signer(_wallet, timeout=0.3)
+        signer._open = lambda url: None
+        late = []
+        errors = []
+
+        def connect():
+            with signing_call(on_late_transaction=lambda *args: late.append(args)):
+                try:
+                    _ = signer.address
+                except BrowserSignerError as exc:
+                    errors.append(str(exc))
+
+        worker = threading.Thread(target=connect)
+        worker.start()
+        job = json.loads(self._next(signer).read())
+        worker.join(timeout=5)
+        assert errors and "may still complete" in errors[0]
+        answer = json.dumps({"value": ADDR}).encode()
+        assert self._post(signer, job["state"], answer) == 204
+        time.sleep(0.2)
+        assert late == []
+        assert "hook failed" not in capfd.readouterr().err
+
+    def test_a_failing_hook_still_answers_the_page(self, make_signer, capfd):
+        signer, _ = make_signer(_wallet, timeout=0.3)
+
+        def hook(tx_hash, tx):
+            raise RuntimeError("ledger down")
+
+        job = self._abandon_send(signer, hook)
+        assert self._post(signer, job["state"], b'{"value": "0xab"}') == 204
+        time.sleep(0.2)
+        assert "late-transaction hook failed (ledger down)" in capfd.readouterr().err
+
+    def test_a_malformed_late_answer_keeps_the_request(self, make_signer):
+        signer, _ = make_signer(_wallet, timeout=0.3)
+        late = []
+        job = self._abandon_send(signer, lambda tx_hash, tx: late.append(tx_hash))
+        assert self._post(signer, job["state"], b"[]") == 404
+        assert self._post(signer, job["state"], b'{"value": "0xab"}') == 204
+        deadline = time.monotonic() + 2
+        while not late and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert late == ["0xab"]
+
+    def test_the_page_gets_its_answer_before_the_hook_runs(self, make_signer):
+        signer, _ = make_signer(_wallet, timeout=0.3)
+        job = self._abandon_send(signer, lambda tx_hash, tx: time.sleep(1))
+        started = time.monotonic()
+        assert self._post(signer, job["state"], b'{"value": "0xab"}') == 204
+        assert time.monotonic() - started < 0.5
+
+    def test_close_forgets_unanswered_late_requests(self, make_signer):
+        signer, _ = make_signer(_wallet, timeout=0.3)
+        self._abandon_send(signer)
+        assert len(signer._bridge._late) == 1
+        signer.close()
+        assert signer._bridge._late == {}
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
