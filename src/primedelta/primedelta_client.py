@@ -1,4 +1,6 @@
 import json
+import threading
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from enum import Enum
@@ -186,10 +188,22 @@ class PrimeDeltaClient:
         # Armed by the facade after a first successful login when auto-relogin is
         # on: on a 401 the client re-runs this once and retries (see _with_relogin).
         self._relogin: Optional[Callable[[], None]] = None
-        self._relogging_in = False
+        self._login_lock = threading.RLock()
+        self._login_attempts = 0
+        self._login_thread: Optional[int] = None
 
     def set_relogin(self, callback: Optional[Callable[[], None]]) -> None:
         self._relogin = callback
+
+    @contextmanager
+    def login_attempt(self) -> Iterator[None]:
+        with self._login_lock:
+            self._login_attempts += 1
+            outer, self._login_thread = self._login_thread, threading.get_ident()
+            try:
+                yield
+            finally:
+                self._login_thread = outer
 
     def _url(self, endpoint: str) -> str:
         return f"{self._base_url}{endpoint}"
@@ -306,22 +320,20 @@ class PrimeDeltaClient:
         # A 401 rejects the request before it executes, so re-running `send`
         # after re-authenticating never double-submits a mutation. Retry once,
         # returning the raw response so callers with custom body handling
-        # (signed prices, DID) get keep-alive too. Best-effort single-flight:
-        # a concurrent sibling that races the relogin window is not retried
-        # (the SDK is single-instance-serial by design).
+        # (signed prices, DID) get keep-alive too.
+        attempts = self._login_attempts
         response = send()
         if (
-            response.status_code == 401
-            and self._relogin is not None
-            and not self._relogging_in
+            response.status_code != 401
+            or self._relogin is None
+            or self._login_thread == threading.get_ident()
         ):
-            self._relogging_in = True
-            try:
-                self._relogin()
-            finally:
-                self._relogging_in = False
-            response = send()
-        return response
+            return response
+        with self._login_lock:
+            if self._login_attempts == attempts:
+                with self.login_attempt():
+                    self._relogin()
+        return send()
 
     def _with_relogin(self, send: Callable[[], requests.Response]) -> Any:
         return self._handle(self._send_with_relogin(send))

@@ -1,4 +1,6 @@
 import dataclasses
+import threading
+import time
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -574,6 +576,33 @@ class TestAutoRelogin:
         pd.login()
         pd._primedelta_client.login.assert_called_once()
         pd._primedelta_client.set_relogin.assert_called_once_with(pd.login)
+
+    def test_parallel_logins_run_one_at_a_time(self):
+        from primedelta.primedelta_client import PrimeDeltaClient
+
+        pd = _pd()
+        client = PrimeDeltaClient()
+        client.get_nonce = MagicMock(return_value="abcd1234")
+        client.set_relogin = MagicMock()
+        state = {"active": 0, "most": 0}
+
+        def login(**kwargs):
+            state["active"] += 1
+            state["most"] = max(state["most"], state["active"])
+            time.sleep(0.02)
+            state["active"] -= 1
+
+        client.login = MagicMock(side_effect=login)
+        pd._primedelta_client = client
+        threads = [threading.Thread(target=pd.login) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        assert client.login.call_count == 4
+        assert state["most"] == 1
+        assert client._login_attempts == 4
 
     def test_logout_disarms_relogin(self):
         pd = _pd()

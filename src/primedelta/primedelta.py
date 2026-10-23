@@ -1007,28 +1007,33 @@ class PrimeDelta:
         return [self._as_unsigned(tx) for tx in captured]
 
     def login(self) -> None:
-        self._verify_chain()
-        domain, uri = self._endpoints.siwe_domain, self._endpoints.siwe_uri
-        if self._endpoints.siwe_loopback and isinstance(self._signer, BrowserSigner):
-            domain, uri = SIWE_LOOPBACK_DOMAIN, self._signer.loopback_origin
-        nonce = self._primedelta_client.get_nonce()
-        issued_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        message = SiweMessage(
-            domain=domain,
-            address=self._signer.address,
-            statement=SIWE_MESSAGE,
-            uri=uri,
-            version="1",
-            chain_id=self._get_contracts().chain_id,
-            nonce=nonce,
-            issued_at=issued_at,
-        ).prepare_message()
-        signature = self._signer.sign_message(message)
-        self._primedelta_client.login(message=message, signature=signature, nonce=nonce)
-        if self._auto_relogin:
-            self._primedelta_client.set_relogin(self.login)
-        if self._on_login is not None:
-            self._on_login(self)
+        with self._primedelta_client.login_attempt():
+            self._verify_chain()
+            domain, uri = self._endpoints.siwe_domain, self._endpoints.siwe_uri
+            if self._endpoints.siwe_loopback and isinstance(
+                self._signer, BrowserSigner
+            ):
+                domain, uri = SIWE_LOOPBACK_DOMAIN, self._signer.loopback_origin
+            nonce = self._primedelta_client.get_nonce()
+            issued_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            message = SiweMessage(
+                domain=domain,
+                address=self._signer.address,
+                statement=SIWE_MESSAGE,
+                uri=uri,
+                version="1",
+                chain_id=self._get_contracts().chain_id,
+                nonce=nonce,
+                issued_at=issued_at,
+            ).prepare_message()
+            signature = self._signer.sign_message(message)
+            self._primedelta_client.login(
+                message=message, signature=signature, nonce=nonce
+            )
+            if self._auto_relogin:
+                self._primedelta_client.set_relogin(self.login)
+            if self._on_login is not None:
+                self._on_login(self)
 
     def logged_in(self) -> bool:
         try:
