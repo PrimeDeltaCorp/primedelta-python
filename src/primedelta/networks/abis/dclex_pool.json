@@ -406,19 +406,6 @@
   },
   {
     "type": "function",
-    "name": "setProtocolFeeRate",
-    "inputs": [
-      {
-        "name": "_protocolFeeRate",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
     "name": "stockToken",
     "inputs": [],
     "outputs": [

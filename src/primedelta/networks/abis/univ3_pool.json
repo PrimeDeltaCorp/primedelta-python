@@ -255,37 +255,6 @@
       "anonymous": false,
       "inputs": [
         {
-          "indexed": false,
-          "internalType": "uint8",
-          "name": "feeProtocol0Old",
-          "type": "uint8"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint8",
-          "name": "feeProtocol1Old",
-          "type": "uint8"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint8",
-          "name": "feeProtocol0New",
-          "type": "uint8"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint8",
-          "name": "feeProtocol1New",
-          "type": "uint8"
-        }
-      ],
-      "name": "SetFeeProtocol",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
           "indexed": true,
           "internalType": "address",
           "name": "sender",
@@ -732,24 +701,6 @@
         }
       ],
       "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint8",
-          "name": "feeProtocol0",
-          "type": "uint8"
-        },
-        {
-          "internalType": "uint8",
-          "name": "feeProtocol1",
-          "type": "uint8"
-        }
-      ],
-      "name": "setFeeProtocol",
-      "outputs": [],
-      "stateMutability": "nonpayable",
       "type": "function"
     },
     {
